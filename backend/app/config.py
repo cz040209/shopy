@@ -1,0 +1,26 @@
+from dataclasses import dataclass
+from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+
+def env_flag(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class Settings:
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+    whisper_model: str = os.getenv("WHISPER_MODEL", "small")
+    whisper_device: str = os.getenv("WHISPER_DEVICE", "cpu")
+    whisper_compute_type: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+    ai_log_customer_input: bool = env_flag("AI_LOG_CUSTOMER_INPUT", True)
+
+
+settings = Settings()

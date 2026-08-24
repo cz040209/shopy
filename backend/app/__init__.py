@@ -1,0 +1,1 @@
+"""Shopy AI backend package."""

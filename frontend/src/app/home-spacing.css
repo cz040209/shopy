@@ -1,0 +1,2 @@
+[class*="home_home"] { padding-top: clamp(12px, 2vw, 28px) !important; }
+[class*="home_hero"] { min-height: 520px !important; }
