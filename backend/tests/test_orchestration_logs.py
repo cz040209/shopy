@@ -40,10 +40,11 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
     assert run is not None
     assert run.status == "completed"
     assert run.final_response == result["final_response"]
-    assert [event.event_type for event in run.events] == ["run_started", "node_completed", "node_completed", "tool_completed", "node_completed", "node_completed", "tool_completed", "node_completed", "run_finished"]
-    assert [event.sequence for event in run.events] == list(range(1, 10))
+    assert [event.event_type for event in run.events] == ["run_started", "node_completed", "node_completed", "tool_completed", "node_completed", "tool_completed", "node_completed", "node_completed", "tool_completed", "node_completed", "run_finished"]
+    assert [event.sequence for event in run.events] == list(range(1, 12))
     assert run.events[1].node_name == "intent_agent"
     assert run.events[3].tool_name == "search_products"
+    assert run.events[5].tool_name == "get_product_reviews"
     assert run.events[-1].output_data["audit_result"]["status"] == "pass"
 
 

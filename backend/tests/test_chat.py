@@ -99,6 +99,10 @@ def test_authenticated_chat_is_persisted_and_continued(db_session, monkeypatch):
             MessageRole.USER,
             MessageRole.ASSISTANT,
         ]
+        first_input = conversation.messages[0]
+        assert first_input.input_type == "text"
+        assert first_input.input_payload == {"text": "Find a desk lamp"}
+        assert first_input.processing_metadata["channel"] == "web_chat"
     finally:
         app.dependency_overrides.clear()
 
@@ -132,6 +136,38 @@ def test_anonymous_chat_is_persisted_without_a_user(db_session, monkeypatch):
         assert conversation is not None
         assert conversation.user_id is None
         assert len(conversation.messages) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_voice_transcript_is_persisted_with_its_modality_metadata(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+    install_fake_orchestrator(monkeypatch, chat_route)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(gemini_api_key="test-key", gemini_model="test-model", auth_session_days=7, auth_cookie_secure=False),
+    )
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/api/chat",
+            json={
+                "messages": [{"role": "user", "content": "Find a blue sofa"}],
+                "input_type": "voice",
+                "input_payload": {"transcript": "Find a blue sofa", "language": "en", "duration_seconds": 2.4},
+            },
+        )
+        assert response.status_code == 200
+        message = db_session.scalar(select(AIMessage).where(AIMessage.role == MessageRole.USER))
+        assert message is not None
+        assert message.input_type == "voice"
+        assert message.input_payload["duration_seconds"] == 2.4
+        assert message.input_payload["text"] == "Find a blue sofa"
     finally:
         app.dependency_overrides.clear()
 

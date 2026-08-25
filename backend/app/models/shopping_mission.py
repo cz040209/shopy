@@ -31,5 +31,5 @@ class ShoppingMission(TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User | None"] = relationship("User", back_populates="missions")
-    conversations: Mapped[list["AIConversation"]] = relationship("AIConversation", back_populates="mission")
+    conversations: Mapped[list["Conversation"]] = relationship("Conversation", back_populates="mission")
     recommendations: Mapped[list["AIRecommendation"]] = relationship("AIRecommendation", back_populates="mission", cascade="all, delete-orphan")

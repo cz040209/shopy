@@ -12,9 +12,11 @@ from .mixins import TimestampMixin
 from .types import JSON_DATA
 
 
-class AIConversation(TimestampMixin, Base):
-    __tablename__ = "ai_conversations"
-    __table_args__ = (Index("ix_ai_conversations_user_updated", "user_id", "updated_at"),)
+class Conversation(TimestampMixin, Base):
+    """A customer session containing text, voice, and image shopping inputs."""
+
+    __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_user_updated", "user_id", "updated_at"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
@@ -29,3 +31,8 @@ class AIConversation(TimestampMixin, Base):
     messages: Mapped[list["AIMessage"]] = relationship(
         "AIMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="AIMessage.created_at"
     )
+
+
+# Temporary Python-level compatibility for callers while the database table has
+# the clearer public name, ``conversations``.
+AIConversation = Conversation

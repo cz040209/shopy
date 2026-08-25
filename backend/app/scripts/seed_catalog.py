@@ -1,8 +1,8 @@
-"""Import the legacy frontend catalog into PostgreSQL exactly once per product SKU.
+"""Import and replace the legacy frontend catalog in PostgreSQL.
 
 The TypeScript file is deliberately treated as an import source during this
-transition. After running this command, PostgreSQL is the storefront source of
-truth and the frontend reads the catalog APIs instead of that file.
+transition. Running this command replaces previously imported LEGACY-* products,
+so PostgreSQL remains the storefront source of truth and can be reseeded safely.
 """
 from __future__ import annotations
 
@@ -47,14 +47,46 @@ process.stdout.write(JSON.stringify(module.exports.PRODUCTS));
     return json.loads(result.stdout)
 
 
+def extract_seller_name(specs: object) -> str | None:
+    if not isinstance(specs, list):
+        return None
+    for item in specs:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("label", "")).strip().lower() != "seller":
+            continue
+        value = str(item.get("value", "")).strip()
+        return value or None
+    return None
+
+
 def run() -> int:
     legacy_products = load_legacy_catalog()
     with SessionLocal() as db:
-        seller = db.scalar(select(Seller).where(Seller.slug == "shopy-catalog"))
-        if seller is None:
-            seller = Seller(name="Shopy Catalog", slug="shopy-catalog", description="Shopy’s curated product collection.", status=SellerStatus.ACTIVE)
-            db.add(seller)
-            db.flush()
+        existing_legacy = db.scalars(select(Product).where(Product.sku.like("LEGACY-%"))).all()
+        removed = len(existing_legacy)
+        for product in existing_legacy:
+            db.delete(product)
+        db.flush()
+
+        seller_cache: dict[str, Seller] = {}
+
+        def resolve_seller(name: str) -> Seller:
+            seller_slug = slugify(name)
+            seller = seller_cache.get(seller_slug) or db.scalar(select(Seller).where(Seller.slug == seller_slug))
+            if seller is None:
+                seller = Seller(
+                    name=name,
+                    slug=seller_slug,
+                    description=f"Catalog merchant profile for {name}.",
+                    status=SellerStatus.ACTIVE,
+                )
+                db.add(seller)
+                db.flush()
+            elif seller.status != SellerStatus.ACTIVE:
+                seller.status = SellerStatus.ACTIVE
+            seller_cache[seller_slug] = seller
+            return seller
 
         categories: dict[str, Category] = {}
         imported = 0
@@ -70,25 +102,23 @@ def run() -> int:
 
             legacy_id = int(entry["id"])
             sku = f"LEGACY-{legacy_id:04d}"
-            product = db.scalar(select(Product).where(Product.sku == sku))
+            specs = entry.get("specs") or []
+            seller_name = extract_seller_name(specs) or "Shopy Catalog"
+            seller = resolve_seller(seller_name)
             badge = entry.get("badge")
             values = {
                 "seller": seller, "category": category, "slug": f"{slugify(str(entry['name']))}-{legacy_id}",
                 "name": str(entry["name"]), "brand": str(entry["brand"]), "description": str(entry["desc"]),
                 "price": Decimal(str(entry["price"])), "currency": "MYR", "status": ProductStatus.ACTIVE,
                 "badge": ProductBadge(badge) if badge else None, "inventory_quantity": 100 if entry.get("stock") else 0,
-                "emoji": str(entry.get("emoji") or ""), "specs": entry.get("specs") or [],
+                "emoji": str(entry.get("emoji") or ""), "specs": specs,
                 "attributes": {"legacy_product_id": legacy_id}, "rating_average": Decimal(str(entry.get("rating", 0))),
                 "review_count": int(entry.get("reviews", 0)), "published_at": datetime.now(timezone.utc),
             }
-            if product is None:
-                product = Product(sku=sku, **values)
-                db.add(product)
-                db.flush()
-                imported += 1
-            else:
-                for key, value in values.items():
-                    setattr(product, key, value)
+            product = Product(sku=sku, **values)
+            db.add(product)
+            db.flush()
+            imported += 1
 
             image_url = entry.get("image")
             if image_url:
@@ -98,7 +128,7 @@ def run() -> int:
                 else:
                     image.url, image.alt_text = str(image_url), product.name
         db.commit()
-    print(f"Catalog seed complete: {len(legacy_products)} products processed, {imported} created.")
+    print(f"Catalog seed complete: {removed} legacy products replaced, {imported} imported.")
     return 0
 
 

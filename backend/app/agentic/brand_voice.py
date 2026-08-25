@@ -89,6 +89,7 @@ class BrandVoiceAgent:
             "optional_categories": state.get("optional_categories", []),
             "verified_catalog_products": products,
             "verified_tool_results": state.get("tool_context", []),
+            "verified_review_insights": state.get("review_insights", {}),
             "brand_voice_guidance": self._voice_guidance(state),
         }
         messages = [
@@ -99,7 +100,13 @@ class BrandVoiceAgent:
 
         expected_ids = {str(product["id"]) for product in products}
         drafted_ids = [str(product_id) for product_id in draft.product_ids]
-        if len(drafted_ids) != len(set(drafted_ids)) or set(drafted_ids) != expected_ids:
+        # Tool-information responses (seller, reviews, details, comparisons,
+        # and bundle totals) intentionally have no recommendation cards. The
+        # model may still echo an ID from the candidate context; it is not a
+        # customer-facing claim, so discard it instead of failing the whole run.
+        if not expected_ids:
+            drafted_ids = []
+        elif len(drafted_ids) != len(set(drafted_ids)) or set(drafted_ids) != expected_ids:
             raise ResponseDraftError("Response model must reference exactly the verified selected products.")
 
         products_by_id = {str(product["id"]): product for product in products}
@@ -204,6 +211,9 @@ class BrandVoiceAgent:
                 "price": str(product["price"]),
                 "currency": str(product["currency"]),
                 "in_stock": int(product["inventory_quantity"]) > 0,
+                "category": str(product["category"]),
+                "specs": product.get("specs", []),
+                "attributes": product.get("attributes", {}),
                 "image_url": product.get("image_url"),
                 "image_alt_text": product.get("image_alt_text"),
             }

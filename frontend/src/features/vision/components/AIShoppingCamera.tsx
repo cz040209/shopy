@@ -8,7 +8,10 @@ import { API_URL } from "@/lib/api";
 export type VisionMode = "shop_room" | "complete_look" | "shop_object";
 
 type Props = {
-  mode: VisionMode;
+  /** Omit this to let the shopper choose what they want to shop from the photo. */
+  mode?: VisionMode;
+  compact?: boolean;
+  disabled?: boolean;
   maxFileSizeMb?: number;
   maxDimension?: number;
   quality?: number;
@@ -24,8 +27,9 @@ const modeContent: Record<VisionMode, { label: string; title: string; helper: st
 
 const processingSteps = ["Detecting objects", "Understanding style", "Analyzing the space", "Searching matching products"];
 
-export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimension = 1600, quality = 0.85, onAnalysisComplete }: Props) {
-  const [stage, setStage] = useState<"camera" | "preview" | "processing" | "result" | null>(null);
+export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 1600, quality = 0.85, onAnalysisComplete }: Props) {
+  const [stage, setStage] = useState<"mode_select" | "camera" | "preview" | "processing" | "result" | null>(null);
+  const [selectedMode, setSelectedMode] = useState<VisionMode | null>(mode ?? null);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [photo, setPhoto] = useState<Blob | null>(null);
@@ -36,6 +40,7 @@ export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimensio
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeMode = selectedMode ?? mode ?? "shop_object";
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -54,6 +59,7 @@ export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimensio
     releasePreview();
     setError("");
     setAnalysis("");
+    setSelectedMode(mode ?? null);
     setStage(null);
   };
 
@@ -87,7 +93,16 @@ export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimensio
   };
 
   const open = () => {
-    setStage("camera");
+    if (mode) {
+      setSelectedMode(mode);
+      void startCamera(false);
+      return;
+    }
+    setStage("mode_select");
+  };
+
+  const selectMode = (nextMode: VisionMode) => {
+    setSelectedMode(nextMode);
     void startCamera(false);
   };
 
@@ -160,8 +175,8 @@ export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimensio
     try {
       const data = new FormData();
       data.append("image", photo, "shopy-vision.jpg");
-      data.append("mode", mode);
-      const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", body: data });
+      data.append("mode", activeMode);
+      const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", credentials: "include", body: data });
       const result = await response.json() as { analysis?: string; detail?: string };
       if (!response.ok || !result.analysis) throw new Error(result.detail ?? "AI analysis could not be completed.");
       setAnalysis(result.analysis);
@@ -184,24 +199,36 @@ export default function AIShoppingCamera({ mode, maxFileSizeMb = 10, maxDimensio
 
   return (
     <>
-      <button type="button" className={styles.trigger} onClick={open} aria-label={modeContent[mode].label}>
-        <Camera size={17} /><span>{modeContent[mode].label}</span>
+      <button type="button" disabled={disabled} className={`${styles.trigger} ${compact ? styles.compactTrigger : ""}`} onClick={open} aria-label={mode ? modeContent[mode].label : "Shop with a photo"}>
+        <Camera size={compact ? 19 : 17} /><span>{mode ? modeContent[mode].label : "Shop with a photo"}</span>
       </button>
       <input ref={fileInputRef} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} />
 
       {stage && (
-        <section className={styles.overlay} role="dialog" aria-modal="true" aria-label={modeContent[mode].label}>
+        <section className={styles.overlay} data-shopy-camera-overlay="" role="dialog" aria-modal="true" aria-label={modeContent[activeMode].label}>
           <div className={styles.cameraShell}>
             <header className={styles.header}>
-              <div><span>{modeContent[mode].label}</span><strong>{stage === "processing" ? "AI analysis" : modeContent[mode].title}</strong></div>
+              <div><span>{modeContent[activeMode].label}</span><strong>{stage === "processing" ? "AI analysis" : modeContent[activeMode].title}</strong></div>
               <button type="button" className={styles.iconButton} onClick={close} aria-label="Close camera"><X size={22} /></button>
             </header>
 
+            {stage === "mode_select" && <div className={styles.modeSelectStage}>
+              <div className={styles.processingOrb}><Camera size={30} /></div>
+              <h2>What would you like to shop?</h2>
+              <p>Choose a photo type, then take a picture with your camera or select one from your gallery.</p>
+              <div className={styles.modeChoices}>
+                {(Object.keys(modeContent) as VisionMode[]).map((choice) => (
+                  <button key={choice} type="button" onClick={() => selectMode(choice)}>
+                    <strong>{modeContent[choice].label}</strong><span>{modeContent[choice].helper}</span>
+                  </button>
+                ))}
+              </div>
+            </div>}
             {stage === "camera" && <div className={styles.cameraStage}>
               <video ref={videoRef} className={styles.video} playsInline muted autoPlay />
               {!isCameraReady && <div className={styles.cameraEmpty}><Camera size={34} /><p>Camera preview will appear here.</p></div>}
               <div className={styles.cameraGradient} />
-              <div className={styles.modeHelper}>{modeContent[mode].helper}</div>
+              <div className={styles.modeHelper}>{modeContent[activeMode].helper}</div>
               <div style={{ position: "absolute", right: 20, bottom: 132, left: 20, color: "#d7dded", fontSize: 11, lineHeight: 1.4, textAlign: "center", textShadow: "0 1px 10px #000" }}>Your photo stays on this device until you choose <strong style={{ color: "#fff" }}>Use photo</strong>.</div>
               {error && <p className={styles.error}>{error}</p>}
               <div className={styles.cameraControls}>

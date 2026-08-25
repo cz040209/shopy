@@ -5,6 +5,7 @@ import { Bot, MessageSquare, UserRound, X, Send, Maximize2, Minimize2, Mic, Paus
 import styles from "./AIAssistant.module.css";
 import { API_URL as ASSISTANT_API_URL } from "@/lib/api";
 import voiceStyles from "./VoiceRecording.module.css";
+import AIShoppingCamera from "@/features/vision/components/AIShoppingCamera";
 
 type Message = {
   id: string;
@@ -12,6 +13,8 @@ type Message = {
   content: string;
   timestamp: Date | null;
   attachments?: ChatProductAttachment[];
+  inputType?: "text" | "voice";
+  inputPayload?: Record<string, unknown>;
 };
 
 type ChatProductAttachment = {
@@ -87,6 +90,8 @@ export default function AIAssistant() {
             role: message.role,
             content: message.content,
           })),
+          input_type: history.at(-1)?.inputType ?? "text",
+          input_payload: history.at(-1)?.inputPayload ?? {},
         }),
       });
       const data = await response.json() as { reply?: string; detail?: string; attachments?: ChatProductAttachment[] };
@@ -117,7 +122,7 @@ export default function AIAssistant() {
     }
   };
 
-  const sendTextMessage = (content: string) => {
+  const sendTextMessage = (content: string, input?: Pick<Message, "inputType" | "inputPayload">) => {
     if (!content.trim()) return;
 
     const userMessage: Message = {
@@ -125,6 +130,7 @@ export default function AIAssistant() {
       role: "user",
       content: content.trim(),
       timestamp: new Date(),
+      ...input,
     };
 
     const nextMessages = [...messages, userMessage];
@@ -227,7 +233,15 @@ export default function AIAssistant() {
       const response = await fetch(`${ASSISTANT_API_URL}/api/v1/transcribe`, { method: "POST", body: formData, signal: controller.signal });
       const data = await response.json() as { transcript?: string; detail?: string };
       if (!response.ok || !data.transcript) throw new Error(data.detail ?? "No speech was detected.");
-      sendTextMessage(data.transcript);
+      sendTextMessage(data.transcript, {
+        inputType: "voice",
+        inputPayload: {
+          transcript: data.transcript,
+          language: data.language ?? null,
+          duration_seconds: data.duration_seconds ?? null,
+          source: "browser_recording",
+        },
+      });
       discardRecording();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -269,6 +283,8 @@ export default function AIAssistant() {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
+
+      if (target instanceof Element && target.closest("[data-shopy-camera-overlay]")) return;
 
       if (chatRef.current?.contains(target) || launcherRef.current?.contains(target)) {
         return;
@@ -483,6 +499,14 @@ export default function AIAssistant() {
                       className="h-10 min-w-0 flex-1 !border-0 !bg-transparent !shadow-none px-3 text-base leading-6 text-slate-900 placeholder:text-slate-500 outline-none"
                       disabled={isLoading}
                     />
+                    <span className={styles.cameraButton}>
+                      <AIShoppingCamera compact disabled={isLoading} onAnalysisComplete={(analysis) => {
+                        setMessages((previous) => [
+                          ...previous,
+                          { id: `assistant-${previous.length + 1}`, role: "assistant", content: analysis, timestamp: new Date() },
+                        ]);
+                      }} />
+                    </span>
                     <button
                       type="button"
                       onClick={startRecording}

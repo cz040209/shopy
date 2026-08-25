@@ -453,11 +453,84 @@ PRODUCTS.push(
     category,
     desc,
     price: COMPONENT_PRICES[name] ?? 95,
-    rating: 4.5,
-    reviews: 120 + index * 17,
+    rating: 3.8,
+    reviews: 90 + index * 23,
     emoji,
     image,
     stock: true,
     specs: [{ label: "Collection", value: category }],
   })),
 );
+
+const BRAND_SELLER_POOLS: Record<string, string[]> = {
+  Astra: ["Astra Official Store", "Astra Audio Lounge", "Astra Wearables Hub"],
+  Apple: ["Apple Flagship Malaysia", "Apple Premium Reseller KL", "Apple Workstation Gallery"],
+  Pulse: ["Pulse Imaging Lab", "Pulse Flight & Capture", "Pulse Creator Outpost"],
+  Northline: ["Northline Gear Studio", "Northline Urban Carry", "Northline Workspace Living"],
+  Helio: ["Helio Living Store", "Helio Home Lab", "Helio Smart Space"],
+  Aperture: ["Aperture Pro Shop", "Aperture Camera & Display", "Aperture Creator Market"],
+  Keycraft: ["Keycraft Official", "Keycraft Input Studio", "Keycraft Performance Desk"],
+  Sonora: ["Sonora Audio Gallery", "Sonora Smart Home Audio", "Sonora Listening Room"],
+  Vertex: ["Vertex Mobile Direct", "Vertex Digital Life", "Vertex Device Center"],
+  "Shopy Sets": ["Shopy Curated Bundles", "Shopy Bundle Picks", "Shopy Lifestyle Kits"],
+  "Shopy Essentials": ["Shopy Essentials Warehouse", "Shopy Essentials Select", "Shopy Everyday Supply"],
+};
+
+const SELLER_BY_PRODUCT: Record<string, string> = {
+  "Gaming Setup Kit": "Shopy Pro Gaming Bundles",
+  "Travel Kit": "Shopy Travel Ready",
+  "First Apartment Kit": "Shopy New Home Starter",
+  "Skincare Routine": "Shopy Beauty Essentials",
+  "Formal Outfit Set": "Shopy Formal Edit",
+  "Makeup Starter Kit": "Shopy Makeup Studio",
+  "Home Cleaning Kit": "Shopy Clean Living",
+};
+
+const COLOR_VARIANTS_BY_NAME: Record<string, string[]> = {
+  "Orbit Pro Headset": ["Midnight Black", "Cloud White", "Forest Green"],
+  "Mac Studio Display": ["Silver", "Space Gray"],
+  "Vector Mini Drone": ["Graphite", "Arctic White"],
+  "Lumen Smart Watch": ["Titanium", "Obsidian Black", "Sand Gold"],
+  "Atlas Travel Pack": ["Storm Gray", "Olive", "Desert Sand"],
+  "Quantum Desk Lamp": ["Matte Black", "Ivory"],
+  "Frame X Mirrorless Camera": ["Black", "Silver"],
+  "Forge Mechanical Keyboard": ["Slate", "Snow", "Navy"],
+  "Glide Pro Wireless Mouse": ["Graphite", "Ice", "Rose Quartz"],
+  "Pulse Room Speaker": ["Charcoal", "Pearl White"],
+  "AirLoop Pro Earbuds": ["Onyx", "Moon White", "Teal"],
+  "Nova 5G Smartphone": ["Midnight", "Sierra Blue", "Sunset Copper"],
+  "Canvas Air Tablet": ["Silver", "Sky Blue", "Graphite"],
+  "Form Ergo Chair": ["Black", "Ash Gray"],
+  "Apex 34 Ultrawide": ["Matte Black"],
+  "Charge Vault 20K": ["Black", "Sage", "Navy"],
+};
+
+const COLOR_VARIANTS_BY_CATEGORY: Record<string, string[]> = {
+  Beauty: ["Classic", "Warm", "Cool"],
+  Fashion: ["Black", "Navy", "Beige"],
+  "Home Cleaning": ["White", "Mint"],
+};
+
+const EXTRAORDINARY_RATING_INDEX = 11;
+
+PRODUCTS.forEach((product, index) => {
+  const computedRating = 2.5 + ((index * 17) % 24) / 10;
+  product.rating = index === EXTRAORDINARY_RATING_INDEX ? 5.0 : Number(computedRating.toFixed(1));
+  product.reviews = 28 + ((index * 173 + product.name.length * 19) % 4200);
+
+  const sellerPool = BRAND_SELLER_POOLS[product.brand] ?? [
+    `${product.brand} Marketplace Store`,
+    `${product.brand} Verified Seller`,
+    `${product.brand} Official Partner`,
+  ];
+  const seller =
+    SELLER_BY_PRODUCT[product.name] ?? sellerPool[(product.id + product.name.length) % sellerPool.length];
+  const colorVariants = COLOR_VARIANTS_BY_NAME[product.name] ?? COLOR_VARIANTS_BY_CATEGORY[product.category];
+
+  const baseSpecs = product.specs.filter((spec) => spec.label !== "Seller" && spec.label !== "Color variants");
+  const enrichedSpecs = [...baseSpecs, { label: "Seller", value: seller }];
+  if (colorVariants?.length) {
+    enrichedSpecs.push({ label: "Color variants", value: colorVariants.join(", ") });
+  }
+  product.specs = enrichedSpecs;
+});

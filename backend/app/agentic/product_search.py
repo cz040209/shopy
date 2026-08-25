@@ -1,0 +1,58 @@
+"""Deterministic, tool-grounded catalog search and ranking."""
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+from .state import ShoppingAgentState
+from .tools import CommerceToolRegistry, ToolExecutionError
+
+
+class ProductSearchAgent:
+    name = "product_search"
+
+    def __init__(self, tools: CommerceToolRegistry | None) -> None:
+        self.tools = tools
+
+    async def run(self, state: ShoppingAgentState, *, query: str, limit: int = 8, include_out_of_stock: bool = False) -> dict[str, Any]:
+        if self.tools is None:
+            return {"candidate_products": [], "product_rankings": [], "tool_results": [], "errors": ["Catalog tools are unavailable."]}
+        try:
+            result = await self.tools.execute("search_products", {"query": query, "limit": limit})
+        except ToolExecutionError as error:
+            return {"candidate_products": [], "product_rankings": [], "tool_results": [], "errors": [str(error)]}
+        ranked = self._rank(result["products"], state, include_out_of_stock=include_out_of_stock)
+        return {
+            "candidate_products": [item["product"] for item in ranked],
+            "product_rankings": [{"product_id": item["product"]["id"], "score": item["score"], "reasons": item["reasons"]} for item in ranked],
+            "tool_results": [{"tool": "search_products", "result_count": len(ranked)}],
+            "errors": [],
+        }
+
+    @staticmethod
+    def _rank(products: list[dict[str, Any]], state: ShoppingAgentState, *, include_out_of_stock: bool) -> list[dict[str, Any]]:
+        budget = Decimal(str(state["budget"])) if state.get("budget") is not None else None
+        requested = [*state.get("preferences", []), *state.get("constraints", []), *state.get("required_categories", [])]
+        owned = " ".join(map(str, state.get("owned_items", []))).lower()
+        ranked: list[dict[str, Any]] = []
+        for product in products:
+            if int(product.get("inventory_quantity", 0)) < 1 and not include_out_of_stock:
+                continue
+            facts = " ".join(map(str, [product.get("name", ""), product.get("brand", ""), product.get("category", ""), product.get("specs", []), product.get("attributes", {})])).lower()
+            if owned and str(product.get("name", "")).lower() in owned:
+                continue
+            score, reasons = (20, ["in stock"]) if int(product.get("inventory_quantity", 0)) > 0 else (0, ["stock status checked"])
+            try:
+                price = Decimal(str(product["price"]))
+                if budget is not None:
+                    if price > budget:
+                        continue
+                    score += 20; reasons.append("within budget")
+            except Exception:
+                continue
+            for item in requested:
+                tokens = [token for token in str(item).lower().split() if len(token) > 2]
+                if tokens and any(token in facts for token in tokens):
+                    score += 10; reasons.append(f"matches {item}")
+            ranked.append({"product": product, "score": score, "reasons": reasons})
+        return sorted(ranked, key=lambda item: (-item["score"], str(item["product"]["name"])))

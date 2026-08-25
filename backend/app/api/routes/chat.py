@@ -129,6 +129,8 @@ def persist_exchange(
     assistant_reply: str,
     attachments: list[dict[str, object]],
     request_id: str,
+    input_type: str,
+    input_payload: dict[str, object],
 ) -> tuple[AIConversation, str]:
     conversation, token = get_or_create_conversation(
         db=db,
@@ -141,12 +143,16 @@ def persist_exchange(
             AIMessage(
                 role=MessageRole.USER,
                 content=customer_message,
-                extra_data={"request_id": request_id, "input_type": "text"},
+                input_type=input_type,
+                input_payload=input_payload,
+                processing_metadata={"request_id": request_id, "channel": "web_chat"},
+                extra_data={"request_id": request_id},
             ),
             AIMessage(
                 role=MessageRole.ASSISTANT,
                 content=assistant_reply,
                 model=settings.gemini_model,
+                processing_metadata={"request_id": request_id, "response_source": "audited_orchestrator"},
                 extra_data={"request_id": request_id, "attachments": attachments},
             ),
         ]
@@ -177,7 +183,7 @@ async def chat(
     log_ai_event(
         "text.received",
         request_id=request_id,
-        input_type="text",
+        input_type=payload.input_type,
         customer_input=customer_input_for_log(latest_customer_input),
         conversation_messages=len(payload.messages),
     )
@@ -218,6 +224,8 @@ async def chat(
             assistant_reply=reply,
             attachments=attachments,
             request_id=request_id,
+            input_type=payload.input_type,
+            input_payload={"text": latest_customer_input.strip(), **payload.input_payload},
         )
     except SQLAlchemyError as error:
         db.rollback()
@@ -242,7 +250,7 @@ async def chat(
     log_ai_event(
         "text.completed",
         request_id=request_id,
-        input_type="text",
+        input_type=payload.input_type,
         customer_input=customer_input_for_log(latest_customer_input),
         ai_process="The Shopping Orchestrator generated a tool-backed response and the Auditor approved its catalog claims.",
         final_output=reply,

@@ -14,8 +14,12 @@ from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import GeminiLangChainChatModel
 from .planner import NeedPlannerAgent
 from .observability import OrchestrationRecorder
+from .product_resolution import ProductResolutionAgent
+from .product_search import ProductSearchAgent
+from .review_intelligence import ReviewIntelligenceAgent
 from .state import ShoppingAgentState, initial_shopping_state
 from .tools import CommerceToolRegistry, ToolExecutionError
+from .vision import VisionAgent
 
 
 class ShoppingOrchestrator:
@@ -34,11 +38,16 @@ class ShoppingOrchestrator:
         max_repairs: int = settings.agent_max_repair_attempts,
         max_graph_iterations: int = settings.agent_max_graph_iterations,
         recorder: OrchestrationRecorder | None = None,
+        vision_agent: VisionAgent | None = None,
     ) -> None:
         shared_model = model or GeminiLangChainChatModel(timeout_seconds=settings.agent_model_timeout_seconds)
         self.tool_registry = tool_registry
         self.intent_agent = IntentMissionAgent(shared_model, tools=tool_registry.tools if tool_registry else ())
         self.need_planner = NeedPlannerAgent()
+        self.product_resolver = ProductResolutionAgent(shared_model)
+        self.product_search_agent = ProductSearchAgent(tool_registry)
+        self.review_agent = ReviewIntelligenceAgent(shared_model, tool_registry)
+        self.vision_agent = vision_agent or VisionAgent()
         self.brand_voice = BrandVoiceAgent(shared_model)
         self.auditor = auditor or ShoppingAuditor()
         self.max_repairs = max_repairs
@@ -48,20 +57,24 @@ class ShoppingOrchestrator:
 
     def _build_graph(self):
         workflow = StateGraph(ShoppingAgentState)
+        workflow.add_node("vision", self._vision_node)
         workflow.add_node("intent_agent", self._intent_node)
         workflow.add_node("need_planner", self._need_planner_node)
         workflow.add_node("product_search", self._product_search_node)
+        workflow.add_node("review_intelligence", self._review_node)
         workflow.add_node("brand_voice", self._brand_voice_node)
         workflow.add_node("audit", self._audit_node)
         workflow.add_node("repair", self._repair_node)
-        workflow.add_edge(START, "intent_agent")
+        workflow.add_conditional_edges(START, self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
+        workflow.add_edge("vision", "intent_agent")
         workflow.add_edge("intent_agent", "need_planner")
         workflow.add_conditional_edges(
             "need_planner",
             self._after_planner,
             {"product_search": "product_search", "brand_voice": "brand_voice"},
         )
-        workflow.add_edge("product_search", "brand_voice")
+        workflow.add_edge("product_search", "review_intelligence")
+        workflow.add_edge("review_intelligence", "brand_voice")
         workflow.add_edge("brand_voice", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "end": END})
         workflow.add_edge("repair", "brand_voice")
@@ -81,6 +94,10 @@ class ShoppingOrchestrator:
             inputs["mission"] = state.get("mission", {})
         elif node == "product_search":
             inputs["goal"] = state.get("goal")
+        elif node == "vision":
+            inputs["mode"] = state.get("vision_input", {}).get("mode")
+        elif node == "review_intelligence":
+            inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
         elif node == "brand_voice":
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
@@ -91,6 +108,15 @@ class ShoppingOrchestrator:
 
     def _after_planner(self, state: ShoppingAgentState) -> str:
         return "product_search" if self._requires_catalog_lookup(state) else "brand_voice"
+
+    @staticmethod
+    def _route_start(state: ShoppingAgentState) -> str:
+        return "vision" if state.get("vision_input") else "intent_agent"
+
+    async def _vision_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {**self._event(state, "vision"), **(await self.vision_agent.run(state))}
+        self._record_node(state, "vision", output)
+        return output
 
     def _requires_catalog_lookup(self, state: ShoppingAgentState) -> bool:
         """Keep catalog-fact requests on the tool-backed path.
@@ -103,7 +129,10 @@ class ShoppingOrchestrator:
         return bool(self._requested_actions(state))
 
     async def _intent_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        mission = await self.intent_agent.interpret(state["user_request"])
+        request = state["user_request"]
+        if state.get("vision_context"):
+            request += "\n\nVerified image context: " + str(state["vision_context"])
+        mission = await self.intent_agent.interpret(request)
         output = {
             **self._event(state, "intent_agent"),
             "mission_type": mission.mission_type, "goal": mission.goal, "catalog_query": mission.catalog_query,
@@ -129,20 +158,16 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
-        try:
-            # A stock result is checked once here and once by the final audit.
-            # Reserve calls for both phases so a broad search cannot exhaust the
-            # request's tool budget before its answer is independently verified.
-            limit = self._stock_search_limit() if "check_stock" in actions else 8
-            search = await self.tool_registry.execute("search_products", {"query": self._catalog_query(state), "limit": limit})
-        except ToolExecutionError as error:
-            output = {**result, "errors": [*state["errors"], str(error)]}
+        search_output = await self.product_search_agent.run(state, query=self._catalog_query(state), limit=self._stock_search_limit() if "check_stock" in actions else 8, include_out_of_stock="check_stock" in actions)
+        if search_output["errors"]:
+            output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
             return output
-        candidates = search["products"]
+        candidates = search_output["candidate_products"]
+        result = {**result, "product_rankings": search_output["product_rankings"]}
         if "check_stock" in actions:
             stock_results: list[dict[str, Any]] = []
-            tool_results = [*state["tool_results"], {"tool": "search_products", "result_count": len(candidates)}]
+            tool_results = [*state["tool_results"], *search_output["tool_results"]]
             for candidate in candidates:
                 try:
                     stock = await self.tool_registry.execute("check_stock", {"product_id": str(candidate["id"])})
@@ -162,18 +187,26 @@ class ShoppingOrchestrator:
             }
             self._record_node(state, "product_search", output)
             return output
-        tool_context = await self._execute_requested_actions(actions, candidates, state)
+        action_candidates, resolution_context = await self._resolve_action_candidates(state, actions, candidates)
+        tool_context = [*resolution_context, *(await self._execute_requested_actions(actions, action_candidates, state))]
+        response_candidates = action_candidates if resolution_context else candidates
         output = {
             **result,
             "candidate_products": candidates,
             "selected_products": (
-                self.brand_voice.select_catalog_products({**state, "candidate_products": candidates})
+                self.brand_voice.select_catalog_products({**state, "candidate_products": response_candidates})
                 if self._should_recommend_products(actions) else []
             ),
-            "tool_results": [*state["tool_results"], {"tool": "search_products", "result_count": len(candidates)}],
+            "tool_results": [*state["tool_results"], *search_output["tool_results"]],
             "tool_context": tool_context,
         }
         self._record_node(state, "product_search", output)
+        return output
+
+    async def _review_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        insights = {} if state.get("stock_results") else await self.review_agent.run(state)
+        output = {**self._event(state, "review_intelligence"), **insights}
+        self._record_node(state, "review_intelligence", output)
         return output
 
     @staticmethod
@@ -263,6 +296,28 @@ class ShoppingOrchestrator:
                 # Preserve the previous useful fallback for an underspecified bundle.
                 await execute("calculate_bundle_total", {"items": [{"product_id": str(product["id"]), "quantity": 1} for product in selected[:3]]})
         return context
+
+    async def _resolve_action_candidates(
+        self, state: ShoppingAgentState, actions: list[str], candidates: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        resolving_actions = {"get_product", "get_product_reviews", "get_seller", "compare_products"}
+        # The intent model can label a factual lookup as product_search. Let the
+        # grounded resolver decide from the verified candidates for every
+        # search-only request, rather than depending on that label.
+        search_only = set(actions) == {"search_products"}
+        if not search_only and not resolving_actions.intersection(actions):
+            return candidates, []
+        resolved_ids = await self.product_resolver.resolve(
+            user_request=state["user_request"], actions=actions, candidates=candidates
+        )
+        if resolved_ids:
+            by_id = {str(product["id"]): product for product in candidates}
+            return [by_id[product_id] for product_id in resolved_ids], [
+                {"tool": "product_resolution", "result": {"product_ids": resolved_ids}}
+            ]
+        if len(candidates) == 1:
+            return candidates, [{"tool": "product_resolution", "result": {"product_ids": [str(candidates[0]["id"])]}}]
+        return [], [{"tool": "product_resolution", "result": {"product_ids": [], "status": "ambiguous"}}]
 
     @staticmethod
     def _best_catalog_match(products: list[dict[str, Any]], query: str) -> dict[str, Any]:

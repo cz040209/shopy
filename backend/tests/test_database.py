@@ -7,7 +7,7 @@ from app.database import Base, build_engine, check_database_connection
 
 EXPECTED_TABLES = {
     "addresses",
-    "ai_conversations",
+    "conversations",
     "ai_messages",
     "ai_recommendations",
     "auth_sessions",

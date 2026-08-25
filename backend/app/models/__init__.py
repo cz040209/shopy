@@ -6,7 +6,7 @@ such as ``from app.models import User``.
 """
 
 from .address import Address
-from .ai_conversation import AIConversation
+from .ai_conversation import AIConversation, Conversation
 from .ai_message import AIMessage
 from .ai_recommendation import AIRecommendation
 from .auth_session import AuthSession
@@ -49,6 +49,7 @@ __all__ = [
     "Address",
     "AddressKind",
     "AIConversation",
+    "Conversation",
     "AIMessage",
     "AIRecommendation",
     "AuthSession",

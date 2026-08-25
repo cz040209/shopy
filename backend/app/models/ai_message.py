@@ -19,12 +19,15 @@ class AIMessage(DisplayIdMixin, Base):
     __table_args__ = (Index("ix_ai_messages_conversation_created", "conversation_id", "created_at"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    conversation_id: Mapped[UUID] = mapped_column(ForeignKey("ai_conversations.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
     role: Mapped[MessageRole] = mapped_column(enum_column(MessageRole, "message_role"))
     content: Mapped[str] = mapped_column(Text)
+    input_type: Mapped[str | None] = mapped_column(String(24), index=True)
+    input_payload: Mapped[dict[str, Any]] = mapped_column(JSON_DATA, default=dict)
+    processing_metadata: Mapped[dict[str, Any]] = mapped_column(JSON_DATA, default=dict)
     model: Mapped[str | None] = mapped_column(String(120))
     token_count: Mapped[int | None] = mapped_column(Integer)
     extra_data: Mapped[dict[str, Any]] = mapped_column("metadata", JSON_DATA, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    conversation: Mapped["AIConversation"] = relationship("AIConversation", back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")

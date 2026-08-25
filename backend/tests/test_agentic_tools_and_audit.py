@@ -56,6 +56,9 @@ class StockCheckMissionModel:
 
 class CatalogActionMissionModel:
     async def ainvoke(self, input, **kwargs):
+        if "product-resolution agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            return AIMessage(content=json.dumps({"product_ids": [product["id"] for product in payload["verified_candidates"]]}))
         if "response-writing agent" in str(input[0].content):
             payload = json.loads(str(input[1].content))
             products = payload["verified_catalog_products"]
@@ -80,13 +83,34 @@ class BundleMissionModel:
 
 class SellerMissionModel:
     async def ainvoke(self, input, **kwargs):
+        if "product-resolution agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            target = next(product for product in payload["verified_candidates"] if product["name"] == "Nova Gaming Laptop")
+            return AIMessage(content=json.dumps({"product_ids": [target["id"]]}))
         if "response-writing agent" in str(input[0].content):
             payload = json.loads(str(input[1].content))
-            seller = payload["verified_tool_results"][0]["result"]
+            seller = next(item["result"] for item in payload["verified_tool_results"] if item["tool"] == "get_seller")
+            echoed_product_id = next(item["result"]["product_ids"][0] for item in payload["verified_tool_results"] if item["tool"] == "product_resolution")
             return AIMessage(content=json.dumps({
-                "response": f"Nova Gaming Laptop is sold by {seller['name']}.", "product_ids": [],
+                "response": f"Nova Gaming Laptop is sold by {seller['name']}.", "product_ids": [echoed_product_id],
             }))
         return AIMessage(content='{"mission_type":"information_request","goal":"find the seller","catalog_query":"nova gaming laptop","catalog_queries":["nova gaming laptop"],"requested_actions":["get_seller"],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
+class ProductFactMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "product-resolution agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            target = next(product for product in payload["verified_candidates"] if product["name"] == "Frame X Mirrorless Camera")
+            return AIMessage(content=json.dumps({"product_ids": [target["id"]]}))
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            product = payload["verified_catalog_products"][0]
+            colors = next(spec["value"] for spec in product["specs"] if spec["label"] == "Color variants")
+            return AIMessage(content=json.dumps({
+                "response": f"{product['name']} is available in {colors}.", "product_ids": [product["id"]],
+            }))
+        return AIMessage(content='{"mission_type":"information_request","goal":"find product colors","catalog_query":"Frame Mirrorlesscamera","catalog_queries":["Frame Mirrorlesscamera"],"requested_actions":["search_products"],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
 
 
 class AlwaysFailAuditor:
@@ -232,7 +256,7 @@ async def test_orchestrator_executes_each_planned_catalog_action(db_session):
 
     assert result["audit_result"]["status"] == "pass"
     assert [item["tool"] for item in result["tool_context"]] == [
-        "get_product", "get_product_reviews", "get_product_reviews", "get_seller",
+        "product_resolution", "get_product", "get_product_reviews", "get_product_reviews", "get_seller",
         "compare_products", "calculate_bundle_total",
     ]
 
@@ -261,6 +285,13 @@ async def test_bundle_action_resolves_each_item_and_preserves_requested_quantiti
 @pytest.mark.anyio
 async def test_seller_lookup_uses_brand_voice_without_forcing_recommendation_ids(db_session):
     product = catalog_product(db_session, name="Nova Gaming Laptop")
+    unrelated = Product(
+        seller=product.seller, category=product.category, sku="ATLAS-BAG", slug="atlas-travel-pack",
+        name="Atlas Travel Pack", brand="Tool Brand", description="A travel bag with a laptop compartment.",
+        price=Decimal("120.00"), status=ProductStatus.ACTIVE, inventory_quantity=2,
+    )
+    db_session.add(unrelated)
+    db_session.commit()
     registry = CommerceToolRegistry(db_session, "seller-lookup", max_calls=20)
 
     result = await ShoppingOrchestrator(SellerMissionModel(), tool_registry=registry).ainvoke(
@@ -269,8 +300,30 @@ async def test_seller_lookup_uses_brand_voice_without_forcing_recommendation_ids
 
     assert result["audit_result"]["status"] == "pass"
     assert result["selected_products"] == []
-    assert result["tool_context"][0]["tool"] == "get_seller"
+    assert [item["tool"] for item in result["tool_context"]] == ["product_resolution", "get_seller"]
     assert result["final_response"] == "Nova Gaming Laptop is sold by Tool Seller."
+
+
+@pytest.mark.anyio
+async def test_product_fact_request_resolves_a_typo_and_keeps_specs_for_brand_voice(db_session):
+    product = catalog_product(db_session, name="Frame X Mirrorless Camera")
+    product.specs = [{"label": "Color variants", "value": "Black, Silver"}]
+    unrelated = Product(
+        seller=product.seller, category=product.category, sku="CAMERA-BAG", slug="camera-bag",
+        name="Atlas Camera Bag", brand="Tool Brand", description="A carry bag for a mirrorless camera.",
+        price=Decimal("90.00"), status=ProductStatus.ACTIVE, inventory_quantity=2,
+    )
+    db_session.add(unrelated)
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "product-fact", max_calls=20)
+
+    result = await ShoppingOrchestrator(ProductFactMissionModel(), tool_registry=registry).ainvoke(
+        "What colors does Frame Mirrorlesscamera have?"
+    )
+
+    assert result["audit_result"]["status"] == "pass"
+    assert result["selected_products"] == [{"id": str(product.id), "quantity": 1}]
+    assert result["final_response"] == "Frame X Mirrorless Camera is available in Black, Silver."
 
 
 @pytest.mark.anyio

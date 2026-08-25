@@ -11,6 +11,8 @@ cd backend
 poetry install
 poetry run alembic upgrade head
 poetry run python -m app.scripts.seed_catalog
+poetry run python -m app.scripts.seed_apparel_catalog
+poetry run python -m app.scripts.seed_furniture_catalog
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -26,6 +28,25 @@ It creates stable UUID-based PostgreSQL products, categories, a catalog seller,
 and product images. It is safe to run again: products are matched by their
 legacy SKU and updated rather than duplicated. After seeding, the storefront
 uses `GET /api/v1/products` and UUID product URLs as its catalog source.
+
+To add the separate apparel collection (shirts, T-shirts, jeans, trousers,
+pants, socks, shoes, outerwear, dresses, activewear, and accessories), run:
+
+```bash
+poetry run python -m app.scripts.seed_apparel_catalog
+```
+
+It is safe to rerun: products are upserted by `APPAREL-*` SKU and include
+verified color variants, materials, fits, and sizes for catalog and agent use.
+
+To add the separate room-focused furniture collection, run:
+
+```bash
+poetry run python -m app.scripts.seed_furniture_catalog
+```
+
+It upserts 20 `FURNITURE-*` products with dimensions, materials, colors, best
+rooms, and placement guidance for room-planning and future image-based agents.
 
 Authenticated commerce endpoints are available under `/api/v1`: `cart`,
 `orders/checkout`, `orders`, `wallet`, and product review creation. Checkout
