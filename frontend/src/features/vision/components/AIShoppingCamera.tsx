@@ -7,6 +7,16 @@ import { API_URL } from "@/lib/api";
 
 export type VisionMode = "shop_room" | "complete_look" | "shop_object";
 
+type VisionProductAttachment = {
+  product_id: string;
+  product_slug?: string | null;
+  name: string;
+  price: string | number;
+  currency: string;
+  image_url: string;
+  image_alt_text?: string | null;
+};
+
 type Props = {
   /** Omit this to let the shopper choose what they want to shop from the photo. */
   mode?: VisionMode;
@@ -15,7 +25,7 @@ type Props = {
   maxFileSizeMb?: number;
   maxDimension?: number;
   quality?: number;
-  onAnalysisComplete?: (analysis: string) => void;
+  onAnalysisComplete?: (analysis: string, attachments: VisionProductAttachment[]) => void;
 };
 
 
@@ -177,10 +187,10 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       data.append("image", photo, "shopy-vision.jpg");
       data.append("mode", activeMode);
       const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", credentials: "include", body: data });
-      const result = await response.json() as { analysis?: string; detail?: string };
+      const result = await response.json() as { analysis?: string; detail?: string; attachments?: VisionProductAttachment[] };
       if (!response.ok || !result.analysis) throw new Error(result.detail ?? "AI analysis could not be completed.");
       setAnalysis(result.analysis);
-      onAnalysisComplete?.(result.analysis);
+      onAnalysisComplete?.(result.analysis, result.attachments ?? []);
       setStage("result");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "AI analysis could not be completed.");

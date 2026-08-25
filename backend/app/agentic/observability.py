@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.ai_logging import customer_input_for_log
-from app.models import OrchestrationRun, OrchestrationRunEvent, User
+from app.models import Conversation, OrchestrationRun, OrchestrationRunEvent, User
 
 
 SENSITIVE_KEYS = {"password", "token", "secret", "api_key", "authorization", "cookie", "card", "cvc"}
@@ -28,16 +28,19 @@ def safe_audit_data(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [safe_audit_data(item) for item in value[:100]]
+    if isinstance(value, bytes):
+        return f"[binary payload omitted: {len(value)} bytes]"
     if isinstance(value, str):
         return value if len(value) <= MAX_STRING_LENGTH else f"{value[:MAX_STRING_LENGTH]}…[truncated]"
     return value
 
 
 class OrchestrationRecorder:
-    def __init__(self, db: Session, *, request_id: str, user: User | None = None) -> None:
+    def __init__(self, db: Session, *, request_id: str, user: User | None = None, conversation: Conversation | None = None) -> None:
         self.db = db
         self.request_id = request_id
         self.user = user
+        self.conversation = conversation
         self.run: OrchestrationRun | None = None
         self._sequence = 0
 
@@ -45,6 +48,7 @@ class OrchestrationRecorder:
         self.run = OrchestrationRun(
             request_id=self.request_id,
             user=self.user,
+            conversation=self.conversation,
             status="running",
             user_request=customer_input_for_log(str(state["user_request"])),
             initial_state=safe_audit_data(state),

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.agentic.observability import OrchestrationRecorder, safe_audit_data
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.tools import CommerceToolRegistry
-from app.models import Category, OrchestrationRun, Product, ProductStatus, Seller, SellerStatus, User
+from app.models import Category, Conversation, OrchestrationRun, Product, ProductStatus, Seller, SellerStatus, User
 
 
 class FakeChatModel:
@@ -51,3 +51,14 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
 def test_sensitive_audit_fields_are_redacted():
     data = safe_audit_data({"api_key": "private", "card_number": "4111111111111111", "safe": "visible"})
     assert data == {"api_key": "[redacted]", "card_number": "[redacted]", "safe": "visible"}
+
+
+def test_orchestration_run_can_be_linked_to_a_conversation(db_session):
+    conversation = Conversation(session_token="camera-session", context={"channel": "web_camera"})
+    recorder = OrchestrationRecorder(db_session, request_id="camera-run-123", conversation=conversation)
+    recorder.start({"user_request": "Shop this image", "vision_input": {"image_bytes": b"raw-image", "mode": "shop_object"}})
+
+    run = db_session.scalar(select(OrchestrationRun).where(OrchestrationRun.request_id == "camera-run-123"))
+    assert run is not None
+    assert run.conversation_id == conversation.id
+    assert run.initial_state["vision_input"]["image_bytes"] == "[binary payload omitted: 9 bytes]"

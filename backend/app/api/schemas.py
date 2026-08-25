@@ -42,6 +42,7 @@ class ChatResponse(BaseModel):
 class VisionResponse(BaseModel):
     mode: VisionMode
     analysis: str
+    attachments: list[ChatProductAttachment] = Field(default_factory=list)
 
 
 class TranscriptionResponse(BaseModel):

@@ -130,9 +130,8 @@ class ShoppingOrchestrator:
 
     async def _intent_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         request = state["user_request"]
-        if state.get("vision_context"):
-            request += "\n\nVerified image context: " + str(state["vision_context"])
-        mission = await self.intent_agent.interpret(request)
+        runtime_context = {"vision_context": state["vision_context"]} if state.get("vision_context") else None
+        mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
         output = {
             **self._event(state, "intent_agent"),
             "mission_type": mission.mission_type, "goal": mission.goal, "catalog_query": mission.catalog_query,

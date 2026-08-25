@@ -23,6 +23,7 @@ class OrchestrationRun(TimestampMixin, Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     request_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
     mission_id: Mapped[UUID | None] = mapped_column(ForeignKey("shopping_missions.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(24), default="running", index=True)
     user_request: Mapped[str] = mapped_column(Text)
@@ -34,6 +35,7 @@ class OrchestrationRun(TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User | None"] = relationship("User", back_populates="orchestration_runs")
+    conversation: Mapped["Conversation | None"] = relationship("Conversation", back_populates="orchestration_runs")
     events: Mapped[list["OrchestrationRunEvent"]] = relationship(
         "OrchestrationRunEvent", back_populates="run", cascade="all, delete-orphan", order_by="OrchestrationRunEvent.sequence"
     )

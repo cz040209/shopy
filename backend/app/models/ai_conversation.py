@@ -31,6 +31,7 @@ class Conversation(TimestampMixin, Base):
     messages: Mapped[list["AIMessage"]] = relationship(
         "AIMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="AIMessage.created_at"
     )
+    orchestration_runs: Mapped[list["OrchestrationRun"]] = relationship("OrchestrationRun", back_populates="conversation")
 
 
 # Temporary Python-level compatibility for callers while the database table has

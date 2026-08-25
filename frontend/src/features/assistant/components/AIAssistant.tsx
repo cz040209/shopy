@@ -500,10 +500,10 @@ export default function AIAssistant() {
                       disabled={isLoading}
                     />
                     <span className={styles.cameraButton}>
-                      <AIShoppingCamera compact disabled={isLoading} onAnalysisComplete={(analysis) => {
+                      <AIShoppingCamera compact disabled={isLoading} onAnalysisComplete={(analysis, attachments) => {
                         setMessages((previous) => [
                           ...previous,
-                          { id: `assistant-${previous.length + 1}`, role: "assistant", content: analysis, timestamp: new Date() },
+                          { id: `assistant-${previous.length + 1}`, role: "assistant", content: analysis, timestamp: new Date(), attachments },
                         ]);
                       }} />
                     </span>

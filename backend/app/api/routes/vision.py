@@ -6,6 +6,7 @@ from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Respo
 from sqlalchemy.orm import Session
 
 from app.ai_logging import log_ai_event
+from app.agentic.observability import OrchestrationRecorder
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.tools import CommerceToolRegistry
 from app.ai.gemini import GeminiConnectionError, GeminiResponseError
@@ -34,43 +35,6 @@ async def analyze_shopping_photo(
 ) -> VisionResponse:
     request_id = uuid4().hex[:12]
     started_at = time.perf_counter()
-    analysis = json.dumps(state.get("vision_context", {}), ensure_ascii=False)
-    try:
-        conversation, token = get_or_create_conversation(
-            db=db,
-            token=conversation_token,
-            user=current_user,
-            first_message=f"Image submitted: {mode.replace('_', ' ')}",
-        )
-        conversation.messages.extend(
-            [
-                AIMessage(
-                    role=MessageRole.USER,
-                    content=f"[Image submitted for {mode.replace('_', ' ')}]",
-                    input_type="image",
-                    input_payload={
-                        "mode": mode,
-                        "filename": image.filename or "captured-image",
-                        "mime_type": image.content_type,
-                        "bytes": len(image_bytes),
-                        "raw_asset_stored": False,
-                    },
-                    processing_metadata={"request_id": request_id, "channel": "web_camera"},
-                ),
-                AIMessage(
-                    role=MessageRole.ASSISTANT,
-                    content=analysis,
-                    model=settings.gemini_model,
-                    processing_metadata={"request_id": request_id, "response_source": "vision_orchestrator"},
-                ),
-            ]
-        )
-        db.commit()
-        set_conversation_cookie(http_response, token)
-    except Exception as error:
-        db.rollback()
-        log_ai_event("camera.conversation_persistence_failed", request_id=request_id, error_type=type(error).__name__)
-        raise HTTPException(status_code=503, detail="The image was analyzed, but its conversation record could not be saved.") from error
     log_ai_event(
         "camera.received",
         request_id=request_id,
@@ -95,6 +59,7 @@ async def analyze_shopping_photo(
         log_ai_event("camera.rejected", request_id=request_id, reason="image_too_large", bytes=len(image_bytes))
         raise HTTPException(status_code=413, detail="Choose an image smaller than 10 MB.")
 
+    recorder: OrchestrationRecorder | None = None
     try:
         log_ai_event(
             "camera.processing",
@@ -105,10 +70,18 @@ async def analyze_shopping_photo(
             vision_goal=VISION_PROMPTS[mode],
             reasoning_trace="The selected shopping mode determines the image-analysis goal and product recommendation format.",
         )
-        registry = CommerceToolRegistry(db, request_id=request_id)
-        state = await ShoppingOrchestrator(tool_registry=registry).ainvoke(
+        conversation, token = get_or_create_conversation(
+            db=db,
+            token=conversation_token,
+            user=current_user,
+            first_message=f"Image submitted: {mode.replace('_', ' ')}",
+        )
+        recorder = OrchestrationRecorder(db, request_id=request_id, user=current_user, conversation=conversation)
+        registry = CommerceToolRegistry(db, request_id=request_id, recorder=recorder)
+        state = await ShoppingOrchestrator(tool_registry=registry, recorder=recorder).ainvoke(
             f"Shop this {mode.replace('_', ' ')} image.",
             state_overrides={"vision_input": {"image_bytes": image_bytes, "mime_type": image.content_type, "mode": mode}},
+            defer_finish=True,
         )
     except GeminiConnectionError as error:
         log_ai_event(
@@ -127,6 +100,61 @@ async def analyze_shopping_photo(
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=502, detail="Gemini could not analyze this photo. Please try again.")
+    except Exception as error:
+        if recorder is not None and recorder.run is not None and recorder.run.status == "running":
+            recorder.fail(error)
+        log_ai_event("camera.failed", request_id=request_id, reason="orchestration_failed")
+        raise HTTPException(status_code=503, detail="The image shopping assistant could not complete a verified response.") from error
+
+    if state.get("audit_result", {}).get("status") != "pass" or not state.get("final_response"):
+        audit_error = ValueError("Image recommendation audit did not pass.")
+        if recorder is not None and recorder.run is not None and recorder.run.status == "running":
+            recorder.fail(audit_error)
+        raise HTTPException(status_code=503, detail="The shopping assistant could not validate an image recommendation.")
+    analysis = str(state["final_response"])
+    attachments = list(state.get("attachments", []))
+    try:
+        conversation.messages.extend(
+            [
+                AIMessage(
+                    role=MessageRole.USER,
+                    content=f"[Image submitted for {mode.replace('_', ' ')}]",
+                    input_type="image",
+                    input_payload={
+                        "mode": mode,
+                        "filename": image.filename or "captured-image",
+                        "mime_type": image.content_type,
+                        "bytes": len(image_bytes),
+                        "raw_asset_stored": False,
+                    },
+                    processing_metadata={"request_id": request_id, "channel": "web_camera"},
+                ),
+                AIMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=analysis,
+                    model=settings.gemini_model,
+                    processing_metadata={"request_id": request_id, "response_source": "vision_orchestrator"},
+                    extra_data={"request_id": request_id, "attachments": attachments, "vision_context": state.get("vision_context", {})},
+                ),
+            ]
+        )
+        db.commit()
+        set_conversation_cookie(http_response, token)
+        recorder.finish(
+            state,
+            final_response=analysis,
+            response_context={
+                "conversation_id": str(conversation.id),
+                "input_type": "image",
+                "response_source": "audited_orchestrator",
+            },
+        )
+    except Exception as error:
+        db.rollback()
+        if recorder is not None and recorder.run is not None and recorder.run.status == "running":
+            recorder.fail(error)
+        log_ai_event("camera.conversation_persistence_failed", request_id=request_id, error_type=type(error).__name__)
+        raise HTTPException(status_code=503, detail="The image was analyzed, but its conversation record could not be saved.") from error
 
     log_ai_event(
         "camera.completed",
@@ -137,4 +165,4 @@ async def analyze_shopping_photo(
         final_output=analysis,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )
-    return VisionResponse(mode=mode, analysis=analysis)
+    return VisionResponse(mode=mode, analysis=analysis, attachments=attachments)
