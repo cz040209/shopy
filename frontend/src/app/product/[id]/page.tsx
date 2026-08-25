@@ -1,10 +1,10 @@
 "use client";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { useState, use } from "react";
 import { ChevronLeft, Heart, Minus, Plus, ShieldCheck, ShoppingBag, Star, Truck } from "lucide-react";
 import ProductCard from "@/features/products/components/ProductCard";
+import ProductImage from "@/features/products/components/ProductImage";
 import Toast from "@/components/ui/Toast";
 import { PRODUCTS } from "@/features/products/data/products";
 import { useCart } from "@/features/cart/cart-context";
@@ -42,7 +42,15 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         <div className={styles.gallery}>
           <div className={styles.imageStage}>
             <span className={styles.imageLabel}>Featured product</span>
-            {selectedProduct.image ? <Image src={selectedProduct.image} alt={selectedProduct.name} fill priority sizes="(max-width: 960px) 100vw, 52vw" className={styles.productImage} /> : <span className={styles.emoji}>{selectedProduct.emoji}</span>}
+            <ProductImage
+              src={selectedProduct.image}
+              alt={selectedProduct.name}
+              fill
+              preload
+              sizes="(max-width: 960px) 100vw, 52vw"
+              className={styles.productImage}
+              fallback={<span className={styles.emoji}>{selectedProduct.emoji}</span>}
+            />
           </div>
           <div className={styles.deliveryStrip}><Truck size={17} /><span>Fast delivery across Malaysia</span><span className={styles.deliveryDot} /> <span>Easy returns</span></div>
         </div>

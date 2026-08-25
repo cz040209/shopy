@@ -81,3 +81,9 @@ export async function logoutAccount(): Promise<void> {
 export function notifyAuthChanged(): void {
   window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
 }
+
+export function getSafeReturnPath(value: string | null): string {
+  return value && value.startsWith("/") && !value.startsWith("//")
+    ? value
+    : "/profile";
+}

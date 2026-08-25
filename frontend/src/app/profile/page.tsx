@@ -21,6 +21,7 @@ import {
   UserRound,
 } from "lucide-react";
 import styles from "./profile.module.css";
+import RequireAuth from "@/components/auth/RequireAuth";
 
 const sections = [
   {
@@ -104,7 +105,7 @@ function resizeAvatar(file: File) {
   });
 }
 
-export default function Profile() {
+function ProfileContent() {
   const router = useRouter();
   const [avatar, setAvatar] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -231,4 +232,8 @@ export default function Profile() {
       </section>
     </main>
   );
+}
+
+export default function Profile() {
+  return <RequireAuth><ProfileContent /></RequireAuth>;
 }

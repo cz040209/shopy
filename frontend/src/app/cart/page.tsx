@@ -1,18 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import {
   Minus,
   Plus,
   ShieldCheck,
   ShoppingBag,
   Trash2,
-  Truck,
 } from "lucide-react";
-import { useState } from "react";
 import Button from "@/components/ui/Button";
+import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
+import ProductImage from "@/features/products/components/ProductImage";
 import styles from "./cart.module.css";
 
 const currency = new Intl.NumberFormat("en-MY", {
@@ -21,15 +20,14 @@ const currency = new Intl.NumberFormat("en-MY", {
   maximumFractionDigits: 0,
 });
 
-export default function Cart() {
+function CartContent() {
   const { cartItems, subtotal, updateQuantity, removeFromCart } = useCart();
-  const [failedImages, setFailedImages] = useState<number[]>([]);
   const service = cartItems.length > 0 ? 24 : 0;
   const total = subtotal + service;
 
   return (
     <div className={styles.cart}>
-      <section className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-end">
+      <section>
         <div>
           <h1>Shopping Cart</h1>
           <p>
@@ -38,21 +36,6 @@ export default function Cart() {
           </p>
         </div>
 
-        <div className="rounded-lg bg-cyan-400/[0.05] p-6 lg:p-7">
-          <div className="flex items-center gap-4">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-400/10 text-cyan-400">
-              <Truck size={20} />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-white">
-                Priority dispatch
-              </p>
-              <p className="text-xs text-[#8892a4]">
-                Malaysia delivery estimate: 24-48 hours
-              </p>
-            </div>
-          </div>
-        </div>
       </section>
 
       {cartItems.length === 0 ? (
@@ -73,21 +56,17 @@ export default function Cart() {
             {cartItems.map((item) => (
               <article
                 key={item.id}
-                className="grid min-w-0 gap-5 rounded-lg bg-white/[0.03] p-5 transition md:grid-cols-[96px_1fr_auto] lg:p-6"
+                className={`${styles.cartItem} grid min-w-0 gap-5 rounded-lg bg-white/[0.03] p-5 transition md:grid-cols-[96px_1fr_auto] lg:p-6`}
               >
                 <Link href={`/product/${item.id}`} className="flex items-center justify-center overflow-hidden rounded-xl bg-slate-100" style={{ width: 96, height: 96 }}>
-                  {item.image && !failedImages.includes(item.id) ? (
-                    <Image
-                      src={item.image}
-                      alt={item.name}
-                      width={160}
-                      height={160}
-                      style={{ width: "100%", height: "100%", objectFit: "contain", padding: 10 }}
-                      onError={() => setFailedImages((current) => [...current, item.id])}
-                    />
-                  ) : (
-                    <span aria-label={item.name} role="img" className="text-4xl">{item.emoji}</span>
-                  )}
+                  <ProductImage
+                    src={item.image}
+                    alt={item.name}
+                    width={160}
+                    height={160}
+                    style={{ width: "100%", height: "100%", objectFit: "contain", padding: 10 }}
+                    fallback={<span aria-label={item.name} role="img" className="text-4xl">{item.emoji}</span>}
+                  />
                 </Link>
 
                 <div className="min-w-0">
@@ -100,39 +79,47 @@ export default function Cart() {
                   >
                     {item.name}
                   </Link>
-                  <p className="mt-2 line-clamp-2 max-w-xl text-sm text-[#8892a4]">
+                  <p
+                    className="mt-2 line-clamp-2 max-w-xl text-sm text-[#8892a4]"
+                    style={{ fontSize: "14px", lineHeight: "1.65", color: "#b4bfd1" }}
+                  >
                     {item.desc}
                   </p>
                 </div>
 
-                <div className="flex min-w-0 flex-wrap items-center justify-between gap-5 md:flex-col md:items-end">
-                  <p className="text-lg font-bold text-white">
+                <div className={`${styles.itemControls} flex min-w-0 flex-wrap items-center justify-between gap-5 md:flex-col md:items-end`}>
+                  <p
+                    className={styles.itemTotal}
+                    style={{ color: "#f8fafc", fontSize: "16px", fontWeight: 800 }}
+                  >
                     {currency.format(item.price * item.quantity)}
                   </p>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-[#8892a4] transition hover:bg-white/10 hover:text-cyan-400"
-                      aria-label={`Decrease ${item.name} quantity`}
-                    >
-                      <Minus size={15} />
-                    </button>
-                    <span className="w-8 text-center text-sm font-semibold text-white">
-                      {item.quantity}
-                    </span>
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-[#8892a4] transition hover:bg-white/10 hover:text-cyan-400"
-                      aria-label={`Increase ${item.name} quantity`}
-                    >
-                      <Plus size={15} />
-                    </button>
+                  <div className={styles.quantityControls}>
+                    <div className={styles.quantityStepper} aria-label={`${item.name} quantity`}>
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                        className={styles.quantityButton}
+                        aria-label={`Decrease ${item.name} quantity`}
+                      >
+                        <Minus size={16} />
+                      </button>
+                      <span className={styles.quantityValue}>{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                        className={styles.quantityButton}
+                        aria-label={`Increase ${item.name} quantity`}
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                    <span className={styles.controlDivider} aria-hidden="true" />
                     <button
                       onClick={() => removeFromCart(item.id)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10 text-red-300 transition hover:bg-red-500/20"
+                      className={styles.removeButton}
                       aria-label={`Remove ${item.name}`}
+                      title={`Remove ${item.name}`}
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 </div>
@@ -140,7 +127,7 @@ export default function Cart() {
             ))}
           </div>
 
-          <aside className="h-fit rounded-lg bg-white/[0.03] p-6 lg:p-7">
+          <aside className={`${styles.summary} h-fit rounded-lg bg-white/[0.03] p-6 lg:p-7`}>
             <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">
               Order telemetry
             </p>
@@ -162,16 +149,18 @@ export default function Cart() {
                 {currency.format(total)}
               </span>
             </div>
-            <Link href="/checkout" className="mt-6 block">
-              <Button variant="primary" fullWidth>
-                Proceed to checkout
-              </Button>
-            </Link>
-            <Link href="/shop" className="mt-4 block">
-              <Button variant="outline" fullWidth>
-                Continue shopping
-              </Button>
-            </Link>
+            <div className={styles.summaryActions}>
+              <Link href="/checkout">
+                <Button variant="primary" fullWidth className={styles.checkoutButton}>
+                  Proceed to checkout
+                </Button>
+              </Link>
+              <Link href="/shop">
+                <Button variant="outline" fullWidth className={styles.continueButton}>
+                  Continue shopping
+                </Button>
+              </Link>
+            </div>
             <div className="security-note mt-5">
               <ShieldCheck size={18} className="mt-0.5 shrink-0 text-cyan-400" />
               AI fraud checks and encrypted payment routing are active.
@@ -181,4 +170,8 @@ export default function Cart() {
       )}
     </div>
   );
+}
+
+export default function Cart() {
+  return <RequireAuth><CartContent /></RequireAuth>;
 }

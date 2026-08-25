@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, Banknote, Check, CheckCircle2, Clock3, CreditCard, Landmark, LockKeyhole, Plus, ReceiptText, ShieldCheck, WalletCards } from "lucide-react";
 import { useCart } from "@/features/cart/cart-context";
+import RequireAuth from "@/components/auth/RequireAuth";
+import { getCurrentUser } from "@/lib/auth";
 import styles from "./shopy-pay.module.css";
 
-const STORAGE_KEY = "shopy-pay-wallet";
 const INITIAL_BALANCE = 420;
 const dailyLimit = 3000;
 const monthlyLimit = 12000;
@@ -21,23 +22,45 @@ const initialTransactions: WalletTransaction[] = [
 ];
 const currency = new Intl.NumberFormat("en-MY", { currency: "MYR", style: "currency", maximumFractionDigits: 0 });
 
-function readStoredWallet(): StoredWallet | null {
+function readStoredWallet(storageKey: string): StoredWallet | null {
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const stored = window.localStorage.getItem(storageKey);
     if (!stored) return null;
     const parsed = JSON.parse(stored) as Partial<StoredWallet>;
     return typeof parsed.balance === "number" && Array.isArray(parsed.transactions) ? { balance: parsed.balance, transactions: parsed.transactions } : null;
   } catch { return null; }
 }
 
-export default function ShopyPay() {
+function ShopyPayContent() {
   const { subtotal } = useCart();
   const [balance, setBalance] = useState(INITIAL_BALANCE);
   const [topUpAmount, setTopUpAmount] = useState("100");
   const [source, setSource] = useState(paymentSources[0]);
   const [transactions, setTransactions] = useState<WalletTransaction[]>(initialTransactions);
-  useEffect(() => { const id = window.setTimeout(() => { const stored = readStoredWallet(); if (stored) { setBalance(stored.balance); setTransactions(stored.transactions); } }, 0); return () => window.clearTimeout(id); }, []);
-  useEffect(() => { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ balance, transactions })); }, [balance, transactions]);
+  const [storageKey, setStorageKey] = useState<string | null>(null);
+  useEffect(() => {
+    let isCurrent = true;
+
+    const restoreWallet = async () => {
+      const user = await getCurrentUser();
+      if (!isCurrent || !user) return;
+
+      const nextStorageKey = `shopy-pay-wallet:${user.id}`;
+      const stored = readStoredWallet(nextStorageKey);
+      if (stored) {
+        setBalance(stored.balance);
+        setTransactions(stored.transactions);
+      }
+      setStorageKey(nextStorageKey);
+    };
+
+    void restoreWallet();
+    return () => { isCurrent = false; };
+  }, []);
+  useEffect(() => {
+    if (!storageKey) return;
+    window.localStorage.setItem(storageKey, JSON.stringify({ balance, transactions }));
+  }, [balance, storageKey, transactions]);
   const amount = Number(topUpAmount);
   const service = subtotal > 0 ? 24 : 0;
   const checkoutTotal = subtotal + service + Math.round(subtotal * .06);
@@ -65,4 +88,8 @@ export default function ShopyPay() {
       <section className={styles.controls}><div className={styles.controlsIntro}><div className={styles.iconTile}><ShieldCheck size={20} /></div><div><div className={styles.sectionTitle}>Wallet protection</div><div className={styles.sectionCopy}>Your balance is monitored around the clock.</div></div></div><div className={styles.controlList}>{[["Two-factor approval", "Required for payments above RM500"], ["Instant refund routing", "Eligible refunds return directly to ShopyPay"], ["Spending alerts", "Notifications are turned on for every payment"]].map(([title, copy]) => <div className={styles.controlItem} key={title}><div><strong>{title}</strong><span>{copy}</span></div><Check size={18} /></div>)}</div><div className={styles.securityNote}><LockKeyhole size={17} /> Card information is not stored in your ShopyPay wallet.</div></section>
     </main>
   );
+}
+
+export default function ShopyPay() {
+  return <RequireAuth><ShopyPayContent /></RequireAuth>;
 }

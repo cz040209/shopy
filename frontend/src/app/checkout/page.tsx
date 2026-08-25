@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
 import {
@@ -12,7 +11,9 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
+import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
+import ProductImage from "@/features/products/components/ProductImage";
 import styles from "./checkout.module.css";
 import invoiceStyles from "./invoice.module.css";
 
@@ -43,7 +44,7 @@ const invoiceDividerStyle = {
   gap: "0.75rem",
 } as const;
 
-export default function Checkout() {
+function CheckoutContent() {
   const invoiceRef = useRef<HTMLDivElement | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState("Pending");
   const [invoiceDate, setInvoiceDate] = useState("Pending");
@@ -301,11 +302,14 @@ export default function Checkout() {
                           <td className="py-4 pr-4">
                             <div className={invoiceStyles.productDetails}>
                               <div className={invoiceStyles.productImage}>
-                                {item.image ? (
-                                  <Image src={item.image} alt={item.name} width={112} height={112} sizes="56px" />
-                                ) : (
-                                  <span role="img" aria-label={item.name}>{item.emoji}</span>
-                                )}
+                                <ProductImage
+                                  src={item.image}
+                                  alt={item.name}
+                                  width={112}
+                                  height={112}
+                                  sizes="56px"
+                                  fallback={<span role="img" aria-label={item.name}>{item.emoji}</span>}
+                                />
                               </div>
                               <div className={invoiceStyles.productCopy}>
                                 <div className="text-white font-semibold">{item.name}</div>
@@ -358,4 +362,8 @@ export default function Checkout() {
       </section>
     </div>
   );
+}
+
+export default function Checkout() {
+  return <RequireAuth><CheckoutContent /></RequireAuth>;
 }

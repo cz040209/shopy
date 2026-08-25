@@ -10,13 +10,12 @@ type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: Date;
+  timestamp: Date | null;
 };
 
 const SHOPY_LOGO = "/images/brand/shopy-logo-transparent.png";
 
 export default function AIAssistant() {
-  const [mounted, setMounted] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -25,7 +24,7 @@ export default function AIAssistant() {
       id: "1",
       role: "assistant",
       content: "Hello! 👋 I'm Shopy's AI Assistant. I can help you find products, track orders, or explore deals.",
-      timestamp: new Date(),
+      timestamp: null,
     },
   ]);
   const [input, setInput] = useState("");
@@ -37,18 +36,10 @@ export default function AIAssistant() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const assistantButtonRef = useRef<HTMLButtonElement>(null);
-  const assistantPanelRef = useRef<HTMLElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    const animationFrame = window.requestAnimationFrame(() => setMounted(true));
-
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -75,6 +66,7 @@ export default function AIAssistant() {
     try {
       const response = await fetch(`${ASSISTANT_API_URL}/api/chat`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: history.slice(-12).map((message) => ({
@@ -252,28 +244,9 @@ export default function AIAssistant() {
     setIsOpen(false);
   };
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!assistantPanelRef.current?.contains(target) && !assistantButtonRef.current?.contains(target)) {
-        closeAssistant();
-      }
-    };
-
-    document.addEventListener("pointerdown", handleOutsidePointer);
-    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
-    // Keep the latest close handler for recording cleanup while the panel is open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, voiceState]);
-
-  if (!mounted) return null;
-
   return (
-    <>
+    <div data-shopy-assistant-root="">
       <button
-        ref={assistantButtonRef}
         onClick={() => isOpen ? closeAssistant() : setIsOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -290,7 +263,6 @@ export default function AIAssistant() {
       </button>
 
       <aside
-        ref={assistantPanelRef}
         role="dialog"
         aria-hidden={!isOpen}
         aria-label="AI Assistant chat"
@@ -334,8 +306,15 @@ export default function AIAssistant() {
             <p className={styles.headerPrompt}>Ask about products, orders, or today&apos;s best deals.</p>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex-1 space-y-5 overflow-y-auto px-5 py-6 text-sm text-slate-900 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent" style={{ backgroundColor: "#ffffff" }}>
+          <div className={styles.conversationPanel}>
+            <div
+              className={`${styles.messageList} space-y-5 text-sm text-slate-900`}
+              style={{ backgroundColor: "#ffffff" }}
+              role="log"
+              aria-live="polite"
+              aria-label="Chat messages"
+              tabIndex={0}
+            >
               {messages.map((msg) => {
                 const isUser = msg.role === "user";
                 return (
@@ -347,7 +326,12 @@ export default function AIAssistant() {
                       <div className={`${styles.messageBubble} ${isUser ? styles.userBubble : styles.botBubble}`}>
                         <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                       </div>
-                      <time className={styles.messageTime} dateTime={msg.timestamp.toISOString()}>{formatTime(msg.timestamp)}</time>
+                      <time
+                        className={styles.messageTime}
+                        dateTime={msg.timestamp?.toISOString()}
+                      >
+                        {msg.timestamp ? formatTime(msg.timestamp) : ""}
+                      </time>
                     </div>
                   </div>
                 );
@@ -372,7 +356,7 @@ export default function AIAssistant() {
 
             <form
               onSubmit={handleSendMessage}
-              className="px-5 py-5"
+              className={styles.composer}
               style={{ backgroundColor: "#ffffff" }}
             >
               {voiceState === "recording" ? (
@@ -420,7 +404,7 @@ export default function AIAssistant() {
                       placeholder="Ask me anything..."
                       aria-label="Message input"
                       autoFocus
-                      className="h-10 min-w-0 flex-1 bg-transparent px-3 text-base leading-6 text-slate-900 placeholder:text-slate-500 outline-none"
+                      className="h-10 min-w-0 flex-1 !border-0 !bg-transparent !shadow-none px-3 text-base leading-6 text-slate-900 placeholder:text-slate-500 outline-none"
                       disabled={isLoading}
                     />
                     <button
@@ -449,7 +433,14 @@ export default function AIAssistant() {
         </div>
       </aside>
 
-      {isOpen && <div aria-hidden="true" className="pointer-events-auto fixed inset-0 z-[99990] bg-black/20 backdrop-blur-sm" onPointerDown={closeAssistant} />}
-    </>
+      {isOpen ? (
+        <button
+          type="button"
+          aria-label="Close AI Assistant"
+          className="fixed inset-0 z-[99990] cursor-default border-0 bg-black/20 p-0 backdrop-blur-sm"
+          onClick={closeAssistant}
+        />
+      ) : null}
+    </div>
   );
 }

@@ -88,6 +88,22 @@ def get_current_user(
     return session.user
 
 
+def get_optional_current_user(
+    session_token: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
+    ] = None,
+    db: Session = Depends(get_db),
+) -> User | None:
+    if not session_token:
+        return None
+    try:
+        return get_current_user(session_token=session_token, db=db)
+    except HTTPException as error:
+        if error.status_code == status.HTTP_401_UNAUTHORIZED:
+            return None
+        raise
+
+
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
     existing_user = db.scalar(select(User.id).where(User.email == payload.email))

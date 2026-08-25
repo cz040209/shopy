@@ -16,15 +16,22 @@ import menuStyles from "./NavMenu.module.css";
 import fixStyles from "./NavbarFix.module.css";
 import logoStyles from "./NavbarLogoV2.module.css";
 
-const TOP_LINKS = [
+const PUBLIC_TOP_LINKS = [
   { href: "/", label: "Home" },
   { href: "/shop", label: "Shop" },
+];
+
+const MEMBER_TOP_LINKS = [
+  ...PUBLIC_TOP_LINKS,
   { href: "/shopy-pay", label: "ShopyPay" },
 ];
 
-const PROFILE_MENU_ITEMS = [
+const MEMBER_MENU_ITEMS = [
   { href: "/profile", label: "Account" },
   { href: "/shopy-pay", label: "ShopyPay" },
+];
+
+const GUEST_MENU_ITEMS = [
   { href: "/login", label: "Login" },
   { href: "/signup", label: "Sign Up" },
 ];
@@ -168,6 +175,9 @@ export default function Navbar() {
       isButton ? "text-red-400 hover:bg-white/10 hover:text-red-300" : "text-[#dfe5f0] hover:bg-white/10 hover:text-cyan-400"
     ].join(" ");
 
+  const topLinks = isLoggedIn ? MEMBER_TOP_LINKS : PUBLIC_TOP_LINKS;
+  const profileMenuItems = isLoggedIn ? MEMBER_MENU_ITEMS : GUEST_MENU_ITEMS;
+
   return (
     <>
       <header
@@ -187,7 +197,7 @@ export default function Navbar() {
                       columnGap: "10px",
                       rowGap: "10px",
                     }}>
-              {TOP_LINKS.map(({ href, label }) => (
+              {topLinks.map(({ href, label }) => (
                 <Link
                   key={href}
                   href={href}
@@ -201,8 +211,8 @@ export default function Navbar() {
             <div className="flex flex-wrap items-center gap-4 sm:gap-6">
               <div className="group relative">
                 <Link
-                  href="/profile"
-                  className={profileLinkClass()} // Use the new class generator
+                  href={isLoggedIn ? "/profile" : "/login"}
+                  className={profileLinkClass()}
                 >
                   <span className="relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-cyan-400/10 text-cyan-400">
                     {avatarUrl ? (
@@ -218,13 +228,11 @@ export default function Navbar() {
                       <UserRound size={15} />
                     )}
                   </span>
-                  Profile
+                  {isLoggedIn ? "Profile" : "Sign in"}
                 </Link>
 
                 <div className={`${menuStyles.profileMenu} pointer-events-none absolute left-0 top-full mt-2 flex min-w-[9rem] flex-col opacity-0 transition duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}>
-                  {PROFILE_MENU_ITEMS.filter(
-                    (item) => !isLoggedIn || (item.label !== "Login" && item.label !== "Sign Up"),
-                  ).map(({ href, label }) => (
+                  {profileMenuItems.map(({ href, label }) => (
                     <Link
                       key={href}
                       href={href}
@@ -289,7 +297,7 @@ export default function Navbar() {
               </form>
 
               <Link
-                href="/cart"
+                href={isLoggedIn ? "/cart" : "/login?next=%2Fcart"}
                 className="relative ml-10 flex h-16 w-16 items-center justify-center rounded-full bg-white/10 text-white transition duration-200 hover:-translate-y-0.5 hover:scale-[1.05] hover:bg-white/15 hover:text-cyan-400"
                 aria-label="Cart"
               >

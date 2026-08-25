@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ArrowRight, LockKeyhole, Mail, Shield, Sparkles, UserRound } from "lucide-react";
 import Button from "@/components/ui/Button";
-import { notifyAuthChanged, registerAccount } from "@/lib/auth";
+import { getSafeReturnPath, notifyAuthChanged, registerAccount } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "../auth.module.css";
@@ -31,7 +31,10 @@ export default function SignUp() {
     try {
       await registerAccount({ full_name: name, email, password });
       notifyAuthChanged();
-      router.push("/profile");
+      const returnTo = getSafeReturnPath(
+        new URLSearchParams(window.location.search).get("next"),
+      );
+      router.replace(returnTo);
       router.refresh();
     } catch (requestError) {
       setError(
