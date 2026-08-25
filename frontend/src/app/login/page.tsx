@@ -29,9 +29,9 @@ export default function Login() {
   return (
     <div className={styles.auth}>
       <section>
-        <h1 className="max-w-3xl text-white title-fancy">Welcome back.</h1>
-        <p className="mt-4 max-w-2xl text-base text-[#8892a4] subtitle-fancy">
-          Sign in to manage your orders, saved details, and ShopyPay wallet.
+        <h1 className="max-w-3xl text-white">Welcome back</h1>
+        <p className="mt-4 max-w-2xl text-base text-[#8892a4]">
+          Sign in to keep your orders, saved details, and ShopyPay wallet in sync.
         </p>
       </section>
 
@@ -40,15 +40,15 @@ export default function Login() {
         <div className="relative">
           <div className="mb-8 flex items-center justify-between gap-4">
             <div>
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">Shopy account</p>
-              <h2 className="mt-2 text-white subtitle-fancy">Welcome back</h2>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">Your Shopy account</p>
+              <h2 className="mt-2 text-white">Sign in to continue</h2>
             </div>
             <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-400/10 text-cyan-400">
               <Fingerprint size={25} />
             </span>
           </div>
 
-          <form onSubmit={handleSignIn} className="space-y-5">
+          <form onSubmit={handleSignIn} className={cardStyles.form}>
             <div>
               <label htmlFor="email">Email</label>
               <div className="relative">
@@ -86,7 +86,7 @@ export default function Login() {
             </div>
 
             <Button type="submit" variant="primary" fullWidth>
-              Sign in
+              Sign in securely
               <ArrowRight size={15} />
             </Button>
           </form>

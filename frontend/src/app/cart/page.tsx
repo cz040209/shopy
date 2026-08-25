@@ -31,8 +31,8 @@ export default function Cart() {
     <div className={styles.cart}>
       <section className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-end">
         <div>
-          <h1 className="max-w-3xl text-white title-fancy">Shopping Cart</h1>
-          <p className="mt-4 max-w-2xl text-base text-[#8892a4] subtitle-fancy">
+          <h1>Shopping Cart</h1>
+          <p>
             Review your mission payload, adjust quantities, and move into a
             secure checkout flow without losing your orbit.
           </p>

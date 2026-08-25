@@ -3,11 +3,26 @@
 The FastAPI server keeps `GEMINI_API_KEY` on the server, provides chat and vision endpoints, and transcribes user-confirmed voice recordings locally with Faster-Whisper.
 
 ```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env and replace the example PostgreSQL password.
+docker compose --env-file backend/.env up -d postgres
+
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+poetry install
+poetry run alembic upgrade head
+poetry run uvicorn app.main:app --reload --port 8000
+```
+
+The API connects to PostgreSQL through `DATABASE_URL`. The Compose service keeps
+its data in the named `shopy_postgres_data` volume and exposes PostgreSQL on
+`POSTGRES_PORT` (5433 by default). Check connectivity at
+`GET /health/database`.
+
+Run backend tests with:
+
+```bash
+cd backend
+poetry run pytest
 ```
 
 Copy `.env.example` to `.env` and set the required values before running in a new environment. The local `.env` is ignored by Git.
@@ -38,7 +53,7 @@ curl -X POST http://localhost:8000/api/v1/transcribe \
 Run the backend as normal to see structured JSON logs in the terminal:
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+poetry run uvicorn app.main:app --reload --port 8000
 ```
 
 Each text, voice, and camera request receives a short `request_id` and logs its received input, processing stages, high-level execution trace, outcome, and final output. Camera logs record safe metadata and the selected analysis mode rather than image bytes.

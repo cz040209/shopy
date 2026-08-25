@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .ai_logging import customer_input_for_log, log_ai_event
+from .database import check_database_connection
 
 
 SYSTEM_INSTRUCTION = """You are Shopy Assistant, a concise and helpful shopping assistant for Shopy.
@@ -107,6 +108,15 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "model": settings.gemini_model}
+
+
+@app.get("/health/database")
+async def database_health() -> dict[str, str]:
+    try:
+        await run_in_threadpool(check_database_connection)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Database connection unavailable.") from error
+    return {"status": "ok", "database": "postgresql"}
 
 
 @app.post("/api/v1/transcribe", response_model=TranscriptionResponse)

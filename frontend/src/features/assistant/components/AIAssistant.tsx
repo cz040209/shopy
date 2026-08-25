@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, type FormEvent } from "react";
-import { MessageSquare, X, Send, Maximize2, Minimize2, Mic, Pause, Play, Square, Trash2 } from "lucide-react";
+import { Bot, MessageSquare, UserRound, X, Send, Maximize2, Minimize2, Mic, Pause, Play, Square, Trash2 } from "lucide-react";
 import styles from "./AIAssistant.module.css";
 import voiceStyles from "./VoiceRecording.module.css";
 
@@ -12,7 +12,7 @@ type Message = {
   timestamp: Date;
 };
 
-const SHOPY_LOGO = "/images/brand/shopy-logo.png";
+const SHOPY_LOGO = "/images/brand/shopy-logo-transparent.png";
 const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL ?? "http://localhost:8000";
 
 export default function AIAssistant() {
@@ -37,6 +37,8 @@ export default function AIAssistant() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const assistantButtonRef = useRef<HTMLButtonElement>(null);
+  const assistantPanelRef = useRef<HTMLElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -250,11 +252,28 @@ export default function AIAssistant() {
     setIsOpen(false);
   };
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!assistantPanelRef.current?.contains(target) && !assistantButtonRef.current?.contains(target)) {
+        closeAssistant();
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
+    // Keep the latest close handler for recording cleanup while the panel is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, voiceState]);
+
   if (!mounted) return null;
 
   return (
     <>
       <button
+        ref={assistantButtonRef}
         onClick={() => isOpen ? closeAssistant() : setIsOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -271,6 +290,7 @@ export default function AIAssistant() {
       </button>
 
       <aside
+        ref={assistantPanelRef}
         role="dialog"
         aria-hidden={!isOpen}
         aria-label="AI Assistant chat"
@@ -283,32 +303,35 @@ export default function AIAssistant() {
       >
         <div className="relative flex min-h-0 w-full flex-col" style={{ backgroundColor: "#ffffff", color: "#0f172a" }}>
 
-          <div className="relative px-5 py-5 text-white" style={{ backgroundColor: "#6d4de1" }}>
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-4">
+          <div className={styles.header}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
                 <div
                   aria-label="Shopy logo"
-                  className="h-12 w-12 shrink-0 rounded-full border-2 border-white bg-slate-950 bg-[length:160%] bg-[position:50%_37%] shadow-sm"
+                  className={styles.brandMark}
                   style={{ backgroundImage: `url(${SHOPY_LOGO})` }}
                 >
                   <span className="sr-only">Shopy</span>
                 </div>
-                <div>
-                  <div className="m-0 text-xl font-bold tracking-tight text-white">Shopy Assistant</div>
-                  <div className="mt-0.5 text-xs leading-5 text-violet-100">
-                    We&apos;re here to help
+                <div className="min-w-0">
+                  <p className={styles.eyebrow}>AI shopping assistant</p>
+                  <h2 className={styles.title}>Shopy Assistant</h2>
+                  <div className={styles.status}>
+                    <span className={styles.statusDot} aria-hidden="true" />
+                    Ready to help
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => setIsExpanded((current) => !current)} aria-label={isExpanded ? "Reduce chat size" : "Expand chat"} aria-pressed={isExpanded} className="flex h-9 w-9 items-center justify-center rounded-lg text-white/90 transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/70">
+              <div className={styles.headerActions}>
+                <button onClick={() => setIsExpanded((current) => !current)} aria-label={isExpanded ? "Reduce chat size" : "Expand chat"} aria-pressed={isExpanded} className={styles.headerAction}>
                   {isExpanded ? <Minimize2 size={19} /> : <Maximize2 size={19} />}
                 </button>
-                <button onClick={closeAssistant} aria-label="Minimize chat" className="flex h-9 w-9 items-center justify-center rounded-lg text-white/90 transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/70">
-                  <X size={24} />
+                <button onClick={closeAssistant} aria-label="Minimize chat" className={styles.headerAction}>
+                  <X size={21} />
                 </button>
               </div>
             </div>
+            <p className={styles.headerPrompt}>Ask about products, orders, or today&apos;s best deals.</p>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col">
@@ -316,33 +339,26 @@ export default function AIAssistant() {
               {messages.map((msg) => {
                 const isUser = msg.role === "user";
                 return (
-                  <div key={msg.id} className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
-                    {!isUser && (
-                      <div
-                        aria-hidden="true"
-                        className="mt-1 h-10 w-10 shrink-0 rounded-full bg-slate-950 bg-[length:160%] bg-[position:50%_37%]"
-                        style={{ backgroundImage: `url(${SHOPY_LOGO})` }}
-                      />
-                    )}
-                    <div
-                      className={`w-fit max-w-[calc(100%-3.25rem)] rounded-2xl px-4 py-3 text-[15px] leading-7 ${
-                        isUser
-                          ? "rounded-tr-md bg-[#6d4de1] text-white"
-                          : "bg-[#f3f2f2] text-slate-900"
-                      }`}
-                    >
-                      <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                      <div className={`mt-1 text-right text-[10px] ${isUser ? "text-violet-100/70" : "text-slate-400"}`}>
-                        {formatTime(msg.timestamp)}
+                  <div key={msg.id} className={`${styles.messageRow} ${isUser ? styles.userMessage : ""}`}>
+                    <div className={`${styles.messageAvatar} ${isUser ? styles.userAvatar : styles.botAvatar}`} aria-label={isUser ? "Your profile" : "Shopy Assistant"}>
+                      {isUser ? <UserRound size={17} strokeWidth={2.2} /> : <Bot size={18} strokeWidth={2.1} />}
+                    </div>
+                    <div className={styles.messageContent}>
+                      <div className={`${styles.messageBubble} ${isUser ? styles.userBubble : styles.botBubble}`}>
+                        <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                       </div>
+                      <time className={styles.messageTime} dateTime={msg.timestamp.toISOString()}>{formatTime(msg.timestamp)}</time>
                     </div>
                   </div>
                 );
               })}
 
               {isLoading && (
-                <div className="flex justify-start">
-                  <div className="rounded-2xl bg-[#f3f2f2] px-4 py-3 text-slate-500">
+                <div className={styles.messageRow}>
+                  <div className={`${styles.messageAvatar} ${styles.botAvatar}`} aria-label="Shopy Assistant is typing">
+                    <Bot size={18} strokeWidth={2.1} />
+                  </div>
+                  <div className={styles.typingBubble}>
                     <div className="flex items-center gap-2">
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400 [animation-delay:120ms]" />
@@ -433,7 +449,7 @@ export default function AIAssistant() {
         </div>
       </aside>
 
-      {isOpen && <div className="fixed inset-0 z-[99990] bg-black/20 backdrop-blur-sm" onClick={closeAssistant} />}
+      {isOpen && <div aria-hidden="true" className="pointer-events-auto fixed inset-0 z-[99990] bg-black/20 backdrop-blur-sm" onPointerDown={closeAssistant} />}
     </>
   );
 }

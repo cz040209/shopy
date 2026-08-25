@@ -14,7 +14,7 @@ type Props = {
   onAnalysisComplete?: (analysis: string) => void;
 };
 
-const API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL ?? "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL ?? "http://localhost:8002";
 
 const modeContent: Record<VisionMode, { label: string; title: string; helper: string }> = {
   shop_room: { label: "Shop a room", title: "Show us your space", helper: "Capture the room for furniture, colour, layout, and style recommendations." },

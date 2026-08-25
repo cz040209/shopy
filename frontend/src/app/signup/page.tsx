@@ -14,9 +14,9 @@ export default function SignUp() {
   return (
     <div className={styles.auth}>
       <section>
-        <h1 className="max-w-3xl text-white title-fancy">Start with Shopy.</h1>
-        <p className="mt-4 max-w-2xl text-base text-[#8892a4] subtitle-fancy">
-          Create your account for faster checkout and saved delivery details.
+        <h1 className="max-w-3xl text-white">Shop smarter</h1>
+        <p className="mt-4 max-w-2xl text-base text-[#8892a4]">
+          Create your Shopy account for faster checkout and saved delivery details.
         </p>
       </section>
 
@@ -25,15 +25,15 @@ export default function SignUp() {
         <div className="relative">
           <div className="mb-6 flex items-center justify-between gap-4">
             <div>
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">Create account</p>
-              <h2 className="mt-2 text-white subtitle-fancy">Start shopping</h2>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">New to Shopy?</p>
+              <h2 className="mt-2 text-white">Create your account</h2>
             </div>
             <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-400/10 text-cyan-400">
               <Sparkles size={24} />
             </span>
           </div>
 
-          <form className="space-y-5">
+          <form className={cardStyles.form}>
             <div>
               <label htmlFor="signup-name">Full name</label>
               <div className="relative">
