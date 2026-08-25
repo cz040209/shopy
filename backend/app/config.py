@@ -23,7 +23,7 @@ class Settings:
     ai_log_customer_input: bool = env_flag("AI_LOG_CUSTOMER_INPUT", True)
     database_url: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg://shopy@localhost:5432/shopy",
+        "postgresql+psycopg://shopy@localhost:5433/shopy",
     )
 
 
