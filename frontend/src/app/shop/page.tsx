@@ -1,4 +1,4 @@
-import { PRODUCTS } from "@/features/products/data/products";
+import { getProducts } from "@/features/products/catalog";
 import ProductCard from "@/features/products/components/ProductCard";
 import styles from "./shop.module.css";
 
@@ -8,21 +8,7 @@ export default async function Shop({
   searchParams: Promise<{ q?: string }>;
 }) {
   const { q = "" } = await searchParams;
-  const query = q.trim().toLowerCase();
-  const filteredProducts = query
-    ? PRODUCTS.filter((product) => {
-        const haystack = [
-          product.name,
-          product.brand,
-          product.category,
-          product.desc,
-        ]
-          .join(" ")
-          .toLowerCase();
-
-        return haystack.includes(query);
-      })
-    : PRODUCTS;
+  const filteredProducts = await getProducts(q.trim());
 
   return (
     <div className={styles.shop}>
@@ -36,7 +22,7 @@ export default async function Shop({
             </p>
             <p className={styles.productCount}>
               {filteredProducts.length} item{filteredProducts.length === 1 ? "" : "s"}
-              {query ? ` matching "${q}"` : " available"}
+              {q.trim() ? ` matching "${q}"` : " available"}
             </p>
           </div>
           <div className={styles.statuses} aria-label="Product availability">

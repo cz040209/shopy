@@ -97,7 +97,7 @@ function CartContent() {
                   <div className={styles.quantityControls}>
                     <div className={styles.quantityStepper} aria-label={`${item.name} quantity`}>
                       <button
-                        onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                        onClick={() => updateQuantity(item.cartItemId, item.quantity - 1)}
                         className={styles.quantityButton}
                         aria-label={`Decrease ${item.name} quantity`}
                       >
@@ -105,7 +105,7 @@ function CartContent() {
                       </button>
                       <span className={styles.quantityValue}>{item.quantity}</span>
                       <button
-                        onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                        onClick={() => updateQuantity(item.cartItemId, item.quantity + 1)}
                         className={styles.quantityButton}
                         aria-label={`Increase ${item.name} quantity`}
                       >
@@ -114,7 +114,7 @@ function CartContent() {
                     </div>
                     <span className={styles.controlDivider} aria-hidden="true" />
                     <button
-                      onClick={() => removeFromCart(item.id)}
+                      onClick={() => removeFromCart(item.cartItemId)}
                       className={styles.removeButton}
                       aria-label={`Remove ${item.name}`}
                       title={`Remove ${item.name}`}

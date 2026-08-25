@@ -16,7 +16,10 @@ from .types import enum_column
 class Cart(TimestampMixin, Base):
     __tablename__ = "carts"
     __table_args__ = (
-        Index("uq_carts_active_user", "user_id", unique=True, postgresql_where=text("status = 'active'")),
+        Index(
+            "uq_carts_active_user", "user_id", unique=True,
+            postgresql_where=text("status = 'active'"), sqlite_where=text("status = 'active'"),
+        ),
         Index("ix_carts_status_updated", "status", "updated_at"),
     )
 

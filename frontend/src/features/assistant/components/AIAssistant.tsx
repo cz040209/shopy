@@ -36,6 +36,9 @@ export default function AIAssistant() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [recordingError, setRecordingError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatRef = useRef<HTMLElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const closeAssistantRef = useRef<() => void>(() => {});
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -244,9 +247,41 @@ export default function AIAssistant() {
     setIsOpen(false);
   };
 
+  useEffect(() => {
+    closeAssistantRef.current = closeAssistant;
+  });
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+
+      if (chatRef.current?.contains(target) || launcherRef.current?.contains(target)) {
+        return;
+      }
+
+      closeAssistantRef.current();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeAssistantRef.current();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
   return (
     <div data-shopy-assistant-root="">
       <button
+        ref={launcherRef}
         onClick={() => isOpen ? closeAssistant() : setIsOpen(true)}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -263,6 +298,7 @@ export default function AIAssistant() {
       </button>
 
       <aside
+        ref={chatRef}
         role="dialog"
         aria-hidden={!isOpen}
         aria-label="AI Assistant chat"

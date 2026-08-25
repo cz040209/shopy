@@ -1,33 +1,41 @@
 "use client";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { useState, use } from "react";
+import { useEffect, useState, use } from "react";
 import { ChevronLeft, Heart, Minus, Plus, ShieldCheck, ShoppingBag, Star, Truck } from "lucide-react";
 import ProductCard from "@/features/products/components/ProductCard";
 import ProductImage from "@/features/products/components/ProductImage";
 import Toast from "@/components/ui/Toast";
-import { PRODUCTS } from "@/features/products/data/products";
+import { apiFetch } from "@/lib/api";
+import { toProduct, type ApiProduct, type Product } from "@/features/products/types";
 import { useCart } from "@/features/cart/cart-context";
 import styles from "./product.module.css";
 
 export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const product = PRODUCTS.find((p) => p.id === Number(id));
-  if (!product) notFound();
-  const selectedProduct = product;
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [notFoundProduct, setNotFoundProduct] = useState(false);
+  useEffect(() => {
+    void apiFetch(`/api/v1/products/${id}`)
+      .then((product: ApiProduct) => setSelectedProduct(toProduct(product)))
+      .catch(() => setNotFoundProduct(true));
+  }, [id]);
+  if (notFoundProduct) notFound();
 
   const { addToCart } = useCart();
   const [qty, setQty] = useState(1);
   const [toast, setToast] = useState(false);
 
-  const related = PRODUCTS.filter((p) => p.id !== selectedProduct.id).slice(0, 3);
+  const related: Product[] = [];
 
   function handleAdd() {
-    for (let i = 0; i < qty; i++) addToCart(selectedProduct);
-    setToast(true);
-    setTimeout(() => setToast(false), 2200);
+    void addToCart(selectedProduct!, qty).then(() => {
+      setToast(true);
+      setTimeout(() => setToast(false), 2200);
+    });
   }
 
+  if (!selectedProduct) return <main className={styles.productPage}>Loading product…</main>;
   const stars = Math.round(selectedProduct.rating);
 
   return (

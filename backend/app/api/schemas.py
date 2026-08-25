@@ -1,11 +1,12 @@
 import re
 from datetime import datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import UserStatus
+from app.models import OrderStatus, PaymentMethod, PaymentStatus, ProductBadge, UserStatus
 
 
 VisionMode = Literal["shop_room", "complete_look", "shop_object"]
@@ -92,3 +93,159 @@ class AuthResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ProductImageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    url: str
+    alt_text: str | None
+
+
+class CategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    slug: str
+    description: str | None
+
+
+class SellerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    slug: str
+    description: str | None
+    rating_average: Decimal
+
+
+class ProductResponse(BaseModel):
+    id: UUID
+    slug: str
+    name: str
+    brand: str
+    description: str
+    price: Decimal
+    compare_at_price: Decimal | None
+    currency: str
+    badge: ProductBadge | None
+    emoji: str | None
+    specs: list[dict[str, Any]]
+    attributes: dict[str, Any]
+    rating_average: Decimal
+    review_count: int
+    inventory_quantity: int
+    category: CategoryResponse
+    seller: SellerResponse
+    images: list[ProductImageResponse]
+
+
+class ProductListResponse(BaseModel):
+    items: list[ProductResponse]
+    page: int
+    page_size: int
+
+
+class CartItemResponse(BaseModel):
+    id: UUID
+    product: ProductResponse
+    quantity: int
+    unit_price: Decimal
+    line_total: Decimal
+
+
+class CartResponse(BaseModel):
+    id: UUID
+    currency: str
+    items: list[CartItemResponse]
+    subtotal: Decimal
+
+
+class AddCartItemRequest(BaseModel):
+    product_id: UUID
+    quantity: int = Field(default=1, ge=1, le=99)
+
+
+class UpdateCartItemRequest(BaseModel):
+    quantity: int = Field(ge=1, le=99)
+
+
+class ShippingAddressInput(BaseModel):
+    recipient_name: str = Field(min_length=2, max_length=160)
+    phone: str = Field(min_length=5, max_length=32)
+    line1: str = Field(min_length=3, max_length=255)
+    line2: str | None = Field(default=None, max_length=255)
+    city: str = Field(min_length=2, max_length=120)
+    state: str = Field(min_length=2, max_length=120)
+    postal_code: str = Field(min_length=3, max_length=24)
+    country_code: str = Field(default="MY", min_length=2, max_length=2)
+
+
+class CheckoutRequest(BaseModel):
+    shipping_address: ShippingAddressInput
+    payment_method: PaymentMethod = PaymentMethod.CARD
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class OrderItemResponse(BaseModel):
+    id: UUID
+    product_id: UUID | None
+    sku: str
+    product_name: str
+    quantity: int
+    unit_price: Decimal
+    line_total: Decimal
+    product_snapshot: dict[str, Any]
+
+
+class OrderResponse(BaseModel):
+    id: UUID
+    order_number: str
+    status: OrderStatus
+    payment_status: PaymentStatus
+    currency: str
+    subtotal: Decimal
+    tax_amount: Decimal
+    handling_amount: Decimal
+    discount_amount: Decimal
+    total_amount: Decimal
+    shipping_address_snapshot: dict[str, Any]
+    placed_at: datetime | None
+    created_at: datetime
+    items: list[OrderItemResponse]
+
+
+class WalletTransactionResponse(BaseModel):
+    id: UUID
+    reference: str
+    type: str
+    status: str
+    amount: Decimal
+    currency: str
+    description: str | None
+    created_at: datetime
+
+
+class WalletResponse(BaseModel):
+    id: UUID
+    currency: str
+    balance: Decimal
+    daily_limit: Decimal
+    monthly_limit: Decimal
+    is_verified: bool
+    transactions: list[WalletTransactionResponse]
+
+
+class ReviewRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    title: str | None = Field(default=None, max_length=180)
+    body: str | None = Field(default=None, max_length=5000)
+
+
+class ReviewResponse(BaseModel):
+    id: UUID
+    rating: int
+    title: str | None
+    body: str | None
+    is_verified_purchase: bool
+    created_at: datetime
+    author_name: str

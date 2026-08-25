@@ -14,6 +14,7 @@ import Button from "@/components/ui/Button";
 import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
+import { apiFetch } from "@/lib/api";
 import styles from "./checkout.module.css";
 import invoiceStyles from "./invoice.module.css";
 
@@ -49,7 +50,8 @@ function CheckoutContent() {
   const [invoiceNumber, setInvoiceNumber] = useState("Pending");
   const [invoiceDate, setInvoiceDate] = useState("Pending");
   const [isExporting, setIsExporting] = useState(false);
-  const { cartItems, subtotal, clearCart } = useCart();
+  const { cartItems, subtotal, refreshCart } = useCart();
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const tax = Math.round(subtotal * 0.06);
   const handling = cartItems.length > 0 ? 24 : 0;
   const total = subtotal + tax + handling;
@@ -164,6 +166,30 @@ function CheckoutContent() {
       console.error("Invoice export failed", error);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const completeCheckout = async () => {
+    try {
+      setIsPlacingOrder(true);
+      const order = await apiFetch("/api/v1/orders/checkout", {
+        method: "POST",
+        body: JSON.stringify({
+          shipping_address: {
+            recipient_name: "Jeffrey Tan", phone: "+60 12 345 6789",
+            line1: "Kuala Lumpur City Centre", city: "Kuala Lumpur", state: "Kuala Lumpur",
+            postal_code: "50088", country_code: "MY",
+          },
+          payment_method: "card",
+        }),
+      }) as { order_number: string; placed_at: string };
+      setInvoiceNumber(order.order_number);
+      setInvoiceDate(new Date(order.placed_at).toLocaleDateString());
+      await refreshCart();
+    } catch (error) {
+      console.error("Checkout failed", error);
+    } finally {
+      setIsPlacingOrder(false);
     }
   };
 
@@ -343,10 +369,10 @@ function CheckoutContent() {
             variant="primary"
             fullWidth
             className="mt-6"
-            disabled={cartItems.length === 0}
-            onClick={clearCart}
+            onClick={completeCheckout}
+            disabled={cartItems.length === 0 || isPlacingOrder}
           >
-            Complete payment
+            {isPlacingOrder ? "Creating order…" : "Create order"}
           </Button>
           <Link href="/cart" className="mt-4 block">
             <Button variant="outline" fullWidth>

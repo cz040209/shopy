@@ -1,23 +1,10 @@
-export type Product = {
-  id: number;
-  name: string;
-  brand: string;
-  category: string;
-  desc: string;
-  price: number;
-  rating: number;
-  reviews: number;
-  emoji: string;
-  image?: string;
-  stock: boolean;
-  badge?: "new" | "hot" | "sale";
-  specs: Array<{
-    label: string;
-    value: string;
-  }>;
-};
+import type { Product as StorefrontProduct } from "../types";
 
-export const PRODUCTS: Product[] = [
+/** Legacy import data only. Run `poetry run python -m app.scripts.seed_catalog`
+ * to load it into PostgreSQL; storefront pages no longer read this array. */
+export type LegacyProduct = Omit<StorefrontProduct, "id" | "slug"> & { id: number };
+
+export const PRODUCTS: LegacyProduct[] = [
   {
     id: 1,
     name: "Orbit Pro Headset",

@@ -3,13 +3,17 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
-import { PRODUCTS, type Product } from "@/features/products/data/products";
+import { apiFetch } from "@/lib/api";
+import type { ApiProduct, Product } from "@/features/products/types";
+import { toProduct } from "@/features/products/types";
 
 export type CartItem = Product & {
+  cartItemId: string;
   quantity: number;
 };
 
@@ -17,21 +21,39 @@ type CartContextValue = {
   cartItems: CartItem[];
   cartCount: number;
   subtotal: number;
-  addToCart: (product: Product) => void;
-  removeFromCart: (productId: number) => void;
-  updateQuantity: (productId: number, quantity: number) => void;
-  clearCart: () => void;
+  addToCart: (product: Product, quantity?: number) => Promise<void>;
+  removeFromCart: (cartItemId: string) => Promise<void>;
+  updateQuantity: (cartItemId: string, quantity: number) => Promise<void>;
+  clearCart: () => Promise<void>;
+  refreshCart: () => Promise<void>;
+  isLoading: boolean;
 };
 
 const CartContext = createContext<CartContextValue | null>(null);
 
-const initialCart: CartItem[] = PRODUCTS.slice(0, 3).map((product) => ({
-  ...product,
-  quantity: product.id === 3 ? 1 : 2,
-}));
+type ApiCart = {
+  items: Array<{ id: string; product: ApiProduct; quantity: number }>;
+};
+
+function cartFromApi(data: ApiCart): CartItem[] {
+  return data.items.map((item) => ({ ...toProduct(item.product), cartItemId: item.id, quantity: item.quantity }));
+}
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [cartItems, setCartItems] = useState<CartItem[]>(initialCart);
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const refreshCart = async () => {
+    const data = await apiFetch("/api/v1/cart") as ApiCart;
+    setCartItems(cartFromApi(data));
+  };
+
+  useEffect(() => {
+    const requestId = window.setTimeout(() => {
+      void refreshCart().catch(() => setCartItems([])).finally(() => setIsLoading(false));
+    }, 0);
+    return () => window.clearTimeout(requestId);
+  }, []);
 
   const value = useMemo<CartContextValue>(() => {
     const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
@@ -44,45 +66,31 @@ export function CartProvider({ children }: { children: ReactNode }) {
       cartItems,
       cartCount,
       subtotal,
-      addToCart(product) {
-        setCartItems((current) => {
-          const existing = current.find((item) => item.id === product.id);
-
-          if (existing) {
-            return current.map((item) =>
-              item.id === product.id
-                ? { ...item, quantity: item.quantity + 1 }
-                : item,
-            );
-          }
-
-          return [...current, { ...product, quantity: 1 }];
-        });
+      async addToCart(product, quantity = 1) {
+        await apiFetch("/api/v1/cart/items", { method: "POST", body: JSON.stringify({ product_id: product.id, quantity }) });
+        await refreshCart();
       },
-      removeFromCart(productId) {
-        setCartItems((current) =>
-          current.filter((item) => item.id !== productId),
-        );
+      async removeFromCart(cartItemId) {
+        await apiFetch(`/api/v1/cart/items/${cartItemId}`, { method: "DELETE" });
+        await refreshCart();
       },
-      updateQuantity(productId, quantity) {
+      async updateQuantity(cartItemId, quantity) {
         if (quantity < 1) {
-          setCartItems((current) =>
-            current.filter((item) => item.id !== productId),
-          );
+          await apiFetch(`/api/v1/cart/items/${cartItemId}`, { method: "DELETE" });
+          await refreshCart();
           return;
         }
-
-        setCartItems((current) =>
-          current.map((item) =>
-            item.id === productId ? { ...item, quantity } : item,
-          ),
-        );
+        await apiFetch(`/api/v1/cart/items/${cartItemId}`, { method: "PATCH", body: JSON.stringify({ quantity }) });
+        await refreshCart();
       },
-      clearCart() {
-        setCartItems([]);
+      async clearCart() {
+        await Promise.all(cartItems.map((item) => apiFetch(`/api/v1/cart/items/${item.id}`, { method: "DELETE" })));
+        await refreshCart();
       },
+      isLoading,
+      refreshCart,
     };
-  }, [cartItems]);
+  }, [cartItems, isLoading]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

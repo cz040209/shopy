@@ -2,13 +2,14 @@ import time
 from typing import Annotated
 from uuid import uuid4
 
-import httpx
+import httpx  # Backwards-compatible test seam; GeminiClient uses this module.
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.ai_logging import customer_input_for_log, log_ai_event
+from app.ai.gemini import GeminiClient, GeminiConnectionError, GeminiResponseError
 from app.config import settings
 from app.database import get_db
 from app.models import AIConversation, AIMessage, MessageRole, User
@@ -143,13 +144,6 @@ async def chat(
         }
         for message in history
     ]
-    request_body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": contents,
-        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 500},
-    }
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
-
     try:
         log_ai_event(
             "text.processing",
@@ -159,9 +153,10 @@ async def chat(
             history_messages=len(contents),
             reasoning_trace="System shopping guidance and recent conversation context are assembled before requesting a response.",
         )
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-            gemini_response = await client.post(endpoint, params={"key": settings.gemini_api_key}, json=request_body)
-    except httpx.HTTPError as error:
+        reply = await GeminiClient(timeout_seconds=30.0).generate(
+            system_instruction=SYSTEM_INSTRUCTION, contents=contents, max_output_tokens=500
+        )
+    except GeminiConnectionError as error:
         log_ai_event(
             "text.failed",
             request_id=request_id,
@@ -170,27 +165,14 @@ async def chat(
         )
         raise HTTPException(status_code=502, detail="Unable to reach Gemini right now. Please try again.") from error
 
-    if gemini_response.is_error:
+    except GeminiResponseError:
         log_ai_event(
             "text.failed",
             request_id=request_id,
             reason="gemini_response_error",
-            status_code=gemini_response.status_code,
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=502, detail="Gemini could not complete that request. Please try again.")
-
-    data = gemini_response.json()
-    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    reply = "".join(part.get("text", "") for part in parts).strip()
-    if not reply:
-        log_ai_event(
-            "text.failed",
-            request_id=request_id,
-            reason="empty_model_response",
-            elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-        )
-        raise HTTPException(status_code=502, detail="Gemini returned an empty response. Please try again.")
 
     try:
         conversation, active_conversation_token = persist_exchange(

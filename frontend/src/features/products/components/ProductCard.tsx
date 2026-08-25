@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { ShoppingBag, Star } from "lucide-react";
 import { useState } from "react";
-import type { Product } from "@/features/products/data/products";
+import type { Product } from "@/features/products/types";
 import { useCart } from "@/features/cart/cart-context";
 import Toast from "@/components/ui/Toast";
 import ProductImage from "./ProductImage";

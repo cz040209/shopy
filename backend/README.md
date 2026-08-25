@@ -10,6 +10,7 @@ docker compose --env-file backend/.env up -d postgres
 cd backend
 poetry install
 poetry run alembic upgrade head
+poetry run python -m app.scripts.seed_catalog
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -17,6 +18,19 @@ The API connects to PostgreSQL through `DATABASE_URL`. The Compose service keeps
 its data in the named `shopy_postgres_data` volume and exposes PostgreSQL on
 `POSTGRES_PORT` (5433 by default). Check connectivity at
 `GET /health/database`.
+
+## Catalog import and commerce API
+
+The former TypeScript demo catalog is imported once with the command above.
+It creates stable UUID-based PostgreSQL products, categories, a catalog seller,
+and product images. It is safe to run again: products are matched by their
+legacy SKU and updated rather than duplicated. After seeding, the storefront
+uses `GET /api/v1/products` and UUID product URLs as its catalog source.
+
+Authenticated commerce endpoints are available under `/api/v1`: `cart`,
+`orders/checkout`, `orders`, `wallet`, and product review creation. Checkout
+creates an order and a pending payment record; a real payment-provider capture
+must be added before calling it a completed payment.
 
 Run backend tests with:
 

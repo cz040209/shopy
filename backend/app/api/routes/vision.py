@@ -2,10 +2,10 @@ import base64
 import time
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.ai_logging import log_ai_event
+from app.ai.gemini import GeminiClient, GeminiConnectionError, GeminiResponseError
 from app.config import settings
 
 from ..constants import SYSTEM_INSTRUCTION, VISION_PROMPTS
@@ -47,9 +47,7 @@ async def analyze_shopping_photo(
         log_ai_event("camera.rejected", request_id=request_id, reason="image_too_large", bytes=len(image_bytes))
         raise HTTPException(status_code=413, detail="Choose an image smaller than 10 MB.")
 
-    request_body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": [
+    contents = [
             {
                 "role": "user",
                 "parts": [
@@ -57,10 +55,7 @@ async def analyze_shopping_photo(
                     {"text": VISION_PROMPTS[mode]},
                 ],
             }
-        ],
-        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 550},
-    }
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+        ]
 
     try:
         log_ai_event(
@@ -72,9 +67,10 @@ async def analyze_shopping_photo(
             vision_goal=VISION_PROMPTS[mode],
             reasoning_trace="The selected shopping mode determines the image-analysis goal and product recommendation format.",
         )
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0)) as client:
-            response = await client.post(endpoint, params={"key": settings.gemini_api_key}, json=request_body)
-    except httpx.HTTPError as error:
+        analysis = await GeminiClient(timeout_seconds=45.0).generate(
+            system_instruction=SYSTEM_INSTRUCTION, contents=contents, max_output_tokens=550
+        )
+    except GeminiConnectionError as error:
         log_ai_event(
             "camera.failed",
             request_id=request_id,
@@ -83,27 +79,14 @@ async def analyze_shopping_photo(
         )
         raise HTTPException(status_code=502, detail="Unable to reach Gemini right now. Please try again.") from error
 
-    if response.is_error:
+    except GeminiResponseError:
         log_ai_event(
             "camera.failed",
             request_id=request_id,
             reason="gemini_response_error",
-            status_code=response.status_code,
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=502, detail="Gemini could not analyze this photo. Please try again.")
-
-    data = response.json()
-    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    analysis = "".join(part.get("text", "") for part in parts).strip()
-    if not analysis:
-        log_ai_event(
-            "camera.failed",
-            request_id=request_id,
-            reason="empty_model_response",
-            elapsed_ms=round((time.per_counter() - started_at) * 1000),
-        )
-        raise HTTPException(status_code=502, detail="Gemini returned an empty analysis. Please try again.")
 
     log_ai_event(
         "camera.completed",
