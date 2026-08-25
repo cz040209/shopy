@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowRight, Fingerprint, LockKeyhole, Mail, Shield } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { loginAccount, notifyAuthChanged } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "../auth.module.css";
@@ -10,20 +11,29 @@ import cardStyles from "../auth-card.module.css";
 
 export default function Login() {
   const router = useRouter();
-  const [email, setEmail] = useState("shopy.member@example.com");
-  const [password, setPassword] = useState("mission-control");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSignIn(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSignIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
+    setError("");
+    setIsSubmitting(true);
     try {
-      window.localStorage.setItem("shopy-session", "active");
-      window.dispatchEvent(new Event("shopy-auth-change"));
-    } catch {
-      // Ignore localStorage write issues.
+      await loginAccount({ email, password });
+      notifyAuthChanged();
+      router.push("/profile");
+      router.refresh();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Could not sign in.",
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-
-    router.push("/profile");
   }
 
   return (
@@ -58,8 +68,11 @@ export default function Login() {
                 />
                 <input
                   id="email"
+                  name="email"
                   type="email"
                   placeholder="your@email.com"
+                  autoComplete="email"
+                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="input pl-10"
@@ -76,8 +89,11 @@ export default function Login() {
                 />
                 <input
                   id="password"
+                  name="password"
                   type="password"
                   placeholder="Password"
+                  autoComplete="current-password"
+                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="input pl-10"
@@ -85,9 +101,15 @@ export default function Login() {
               </div>
             </div>
 
-            <Button type="submit" variant="primary" fullWidth>
-              Sign in securely
-              <ArrowRight size={15} />
+            {error ? (
+              <p role="alert" className="text-sm leading-5 text-red-300">
+                {error}
+              </p>
+            ) : null}
+
+            <Button type="submit" variant="primary" fullWidth disabled={isSubmitting}>
+              {isSubmitting ? "Signing in…" : "Sign in securely"}
+              {!isSubmitting ? <ArrowRight size={15} /> : null}
             </Button>
           </form>
 

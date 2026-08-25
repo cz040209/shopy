@@ -5,6 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
+  AUTH_CHANGE_EVENT,
+  AuthUser,
+  getCurrentUser,
+  logoutAccount,
+} from "@/lib/auth";
+import {
   Bell,
   CheckCircle2,
   ChevronRight,
@@ -15,8 +21,6 @@ import {
   UserRound,
 } from "lucide-react";
 import styles from "./profile.module.css";
-
-const SESSION_STORAGE_KEY = "shopy-session";
 
 const sections = [
   {
@@ -103,51 +107,62 @@ function resizeAvatar(file: File) {
 export default function Profile() {
   const router = useRouter();
   const [avatar, setAvatar] = useState<string | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoadingUser, setIsLoadingUser] = useState(true);
 
   useEffect(() => {
-    const syncAuth = () => {
+    let isMounted = true;
+
+    const syncAuth = async () => {
       try {
-        const active = window.localStorage.getItem(SESSION_STORAGE_KEY) === "active";
-        setIsLoggedIn(active);
-        if (!active) {
+        const currentUser = await getCurrentUser();
+        if (!isMounted) return;
+        setUser(currentUser);
+        if (!currentUser) {
           setAvatar(null);
         }
       } catch {
-        setIsLoggedIn(false);
-        setAvatar(null);
+        if (isMounted) {
+          setUser(null);
+          setAvatar(null);
+        }
+      } finally {
+        if (isMounted) setIsLoadingUser(false);
       }
     };
 
-    const id = window.setTimeout(() => {
+    const avatarTimer = window.setTimeout(() => {
       try {
         const stored = window.localStorage.getItem("shopy-avatar");
         if (stored) {
           setAvatar(stored);
         }
       } catch {
-        // Ignore localStorage access issues.
+        // Ignore localStorage access issues for the optional avatar preview.
       }
-      syncAuth();
     }, 0);
+    void syncAuth();
 
-    window.addEventListener("shopy-auth-change", syncAuth);
+    window.addEventListener(AUTH_CHANGE_EVENT, syncAuth);
 
     return () => {
-      window.clearTimeout(id);
-      window.removeEventListener("shopy-auth-change", syncAuth);
+      isMounted = false;
+      window.clearTimeout(avatarTimer);
+      window.removeEventListener(AUTH_CHANGE_EVENT, syncAuth);
     };
   }, []);
 
-  function signOut() {
+  async function signOut() {
     try {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      await logoutAccount();
     } catch {
-      // Ignore localStorage write issues.
+      // Continue to the sign-in page even if the API is temporarily unavailable.
     }
 
-    window.dispatchEvent(new Event("shopy-auth-change"));
+    setUser(null);
+    window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
     router.push("/login");
+    router.refresh();
   }
 
   async function handleAvatarChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -180,14 +195,19 @@ export default function Profile() {
 
       <section className={styles.accountGrid}>
         <div className={styles.profileCard}>
-          {isLoggedIn ? (
+          {isLoadingUser ? (
+            <div className={styles.profileContent} aria-live="polite">
+              <div className={styles.avatar}><UserRound size={28} /></div>
+              <div className={styles.profileText}><div className={styles.profileOverline}>Shopy member</div><div className={styles.profileName}>Checking your account…</div><div className={styles.profileEmail}>Securely restoring your session.</div></div>
+            </div>
+          ) : user ? (
             <div className={styles.profileContent}>
               <label className={styles.avatar}>
                 {avatar ? <Image src={avatar} alt="User avatar" width={AVATAR_SIZE} height={AVATAR_SIZE} unoptimized /> : <UserRound size={28} />}
                 <div className={styles.avatarUpload}>Change</div>
                 <input type="file" accept="image/*" onChange={handleAvatarChange} />
               </label>
-              <div className={styles.profileText}><div className={styles.profileOverline}>Signed in as</div><div className={styles.profileName}>Jeffrey Tan</div><div className={styles.profileEmail}>shopy.member@example.com</div><button type="button" onClick={signOut} className={styles.signOut}>Sign out</button></div>
+              <div className={styles.profileText}><div className={styles.profileOverline}>Signed in as</div><div className={styles.profileName}>{user.full_name}</div><div className={styles.profileEmail}>{user.email}</div><button type="button" onClick={signOut} className={styles.signOut}>Sign out</button></div>
             </div>
           ) : (
             <div className={styles.profileContent}>

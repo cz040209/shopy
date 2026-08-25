@@ -1,15 +1,48 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Mail, Shield, Sparkles, UserRound } from "lucide-react";
+import { ArrowRight, LockKeyhole, Mail, Shield, Sparkles, UserRound } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { notifyAuthChanged, registerAccount } from "@/lib/auth";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import styles from "../auth.module.css";
 import cardStyles from "../auth-card.module.css";
 
 export default function SignUp() {
-  const [name, setName] = useState("Jeffrey Tan");
-  const [email, setEmail] = useState("shopy.member@example.com");
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleCreateAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await registerAccount({ full_name: name, email, password });
+      notifyAuthChanged();
+      router.push("/profile");
+      router.refresh();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Could not create your account.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return (
     <div className={styles.auth}>
@@ -33,7 +66,7 @@ export default function SignUp() {
             </span>
           </div>
 
-          <form className={cardStyles.form}>
+          <form onSubmit={handleCreateAccount} className={cardStyles.form}>
             <div>
               <label htmlFor="signup-name">Full name</label>
               <div className="relative">
@@ -43,6 +76,10 @@ export default function SignUp() {
                 />
                 <input
                   id="signup-name"
+                  name="full_name"
+                  autoComplete="name"
+                  placeholder="Your full name"
+                  required
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   className="input pl-10"
@@ -59,7 +96,11 @@ export default function SignUp() {
                 />
                 <input
                   id="signup-email"
+                  name="email"
                   type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  required
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   className="input pl-10"
@@ -67,12 +108,60 @@ export default function SignUp() {
               </div>
             </div>
 
-            <Link href="/profile" className="block">
-              <Button variant="primary" fullWidth>
-                Create account
-                <ArrowRight size={15} />
-              </Button>
-            </Link>
+            <div>
+              <label htmlFor="signup-password">Password</label>
+              <div className="relative">
+                <LockKeyhole
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#5a6478]"
+                />
+                <input
+                  id="signup-password"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  minLength={8}
+                  required
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="input pl-10"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="signup-confirm-password">Confirm password</label>
+              <div className="relative">
+                <LockKeyhole
+                  size={17}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#5a6478]"
+                />
+                <input
+                  id="signup-confirm-password"
+                  name="confirm_password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Enter your password again"
+                  minLength={8}
+                  required
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  className="input pl-10"
+                />
+              </div>
+            </div>
+
+            {error ? (
+              <p role="alert" className="text-sm leading-5 text-red-300">
+                {error}
+              </p>
+            ) : null}
+
+            <Button type="submit" variant="primary" fullWidth disabled={isSubmitting}>
+              {isSubmitting ? "Creating account…" : "Create account"}
+              {!isSubmitting ? <ArrowRight size={15} /> : null}
+            </Button>
           </form>
 
           <div className="security-note mt-5">

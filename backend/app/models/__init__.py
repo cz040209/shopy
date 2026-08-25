@@ -9,6 +9,7 @@ from .address import Address
 from .ai_conversation import AIConversation
 from .ai_message import AIMessage
 from .ai_recommendation import AIRecommendation
+from .auth_session import AuthSession
 from .cart import Cart
 from .cart_item import CartItem
 from .category import Category
@@ -48,6 +49,7 @@ __all__ = [
     "AIConversation",
     "AIMessage",
     "AIRecommendation",
+    "AuthSession",
     "Cart",
     "CartItem",
     "CartStatus",

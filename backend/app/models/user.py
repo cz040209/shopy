@@ -37,5 +37,8 @@ class User(TimestampMixin, Base):
     missions: Mapped[list["ShoppingMission"]] = relationship("ShoppingMission", back_populates="user")
     conversations: Mapped[list["AIConversation"]] = relationship("AIConversation", back_populates="user")
     sellers: Mapped[list["Seller"]] = relationship("Seller", back_populates="owner")
+    auth_sessions: Mapped[list["AuthSession"]] = relationship(
+        "AuthSession", back_populates="user", cascade="all, delete-orphan"
+    )
     wishlist_items: Mapped[list["WishlistItem"]] = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
     wallet: Mapped["Wallet | None"] = relationship("Wallet", back_populates="user", cascade="all, delete-orphan", uselist=False)

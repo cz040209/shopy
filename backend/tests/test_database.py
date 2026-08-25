@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "ai_conversations",
     "ai_messages",
     "ai_recommendations",
+    "auth_sessions",
     "cart_items",
     "carts",
     "categories",

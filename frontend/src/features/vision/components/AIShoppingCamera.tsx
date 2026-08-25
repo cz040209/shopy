@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, Check, ImagePlus, RotateCcw, Sparkles, SwitchCamera, X } from "lucide-react";
 import styles from "./AIShoppingCamera.module.css";
+import { API_URL } from "@/lib/api";
 
 export type VisionMode = "shop_room" | "complete_look" | "shop_object";
 
@@ -14,7 +15,6 @@ type Props = {
   onAnalysisComplete?: (analysis: string) => void;
 };
 
-const API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL ?? "http://localhost:8002";
 
 const modeContent: Record<VisionMode, { label: string; title: string; helper: string }> = {
   shop_room: { label: "Shop a room", title: "Show us your space", helper: "Capture the room for furniture, colour, layout, and style recommendations." },

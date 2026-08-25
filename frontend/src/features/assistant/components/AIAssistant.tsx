@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, type FormEvent } from "react";
 import { Bot, MessageSquare, UserRound, X, Send, Maximize2, Minimize2, Mic, Pause, Play, Square, Trash2 } from "lucide-react";
 import styles from "./AIAssistant.module.css";
+import { API_URL as ASSISTANT_API_URL } from "@/lib/api";
 import voiceStyles from "./VoiceRecording.module.css";
 
 type Message = {
@@ -13,7 +14,6 @@ type Message = {
 };
 
 const SHOPY_LOGO = "/images/brand/shopy-logo-transparent.png";
-const ASSISTANT_API_URL = process.env.NEXT_PUBLIC_ASSISTANT_API_URL ?? "http://localhost:8000";
 
 export default function AIAssistant() {
   const [mounted, setMounted] = useState(false);

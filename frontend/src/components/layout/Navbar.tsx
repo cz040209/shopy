@@ -5,6 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useCart } from "@/features/cart/cart-context";
+import {
+  AUTH_CHANGE_EVENT,
+  getCurrentUser,
+  logoutAccount,
+} from "@/lib/auth";
 import { Search, ShoppingBag, UserRound } from "lucide-react";
 import styles from "./Navbar.module.css";
 import menuStyles from "./NavMenu.module.css";
@@ -23,8 +28,6 @@ const PROFILE_MENU_ITEMS = [
   { href: "/login", label: "Login" },
   { href: "/signup", label: "Sign Up" },
 ];
-
-const SESSION_STORAGE_KEY = "shopy-session";
 
 export default function Navbar() {
   const headerRef = useRef<HTMLElement | null>(null);
@@ -65,18 +68,18 @@ export default function Navbar() {
   }
 
   function to_sync_auth() {
-    const syncAuth = () => {
+    const syncAuth = async () => {
       try {
-        setIsLoggedIn(window.localStorage.getItem(SESSION_STORAGE_KEY) === "active");
+        setIsLoggedIn((await getCurrentUser()) !== null);
       } catch {
         setIsLoggedIn(false);
       }
     };
 
-    syncAuth();
-    window.addEventListener("shopy-auth-change", syncAuth);
+    void syncAuth();
+    window.addEventListener(AUTH_CHANGE_EVENT, syncAuth);
 
-    return () => window.removeEventListener("shopy-auth-change", syncAuth);
+    return () => window.removeEventListener(AUTH_CHANGE_EVENT, syncAuth);
   }
 
   function set_scroll_listener() {
@@ -118,15 +121,16 @@ export default function Navbar() {
   useEffect(() => set_scroll_listener(), []);
   useEffect(() => sync_navbar_height_observer(), []);
 
-  function signOut() {
+  async function signOut() {
     try {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      window.dispatchEvent(new Event("shopy-auth-change"));
+      await logoutAccount();
     } catch {
-      // Ignore localStorage write issues.
+      // The menu should still return to a safe signed-out screen.
     }
 
+    window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
     router.push("/login");
+    router.refresh();
   }
 
   function handleSearchSubmit(event: React.FormEvent<HTMLFormElement>) {

@@ -21,6 +21,8 @@ class Settings:
     whisper_device: str = os.getenv("WHISPER_DEVICE", "cpu")
     whisper_compute_type: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
     ai_log_customer_input: bool = env_flag("AI_LOG_CUSTOMER_INPUT", True)
+    auth_cookie_secure: bool = env_flag("AUTH_COOKIE_SECURE", False)
+    auth_session_days: int = int(os.getenv("AUTH_SESSION_DAYS", "7"))
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg://shopy@localhost:5433/shopy",
