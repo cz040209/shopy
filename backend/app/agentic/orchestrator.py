@@ -126,7 +126,17 @@ class ShoppingOrchestrator:
         return "vision" if state.get("vision_input") else "intent_agent"
 
     async def _vision_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        output = {**self._event(state, "vision"), **(await self.vision_agent.run(state))}
+        try:
+            output = {**self._event(state, "vision"), **(await self.vision_agent.run(state))}
+        except Exception as error:
+            if self.recorder is not None:
+                self.recorder.record(
+                    "node_failed", node_name="vision", status="failed",
+                    input_data={"graph_iteration": state["graph_iterations"] + 1, "mode": state.get("vision_input", {}).get("mode")},
+                    error_message=f"{type(error).__name__}: {str(error)[:1000]}",
+                )
+            log_ai_event("agent.graph.node_failed", request_id=state["run_id"], node="vision", error_type=type(error).__name__, error_message=str(error)[:500])
+            raise
         self._record_node(state, "vision", output)
         return output
 

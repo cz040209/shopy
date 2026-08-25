@@ -88,22 +88,31 @@ async def analyze_shopping_photo(
             "camera.failed",
             request_id=request_id,
             reason="gemini_connection_error",
+            error_type=type(error).__name__,
+            error_message=str(error)[:500],
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=502, detail="Unable to reach Gemini right now. Please try again.") from error
 
-    except GeminiResponseError:
+    except GeminiResponseError as error:
         log_ai_event(
             "camera.failed",
             request_id=request_id,
             reason="gemini_response_error",
+            error_type=type(error).__name__,
+            error_message=str(error)[:500],
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=502, detail="Gemini could not analyze this photo. Please try again.")
     except Exception as error:
         if recorder is not None and recorder.run is not None and recorder.run.status == "running":
             recorder.fail(error)
-        log_ai_event("camera.failed", request_id=request_id, reason="orchestration_failed")
+        log_ai_event(
+            "camera.failed", request_id=request_id, reason="orchestration_failed",
+            error_type=type(error).__name__, error_message=str(error)[:1000],
+            run_id=str(recorder.run.id) if recorder is not None and recorder.run is not None else None,
+            elapsed_ms=round((time.perf_counter() - started_at) * 1000),
+        )
         raise HTTPException(status_code=503, detail="The image shopping assistant could not complete a verified response.") from error
 
     if state.get("audit_result", {}).get("status") != "pass" or not state.get("final_response"):

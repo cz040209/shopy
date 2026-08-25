@@ -7,6 +7,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
+from app.ai_logging import log_ai_event
 from app.ai.gemini import GeminiClient
 from app.config import settings
 
@@ -56,5 +57,14 @@ class VisionAgent:
         image = state.get("vision_input")
         if not isinstance(image, dict):
             raise ValueError("Vision input is required.")
-        context = await self.analyze(image_bytes=image.get("image_bytes", b""), mime_type=str(image.get("mime_type", "")), mode=str(image.get("mode", "")))
-        return {"vision_context": context.model_dump()}
+        request_id = str(state.get("run_id", ""))
+        image_bytes = image.get("image_bytes", b"")
+        log_ai_event("agent.vision.started", request_id=request_id, mode=image.get("mode"), mime_type=image.get("mime_type"), image_bytes=len(image_bytes) if isinstance(image_bytes, bytes) else None)
+        try:
+            context = await self.analyze(image_bytes=image_bytes, mime_type=str(image.get("mime_type", "")), mode=str(image.get("mode", "")))
+        except Exception as error:
+            log_ai_event("agent.vision.failed", request_id=request_id, stage="structured_image_analysis", error_type=type(error).__name__, error_message=str(error)[:500])
+            raise
+        payload = context.model_dump()
+        log_ai_event("agent.vision.completed", request_id=request_id, detected_object_count=len(context.detected_objects), shopping_need_count=len(context.possible_shopping_needs), context_fields=[key for key, value in payload.items() if value])
+        return {"vision_context": payload}
