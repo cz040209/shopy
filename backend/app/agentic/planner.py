@@ -1,37 +1,20 @@
+"""Turns the intent agent's dynamic plan into normalized bundle needs."""
 from __future__ import annotations
 
 from .schemas import MissionInterpretation, NeedPlan
 
 
 class NeedPlannerAgent:
-    """Turns an extracted mission into transparent, deterministic category needs."""
-
-    _BUILD_SETUP = {
-        "gaming": (["gaming laptop or desktop", "keyboard", "mouse", "headset"], ["mousepad", "desk", "chair", "speakers", "webcam"]),
-        "workspace": (["laptop or desktop", "keyboard", "mouse"], ["monitor", "desk lamp", "webcam", "headset"]),
-    }
+    """No domain catalogue is embedded here; the intent plan is the source of needs."""
 
     def plan(self, mission: MissionInterpretation) -> NeedPlan:
-        goal = mission.goal.lower()
-        mission_type = mission.mission_type.lower()
-        required: list[str] = []
-        optional: list[str] = []
-        if mission_type == "build_setup" or "setup" in goal:
-            for keyword, categories in self._BUILD_SETUP.items():
-                if keyword in goal:
-                    required, optional = categories
-                    break
-            if not required:
-                required = ["primary device", "keyboard", "mouse"]
-                optional = ["headset", "desk accessories"]
-        elif "travel" in goal:
-            required, optional = ["travel bag", "power adapter"], ["power bank", "packing accessories", "umbrella"]
-        elif "home" in goal or "apartment" in goal:
-            required, optional = ["core home essentials"], ["storage", "lighting", "cleaning supplies"]
-        else:
-            required, optional = [mission.goal], []
-
-        owned = {item.lower() for item in mission.owned_items}
-        required = [category for category in required if category.lower() not in owned]
-        optional = [category for category in optional if category.lower() not in owned]
-        return NeedPlan(required_categories=required, optional_categories=optional)
+        required = [item.query.strip() for item in mission.bundle_items if item.query.strip()]
+        if not required:
+            required = [query.strip() for query in mission.catalog_queries if query.strip()]
+        if not required and mission.catalog_query:
+            required = [mission.catalog_query.strip()]
+        if not required:
+            required = [mission.goal.strip()]
+        owned = {item.casefold().strip() for item in mission.owned_items}
+        required = list(dict.fromkeys(item for item in required if item.casefold() not in owned))
+        return NeedPlan(required_categories=required, optional_categories=[])

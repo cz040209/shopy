@@ -6,6 +6,8 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import select
 
 from app.agentic.orchestrator import ShoppingOrchestrator
+from app.agentic.bundle_optimizer import BundleOptimizerAgent
+from app.agentic.compatibility import CompatibilityAgent
 from app.agentic.product_search import ProductSearchAgent
 from app.agentic.review_intelligence import ReviewIntelligenceAgent
 from app.agentic.state import initial_shopping_state
@@ -97,3 +99,56 @@ async def test_image_mode_routes_vision_before_intent():
     result = await ShoppingOrchestrator(GraphModel(), vision_agent=GraphVisionAgent()).ainvoke("Shop this room", state_overrides={"vision_input": {"image_bytes": b"x", "mime_type": "image/png", "mode": "shop_room"}})
     assert result["vision_context"]["detected_objects"] == ["desk"]
     assert result["graph_iterations"] == 5
+
+
+@pytest.mark.anyio
+async def test_compatibility_reports_conflicting_verified_model_facts():
+    class CompatibilityModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content='{"fields":[{"field":"compatible_models","rule":"must_overlap"}]}')
+
+    state = initial_shopping_state("Build a compatible setup")
+    state["candidate_products"] = [
+        {"id": "a", "name": "Case A", "category": "accessory", "inventory_quantity": 2, "attributes": {"compatible_models": ["alpha"]}, "specs": []},
+        {"id": "b", "name": "Device B", "category": "device", "inventory_quantity": 2, "attributes": {"compatible_models": ["beta"]}, "specs": []},
+    ]
+    result = await CompatibilityAgent(CompatibilityModel()).run(state)
+    assert result["compatibility_results"][0]["status"] == "incompatible"
+    assert result["compatibility_results"][0]["affected_product_ids"] == ["a", "b"]
+
+
+@pytest.mark.anyio
+async def test_bundle_optimizer_enforces_budget_and_reports_coverage():
+    state = initial_shopping_state("Build a gaming setup under RM 3000")
+    state.update({
+        "budget": 3000, "required_categories": ["laptop", "keyboard"], "optional_categories": ["mouse"],
+        "candidate_products": [
+            {"id": "laptop", "name": "Gaming Laptop", "category": "laptop", "price": "2500", "currency": "MYR", "inventory_quantity": 1, "specs": [], "attributes": {}},
+            {"id": "keyboard", "name": "Gaming Keyboard", "category": "keyboard", "price": "400", "currency": "MYR", "inventory_quantity": 1, "specs": [], "attributes": {}},
+            {"id": "mouse", "name": "Gaming Mouse", "category": "mouse", "price": "200", "currency": "MYR", "inventory_quantity": 1, "specs": [], "attributes": {}},
+        ],
+        "product_rankings": [{"product_id": "laptop", "score": 90}, {"product_id": "keyboard", "score": 60}, {"product_id": "mouse", "score": 50}],
+    })
+    result = await BundleOptimizerAgent().run(state)
+    assert result["bundle"]["total"] == "2900"
+    assert result["bundle"]["budget_remaining"] == "100"
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
+    assert {item["id"] for item in result["selected_products"]} == {"laptop", "keyboard"}
+
+
+@pytest.mark.anyio
+async def test_bundle_optimizer_does_not_use_mousepad_as_mouse_or_gaming_product_as_laptop():
+    state = initial_shopping_state("Build a gaming setup under RM 1000")
+    state.update({
+        "budget": 1000, "required_categories": ["gaming laptop or desktop", "mouse"],
+        "candidate_products": [
+            {"id": "pad", "name": "Gaming Mousepad", "category": "Gaming", "price": "40", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "desk", "name": "Gaming Desk", "category": "Gaming", "price": "400", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "mouse", "name": "Wireless Mouse", "category": "Workspace", "price": "120", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+        ],
+        "product_rankings": [],
+    })
+    result = await BundleOptimizerAgent().run(state)
+    assert result["bundle"]["required_category_coverage"]["covered"] == ["mouse"]
+    assert result["bundle"]["required_category_coverage"]["missing"] == ["gaming laptop or desktop"]
+    assert result["bundle"]["selected_products"] == [{"product_id": "mouse", "quantity": 1}]

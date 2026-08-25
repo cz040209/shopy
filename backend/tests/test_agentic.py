@@ -55,8 +55,8 @@ def test_need_planner_returns_required_and_optional_categories():
     mission = MissionInterpretation.model_validate_json(MISSION_JSON)
     result = NeedPlannerAgent().plan(mission)
 
-    assert result.required_categories == ["gaming laptop or desktop", "keyboard", "mouse", "headset"]
-    assert "mousepad" in result.optional_categories
+    assert result.required_categories == ["gaming setup"]
+    assert result.optional_categories == []
 
 
 def test_initial_state_is_complete_and_mutable_fields_are_not_shared():

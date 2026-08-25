@@ -284,12 +284,12 @@ export default function Navbar() {
                     key={`${pathname}-${shopQuery}`}
                     defaultValue={shopQuery}
                     placeholder="Search products, brands, categories"
-                    className="w-full rounded-full border-0 bg-transparent pl-14 pr-6 text-sm text-white outline-none placeholder:text-white/50 sm:pl-16 sm:pr-7"
+                    className="w-full rounded-full border-0 bg-transparent pl-12 pr-4 text-sm text-white outline-none placeholder:text-white/50 sm:pl-12 sm:pr-5"
                     style={{ height: 40 }}
                   />
                   <button
                     type="submit"
-                    className={`mr-2 inline-flex items-center justify-center px-6 text-sm font-semibold uppercase text-white transition duration-200 sm:px-7 ${fixStyles.searchButton}`}
+                    className={`mr-1 inline-flex items-center justify-center px-4 text-sm font-semibold uppercase text-white transition duration-200 sm:px-5 ${fixStyles.searchButton}`}
                   >
                     Search
                   </button>

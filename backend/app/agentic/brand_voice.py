@@ -21,7 +21,7 @@ class ResponseDraftError(StructuredOutputError):
 
 class ResponseDraft(BaseModel):
     response: str = Field(min_length=1, max_length=4000)
-    product_ids: list[UUID] = Field(default_factory=list, max_length=3)
+    product_ids: list[UUID] = Field(default_factory=list, max_length=12)
 
 
 BRAND_VOICE_SYSTEM_PROMPT = """You are Shopy's brand-voice response-writing agent.
@@ -90,6 +90,8 @@ class BrandVoiceAgent:
             "verified_catalog_products": products,
             "verified_tool_results": state.get("tool_context", []),
             "verified_review_insights": state.get("review_insights", {}),
+            "verified_compatibility": state.get("compatibility_results", []),
+            "verified_bundle": state.get("bundle"),
             "brand_voice_guidance": self._voice_guidance(state),
         }
         messages = [

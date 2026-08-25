@@ -37,7 +37,7 @@ const modeContent: Record<VisionMode, { label: string; title: string; helper: st
 
 const processingSteps = ["Detecting objects", "Understanding style", "Analyzing the space", "Searching matching products"];
 
-export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 1600, quality = 0.85, onAnalysisComplete }: Props) {
+export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 2048, quality = 0.9, onAnalysisComplete }: Props) {
   const [stage, setStage] = useState<"mode_select" | "camera" | "preview" | "processing" | "result" | null>(null);
   const [selectedMode, setSelectedMode] = useState<VisionMode | null>(mode ?? null);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
@@ -85,7 +85,11 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       stopCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: front ? "user" : "environment" } },
+        video: {
+          facingMode: { ideal: front ? "user" : "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
       });
       streamRef.current = stream;
       if (videoRef.current) {

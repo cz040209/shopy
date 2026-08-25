@@ -10,6 +10,8 @@ from app.config import settings
 
 from .auditor import ShoppingAuditor
 from .brand_voice import BrandVoiceAgent
+from .bundle_optimizer import BundleOptimizerAgent
+from .compatibility import CompatibilityAgent
 from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import GeminiLangChainChatModel
 from .planner import NeedPlannerAgent
@@ -47,6 +49,8 @@ class ShoppingOrchestrator:
         self.product_resolver = ProductResolutionAgent(shared_model)
         self.product_search_agent = ProductSearchAgent(tool_registry)
         self.review_agent = ReviewIntelligenceAgent(shared_model, tool_registry)
+        self.compatibility_agent = CompatibilityAgent(shared_model)
+        self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
         self.brand_voice = BrandVoiceAgent(shared_model)
         self.auditor = auditor or ShoppingAuditor()
@@ -62,6 +66,8 @@ class ShoppingOrchestrator:
         workflow.add_node("need_planner", self._need_planner_node)
         workflow.add_node("product_search", self._product_search_node)
         workflow.add_node("review_intelligence", self._review_node)
+        workflow.add_node("compatibility", self._compatibility_node)
+        workflow.add_node("bundle_optimizer", self._bundle_optimizer_node)
         workflow.add_node("brand_voice", self._brand_voice_node)
         workflow.add_node("audit", self._audit_node)
         workflow.add_node("repair", self._repair_node)
@@ -74,7 +80,9 @@ class ShoppingOrchestrator:
             {"product_search": "product_search", "brand_voice": "brand_voice"},
         )
         workflow.add_edge("product_search", "review_intelligence")
-        workflow.add_edge("review_intelligence", "brand_voice")
+        workflow.add_edge("review_intelligence", "compatibility")
+        workflow.add_edge("compatibility", "bundle_optimizer")
+        workflow.add_edge("bundle_optimizer", "brand_voice")
         workflow.add_edge("brand_voice", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "end": END})
         workflow.add_edge("repair", "brand_voice")
@@ -98,6 +106,10 @@ class ShoppingOrchestrator:
             inputs["mode"] = state.get("vision_input", {}).get("mode")
         elif node == "review_intelligence":
             inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
+        elif node == "compatibility":
+            inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
+        elif node == "bundle_optimizer":
+            inputs["required_categories"] = state.get("required_categories", [])
         elif node == "brand_voice":
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
@@ -206,6 +218,16 @@ class ShoppingOrchestrator:
         insights = {} if state.get("stock_results") else await self.review_agent.run(state)
         output = {**self._event(state, "review_intelligence"), **insights}
         self._record_node(state, "review_intelligence", output)
+        return output
+
+    async def _compatibility_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {**self._event(state, "compatibility"), **(await self.compatibility_agent.run(state))}
+        self._record_node(state, "compatibility", output)
+        return output
+
+    async def _bundle_optimizer_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {**self._event(state, "bundle_optimizer"), **(await self.bundle_optimizer.run(state))}
+        self._record_node(state, "bundle_optimizer", output)
         return output
 
     @staticmethod

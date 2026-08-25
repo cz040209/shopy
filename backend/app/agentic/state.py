@@ -23,6 +23,9 @@ class ShoppingAgentState(TypedDict):
     candidate_products: list[dict[str, Any]]
     product_rankings: list[dict[str, Any]]
     review_insights: dict[str, dict[str, Any]]
+    compatibility_results: list[dict[str, Any]]
+    compatibility_plan: dict[str, Any]
+    bundle: dict[str, Any] | None
     vision_context: dict[str, Any] | None
     vision_input: NotRequired[dict[str, Any]]
     stock_results: list[dict[str, Any]]
@@ -62,6 +65,9 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "candidate_products": [],
         "product_rankings": [],
         "review_insights": {},
+        "compatibility_results": [],
+        "compatibility_plan": {},
+        "bundle": None,
         "vision_context": None,
         "stock_results": [],
         "tool_context": [],
