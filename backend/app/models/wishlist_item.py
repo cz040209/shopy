@@ -8,8 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+from .mixins import DisplayIdMixin
 
-class WishlistItem(Base):
+
+class WishlistItem(DisplayIdMixin, Base):
     __tablename__ = "wishlist_items"
     __table_args__ = (UniqueConstraint("user_id", "product_id", name="uq_wishlist_user_product"),)
 

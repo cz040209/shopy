@@ -81,15 +81,37 @@ class OrchestrationRecorder:
         ))
         self.db.commit()
 
-    def finish(self, state: dict[str, Any]) -> None:
+    def finish(
+        self,
+        state: dict[str, Any],
+        *,
+        final_response: str | None = None,
+        response_context: dict[str, Any] | None = None,
+    ) -> None:
         if self.run is None:
             return
         self.run.status = "completed" if (state.get("audit_result") or {}).get("status") != "fail" else "failed"
         self.run.final_state = safe_audit_data(state)
-        self.run.final_response = state.get("final_response")
+        self.run.final_response = final_response if final_response is not None else state.get("final_response")
         self.run.completed_at = datetime.now(timezone.utc)
         self.db.commit()
-        self.record("run_finished", status=self.run.status, output_data={"final_response": state.get("final_response"), "audit_result": state.get("audit_result")})
+        if final_response is not None:
+            self.record(
+                "assistant_response_generated",
+                status="completed",
+                output_data={
+                    "final_response": final_response,
+                    **(response_context or {}),
+                },
+            )
+        self.record(
+            "run_finished",
+            status=self.run.status,
+            output_data={
+                "final_response": self.run.final_response,
+                "audit_result": state.get("audit_result"),
+            },
+        )
 
     def fail(self, error: Exception) -> None:
         if self.run is None:

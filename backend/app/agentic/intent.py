@@ -22,7 +22,9 @@ Return only valid JSON, without Markdown. Use this exact schema:
 {"mission_type": string, "goal": string, "budget": number|null,
  "preferences": [string], "constraints": [string], "owned_items": [string],
  "priorities": [string]}
-Use concise normalized values. Do not invent details that the customer did not provide."""
+Use concise normalized values. Do not invent details that the customer did not provide.
+Use mission_type "information_request" for identity, capability, greeting, or other
+non-shopping questions. Use a shopping mission type for catalog recommendations."""
 
 
 def _json_object(content: object) -> dict[str, object]:

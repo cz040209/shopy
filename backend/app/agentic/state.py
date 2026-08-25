@@ -22,6 +22,9 @@ class ShoppingAgentState(TypedDict):
     audit_result: dict[str, Any] | None
     repair_count: int
     final_response: str | None
+    response_claims: list[dict[str, Any]]
+    response_source: str | None
+    attachments: list[dict[str, Any]]
     next_stage: str | None
     errors: list[str]
     graph_iterations: int
@@ -48,6 +51,9 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "audit_result": None,
         "repair_count": 0,
         "final_response": None,
+        "response_claims": [],
+        "response_source": None,
+        "attachments": [],
         "next_stage": None,
         "errors": [],
         "graph_iterations": 0,

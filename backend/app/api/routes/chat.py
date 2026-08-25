@@ -1,27 +1,78 @@
 import time
+from dataclasses import dataclass
 from typing import Annotated
 from uuid import uuid4
 
-import httpx  # Backwards-compatible test seam; GeminiClient uses this module.
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.ai_logging import customer_input_for_log, log_ai_event
-from app.ai.gemini import GeminiClient, GeminiConnectionError, GeminiResponseError
+from app.agentic.observability import OrchestrationRecorder
+from app.agentic.orchestrator import ShoppingOrchestrator
+from app.agentic.state import ShoppingAgentState
+from app.agentic.tools import CommerceToolRegistry
 from app.config import settings
 from app.database import get_db
 from app.models import AIConversation, AIMessage, MessageRole, User
 from app.security import create_session_token
 
-from ..constants import SYSTEM_INSTRUCTION
 from ..schemas import ChatRequest, ChatResponse
 from .auth import get_optional_current_user
 
 
 router = APIRouter(tags=["assistant"])
 CONVERSATION_COOKIE_NAME = "shopy_ai_conversation"
+
+
+@dataclass
+class ChatOrchestrationTrace:
+    """A deferred run that is completed with the customer-facing chat reply."""
+
+    recorder: OrchestrationRecorder
+    state: ShoppingAgentState
+
+
+async def start_chat_orchestration(
+    db: Session,
+    *,
+    request_id: str,
+    user: User | None,
+    user_request: str,
+) -> ChatOrchestrationTrace:
+    """Run the widget through the only permitted response-generation path."""
+
+    recorder = OrchestrationRecorder(db, request_id=request_id, user=user)
+    registry = CommerceToolRegistry(db, request_id=request_id, recorder=recorder)
+    try:
+        state = await ShoppingOrchestrator(
+            tool_registry=registry,
+            recorder=recorder,
+        ).ainvoke(user_request, defer_finish=True)
+    except Exception as error:
+        if recorder.run is not None and recorder.run.status == "running":
+            recorder.fail(error)
+        log_ai_event("agent.chat_trace.failed", request_id=request_id)
+        raise
+    return ChatOrchestrationTrace(recorder=recorder, state=state)
+
+
+def finish_chat_orchestration(
+    trace: ChatOrchestrationTrace,
+    *,
+    reply: str,
+    conversation_id: str,
+) -> None:
+    trace.recorder.finish(
+        trace.state,
+        final_response=reply,
+        response_context={"conversation_id": conversation_id, "response_source": "audited_orchestrator"},
+    )
+
+
+def fail_chat_orchestration(trace: ChatOrchestrationTrace, error: Exception) -> None:
+    trace.recorder.fail(error)
 
 
 def set_conversation_cookie(response: Response, token: str) -> None:
@@ -76,6 +127,7 @@ def persist_exchange(
     user: User | None,
     customer_message: str,
     assistant_reply: str,
+    attachments: list[dict[str, object]],
     request_id: str,
 ) -> tuple[AIConversation, str]:
     conversation, token = get_or_create_conversation(
@@ -95,7 +147,7 @@ def persist_exchange(
                 role=MessageRole.ASSISTANT,
                 content=assistant_reply,
                 model=settings.gemini_model,
-                extra_data={"request_id": request_id},
+                extra_data={"request_id": request_id, "attachments": attachments},
             ),
         ]
     )
@@ -133,46 +185,29 @@ async def chat(
         log_ai_event("text.failed", request_id=request_id, reason="gemini_api_key_missing")
         raise HTTPException(status_code=503, detail="The Gemini API key is not configured.")
 
-    history = list(payload.messages)
-    while history and history[0].role == "assistant":
-        history.pop(0)
-
-    contents = [
-        {
-            "role": "model" if message.role == "assistant" else "user",
-            "parts": [{"text": message.content.strip()}],
-        }
-        for message in history
-    ]
     try:
-        log_ai_event(
-            "text.processing",
+        trace = await start_chat_orchestration(
+            db,
             request_id=request_id,
-            stage="preparing_shopping_assistant_request",
-            model=settings.gemini_model,
-            history_messages=len(contents),
-            reasoning_trace="System shopping guidance and recent conversation context are assembled before requesting a response.",
+            user=current_user,
+            user_request=latest_customer_input.strip(),
         )
-        reply = await GeminiClient(timeout_seconds=30.0).generate(
-            system_instruction=SYSTEM_INSTRUCTION, contents=contents, max_output_tokens=500
-        )
-    except GeminiConnectionError as error:
+    except Exception as error:
         log_ai_event(
             "text.failed",
             request_id=request_id,
-            reason="gemini_connection_error",
+            reason="orchestration_failed",
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
-        raise HTTPException(status_code=502, detail="Unable to reach Gemini right now. Please try again.") from error
+        raise HTTPException(status_code=503, detail="The shopping assistant could not complete a verified response. Please try again.") from error
 
-    except GeminiResponseError:
-        log_ai_event(
-            "text.failed",
-            request_id=request_id,
-            reason="gemini_response_error",
-            elapsed_ms=round((time.perf_counter() - started_at) * 1000),
-        )
-        raise HTTPException(status_code=502, detail="Gemini could not complete that request. Please try again.")
+    if trace.state.get("audit_result", {}).get("status") != "pass" or not trace.state.get("final_response"):
+        trace.recorder.finish(trace.state)
+        log_ai_event("text.failed", request_id=request_id, reason="response_audit_failed")
+        raise HTTPException(status_code=503, detail="The shopping assistant could not validate a response. Please try again.")
+
+    reply = str(trace.state["final_response"])
+    attachments = list(trace.state.get("attachments", []))
 
     try:
         conversation, active_conversation_token = persist_exchange(
@@ -181,10 +216,12 @@ async def chat(
             user=current_user,
             customer_message=latest_customer_input.strip(),
             assistant_reply=reply,
+            attachments=attachments,
             request_id=request_id,
         )
     except SQLAlchemyError as error:
         db.rollback()
+        fail_chat_orchestration(trace, error)
         log_ai_event(
             "text.failed",
             request_id=request_id,
@@ -197,13 +234,18 @@ async def chat(
         ) from error
 
     set_conversation_cookie(http_response, active_conversation_token)
+    finish_chat_orchestration(
+        trace,
+        reply=reply,
+        conversation_id=str(conversation.id),
+    )
     log_ai_event(
         "text.completed",
         request_id=request_id,
         input_type="text",
         customer_input=customer_input_for_log(latest_customer_input),
-        ai_process="Gemini generated a shopping-assistant response from the system guidance and conversation context.",
+        ai_process="The Shopping Orchestrator generated a tool-backed response and the Auditor approved its catalog claims.",
         final_output=reply,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )
-    return ChatResponse(reply=reply, conversation_id=conversation.id)
+    return ChatResponse(reply=reply, conversation_id=conversation.id, attachments=attachments)

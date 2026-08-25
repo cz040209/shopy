@@ -21,9 +21,20 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=20)
 
 
+class ChatProductAttachment(BaseModel):
+    product_id: UUID
+    product_slug: str | None = None
+    name: str = Field(min_length=1, max_length=220)
+    price: Decimal
+    currency: str = Field(min_length=3, max_length=3)
+    image_url: str = Field(min_length=1, max_length=2048)
+    image_alt_text: str | None = Field(default=None, max_length=255)
+
+
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: UUID
+    attachments: list[ChatProductAttachment] = Field(default_factory=list)
 
 
 class VisionResponse(BaseModel):

@@ -10,10 +10,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 from .enums import MessageRole
+from .mixins import DisplayIdMixin
 from .types import JSON_DATA, enum_column
 
 
-class AIMessage(Base):
+class AIMessage(DisplayIdMixin, Base):
     __tablename__ = "ai_messages"
     __table_args__ = (Index("ix_ai_messages_conversation_created", "conversation_id", "created_at"),)
 

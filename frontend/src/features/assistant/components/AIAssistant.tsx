@@ -11,6 +11,17 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp: Date | null;
+  attachments?: ChatProductAttachment[];
+};
+
+type ChatProductAttachment = {
+  product_id: string;
+  product_slug?: string | null;
+  name: string;
+  price: string | number;
+  currency: string;
+  image_url: string;
+  image_alt_text?: string | null;
 };
 
 const SHOPY_LOGO = "/images/brand/shopy-logo-transparent.png";
@@ -78,7 +89,7 @@ export default function AIAssistant() {
           })),
         }),
       });
-      const data = await response.json() as { reply?: string; detail?: string };
+      const data = await response.json() as { reply?: string; detail?: string; attachments?: ChatProductAttachment[] };
       const reply = data.reply;
       if (!response.ok || !reply) throw new Error(data.detail ?? "No response received.");
       setMessages((prev) => [
@@ -88,6 +99,7 @@ export default function AIAssistant() {
           role: "assistant",
           content: reply,
           timestamp: new Date(),
+          attachments: data.attachments ?? [],
         },
       ]);
     } catch {
@@ -362,6 +374,34 @@ export default function AIAssistant() {
                       <div className={`${styles.messageBubble} ${isUser ? styles.userBubble : styles.botBubble}`}>
                         <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                       </div>
+                      {!isUser && msg.attachments && msg.attachments.length > 0 && (
+                        <div className={styles.attachmentList} aria-label="Recommended products">
+                          {msg.attachments.map((attachment) => (
+                            <a
+                              key={attachment.product_id}
+                              className={styles.productAttachment}
+                              href={`/product/${attachment.product_id}`}
+                              aria-label={`View ${attachment.name}`}
+                            >
+                              <span className={styles.attachmentImageWrap}>
+                                {/* Runtime catalog URLs may originate outside Next image remotePatterns. */}
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={attachment.image_url}
+                                  alt={attachment.image_alt_text || attachment.name}
+                                  className={styles.attachmentImage}
+                                  loading="lazy"
+                                  onError={(event) => { event.currentTarget.style.display = "none"; }}
+                                />
+                              </span>
+                              <span className={styles.attachmentDetails}>
+                                <strong>{attachment.name}</strong>
+                                <span>{attachment.currency === "MYR" ? "RM" : attachment.currency} {Number(attachment.price).toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <time
                         className={styles.messageTime}
                         dateTime={msg.timestamp?.toISOString()}

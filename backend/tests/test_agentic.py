@@ -1,4 +1,6 @@
 import pytest
+import json
+
 from langchain_core.messages import AIMessage
 
 from app.agentic.intent import IntentMissionAgent, StructuredOutputError
@@ -15,6 +17,13 @@ class FakeChatModel:
 
     async def ainvoke(self, input: object, **kwargs: object) -> AIMessage:
         self.calls.append(input)
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            response = "I can help with this request." if not products else "\n".join(
+                f"{product['name']} — RM {product['price']}" for product in products
+            )
+            return AIMessage(content=json.dumps({"response": response, "product_ids": [product["id"] for product in products]}))
         return AIMessage(content=self.response)
 
 

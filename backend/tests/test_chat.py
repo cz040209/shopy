@@ -6,38 +6,37 @@ from sqlalchemy import func, select
 
 from app.database import get_db
 from app.main import app
-from app.models import AIConversation, AIMessage, MessageRole, User
+from app.models import AIConversation, AIMessage, MessageRole, OrchestrationRun, User
 
 
-class FakeGeminiResponse:
-    is_error = False
-    status_code = 200
+class FakeShoppingOrchestrator:
+    def __init__(self, *, tool_registry, recorder):
+        self.recorder = recorder
 
-    def json(self):
-        return {
-            "candidates": [
-                {"content": {"parts": [{"text": "Here is a saved recommendation."}]}}
-            ]
+    async def ainvoke(self, user_request, *, defer_finish=False):
+        assert defer_finish is True
+        state = {
+            "user_request": user_request,
+            "run_id": self.recorder.request_id,
+            "audit_result": {"status": "pass", "errors": []},
+            "final_response": f"Verified response for {user_request}.",
         }
+        self.recorder.start(state)
+        self.recorder.record(
+            "node_completed",
+            node_name="intent_agent",
+            output_data={"goal": "desk lamp"},
+        )
+        return state
 
 
-class FakeAsyncClient:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        return False
-
-    async def post(self, *args, **kwargs):
-        return FakeGeminiResponse()
+def install_fake_orchestrator(monkeypatch, chat_route):
+    monkeypatch.setattr(chat_route, "ShoppingOrchestrator", FakeShoppingOrchestrator)
 
 
 def test_authenticated_chat_is_persisted_and_continued(db_session, monkeypatch):
     chat_route = import_module("app.api.routes.chat")
-    monkeypatch.setattr(chat_route.httpx, "AsyncClient", FakeAsyncClient)
+    install_fake_orchestrator(monkeypatch, chat_route)
     monkeypatch.setattr(
         chat_route,
         "settings",
@@ -70,7 +69,7 @@ def test_authenticated_chat_is_persisted_and_continued(db_session, monkeypatch):
             json={"messages": [{"role": "user", "content": "Find a desk lamp"}]},
         )
         assert first.status_code == 200
-        assert first.json()["reply"] == "Here is a saved recommendation."
+        assert first.json()["reply"] == "Verified response for Find a desk lamp."
         assert first.json()["conversation_id"]
         assert "shopy_ai_conversation" in first.cookies
 
@@ -79,7 +78,7 @@ def test_authenticated_chat_is_persisted_and_continued(db_session, monkeypatch):
             json={
                 "messages": [
                     {"role": "user", "content": "Find a desk lamp"},
-                    {"role": "assistant", "content": "Here is a saved recommendation."},
+                    {"role": "assistant", "content": "Verified response for Find a desk lamp."},
                     {"role": "user", "content": "Show me a cheaper one"},
                 ]
             },
@@ -106,7 +105,7 @@ def test_authenticated_chat_is_persisted_and_continued(db_session, monkeypatch):
 
 def test_anonymous_chat_is_persisted_without_a_user(db_session, monkeypatch):
     chat_route = import_module("app.api.routes.chat")
-    monkeypatch.setattr(chat_route.httpx, "AsyncClient", FakeAsyncClient)
+    install_fake_orchestrator(monkeypatch, chat_route)
     monkeypatch.setattr(
         chat_route,
         "settings",
@@ -133,5 +132,78 @@ def test_anonymous_chat_is_persisted_without_a_user(db_session, monkeypatch):
         assert conversation is not None
         assert conversation.user_id is None
         assert len(conversation.messages) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_creates_a_completed_orchestration_trace(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+    install_fake_orchestrator(monkeypatch, chat_route)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(
+            gemini_api_key="test-key",
+            gemini_model="test-model",
+            auth_session_days=7,
+            auth_cookie_secure=False,
+        ),
+    )
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/api/chat",
+            json={"messages": [{"role": "user", "content": "Find a desk lamp"}]},
+        )
+
+        assert response.status_code == 200
+        run = db_session.scalar(select(OrchestrationRun))
+        assert run is not None
+        assert run.status == "completed"
+        assert run.final_response == "Verified response for Find a desk lamp."
+        assert [event.event_type for event in run.events] == [
+            "run_started",
+            "node_completed",
+            "assistant_response_generated",
+            "run_finished",
+        ]
+        assert run.events[-2].output_data["response_source"] == "audited_orchestrator"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_does_not_fall_back_when_orchestration_fails(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+
+    class FailingShoppingOrchestrator:
+        def __init__(self, *, tool_registry, recorder):
+            self.recorder = recorder
+
+        async def ainvoke(self, user_request, *, defer_finish=False):
+            self.recorder.start({"user_request": user_request, "run_id": self.recorder.request_id})
+            raise RuntimeError("intent agent unavailable")
+
+    monkeypatch.setattr(chat_route, "ShoppingOrchestrator", FailingShoppingOrchestrator)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(gemini_api_key="test-key", gemini_model="test-model", auth_session_days=7, auth_cookie_secure=False),
+    )
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post("/api/chat", json={"messages": [{"role": "user", "content": "Find a desk lamp"}]})
+
+        assert response.status_code == 503
+        assert db_session.scalar(select(func.count()).select_from(AIMessage)) == 0
+        run = db_session.scalar(select(OrchestrationRun))
+        assert run is not None and run.status == "failed"
     finally:
         app.dependency_overrides.clear()

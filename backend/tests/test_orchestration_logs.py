@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -12,6 +13,13 @@ from app.models import Category, OrchestrationRun, Product, ProductStatus, Selle
 
 class FakeChatModel:
     async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            response = "I can help with this request." if not products else "\n".join(
+                f"{product['name']} — RM {product['price']}" for product in products
+            )
+            return AIMessage(content=json.dumps({"response": response, "product_ids": [product["id"] for product in products]}))
         return AIMessage(content='{"mission_type":"build_setup","goal":"gaming setup","budget":4000,"preferences":[],"constraints":[],"owned_items":[],"priorities":["value"]}')
 
 
@@ -32,8 +40,8 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
     assert run is not None
     assert run.status == "completed"
     assert run.final_response == result["final_response"]
-    assert [event.event_type for event in run.events] == ["run_started", "node_completed", "node_completed", "tool_completed", "node_completed", "node_completed", "run_finished"]
-    assert [event.sequence for event in run.events] == list(range(1, 8))
+    assert [event.event_type for event in run.events] == ["run_started", "node_completed", "node_completed", "tool_completed", "node_completed", "node_completed", "tool_completed", "node_completed", "run_finished"]
+    assert [event.sequence for event in run.events] == list(range(1, 10))
     assert run.events[1].node_name == "intent_agent"
     assert run.events[3].tool_name == "search_products"
     assert run.events[-1].output_data["audit_result"]["status"] == "pass"

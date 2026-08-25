@@ -51,6 +51,7 @@ class BundleItemInput(BaseModel):
 
 class ProductToolOutput(BaseModel):
     id: UUID
+    slug: str
     name: str
     brand: str
     category: str
@@ -59,6 +60,8 @@ class ProductToolOutput(BaseModel):
     price: Decimal
     currency: str
     inventory_quantity: int
+    image_url: str | None
+    image_alt_text: str | None
     specs: list[dict[str, Any]]
     attributes: dict[str, Any]
 
@@ -86,10 +89,13 @@ class BundleTotalOutput(BaseModel):
 
 
 def _product_output(product) -> ProductToolOutput:
+    primary_image = min(product.images, key=lambda image: image.sort_order) if product.images else None
     return ProductToolOutput(
-        id=product.id, name=product.name, brand=product.brand, category=product.category.name,
+        id=product.id, slug=product.slug, name=product.name, brand=product.brand, category=product.category.name,
         seller_id=product.seller.id, seller_name=product.seller.name, price=product.price,
         currency=product.currency, inventory_quantity=max(0, product.inventory_quantity - product.reserved_quantity),
+        image_url=primary_image.url if primary_image else None,
+        image_alt_text=primary_image.alt_text if primary_image else None,
         specs=product.specs, attributes=product.attributes,
     )
 

@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -7,7 +8,7 @@ from langgraph.errors import GraphRecursionError
 from app.agentic.auditor import ShoppingAuditor
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.tools import CommerceToolRegistry, ToolExecutionError
-from app.models import Category, Product, ProductStatus, Review, Seller, SellerStatus, User
+from app.models import Category, Product, ProductImage, ProductStatus, Review, Seller, SellerStatus, User
 
 
 MISSION_JSON = '{"mission_type":"build_setup","goal":"gaming setup","budget":4000,"preferences":[],"constraints":[],"owned_items":[],"priorities":["value"]}'
@@ -15,7 +16,26 @@ MISSION_JSON = '{"mission_type":"build_setup","goal":"gaming setup","budget":400
 
 class FakeChatModel:
     async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            response = "I can help with this request." if not products else "\n".join(
+                f"{product['name']} — RM {product['price']}" for product in products
+            )
+            return AIMessage(content=json.dumps({"response": response, "product_ids": [product["id"] for product in products]}))
         return AIMessage(content=MISSION_JSON)
+
+
+class ToolProductMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "\n".join(f"{product['name']} — RM {product['price']}" for product in products),
+                "product_ids": [product["id"] for product in products],
+            }))
+        return AIMessage(content='{"mission_type":"product_search","goal":"Tool Product","budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
 
 
 class AlwaysFailAuditor:
@@ -23,7 +43,7 @@ class AlwaysFailAuditor:
         return {"status": "fail", "errors": [{"code": "forced_failure", "message": "test"}], "total": "0"}
 
 
-def catalog_product(db_session, *, price=Decimal("100.00"), inventory=5, description="Safe catalog data."):
+def catalog_product(db_session, *, price=Decimal("100.00"), inventory=5, description="Safe catalog data.", image_url: str | None = None):
     seller = Seller(name="Tool Seller", slug="tool-seller", status=SellerStatus.ACTIVE)
     category = Category(name="Gaming", slug="gaming")
     product = Product(
@@ -33,6 +53,9 @@ def catalog_product(db_session, *, price=Decimal("100.00"), inventory=5, descrip
     )
     db_session.add(product)
     db_session.commit()
+    if image_url:
+        product.images.append(ProductImage(url=image_url, alt_text=product.name, sort_order=0))
+        db_session.commit()
     return product
 
 
@@ -97,6 +120,53 @@ async def test_prompt_injection_catalog_content_is_data_not_instructions(db_sess
     assert "description" not in result["products"][0]
     assert "Ignore prior instructions" in reviews["reviews"][0]["body"]
     assert audit["status"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_orchestrator_returns_only_audited_catalog_facts(db_session):
+    product = catalog_product(db_session, price=Decimal("125.00"), inventory=3, image_url="https://images.unsplash.com/photo-1505740420928-5e560c06d30e")
+    registry = CommerceToolRegistry(db_session, "test-request", max_calls=20)
+
+    result = await ShoppingOrchestrator(ToolProductMissionModel(), tool_registry=registry).ainvoke("Recommend a tool product")
+
+    assert result["audit_result"]["status"] == "pass"
+    assert result["response_source"] == "structured_llm_catalog_v1"
+    assert str(product.id) in [item["id"] for item in result["selected_products"]]
+    assert "Tool Product — RM 125.00" in result["final_response"]
+    assert result["response_claims"] == [{
+        "id": str(product.id), "name": "Tool Product", "brand": "Tool Brand",
+        "price": "125.00", "currency": "MYR", "in_stock": True,
+    }]
+    assert result["attachments"] == [{
+        "product_id": str(product.id), "product_slug": product.slug, "name": product.name,
+        "price": "125.00", "currency": "MYR", "image_url": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e",
+        "image_alt_text": product.name,
+    }]
+
+
+@pytest.mark.anyio
+async def test_auditor_rejects_response_claims_that_do_not_match_catalog(db_session):
+    product = catalog_product(db_session, price=Decimal("125.00"), inventory=3)
+    registry = CommerceToolRegistry(db_session, "test-request", max_calls=20)
+
+    audit = await ShoppingAuditor().audit(
+        {
+            "selected_products": [{"id": str(product.id), "quantity": 1}],
+            "budget": None,
+            "preferences": [],
+            "constraints": [],
+            "response_source": "structured_llm_catalog_v1",
+            "final_response": "This product costs RM 1.00.",
+            "response_claims": [{
+                "id": str(product.id), "name": product.name, "brand": product.brand,
+                "price": "1.00", "currency": "MYR", "in_stock": True,
+            }],
+        },
+        registry,
+    )
+
+    assert audit["status"] == "fail"
+    assert any(error["code"] == "unsupported_response_claim" for error in audit["errors"])
 
 
 @pytest.mark.anyio
