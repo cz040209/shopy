@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 from app.agentic.intent import IntentMissionAgent, StructuredOutputError
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
+from app.agentic.response import ResponseWriterAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.state import initial_shopping_state
 
@@ -72,6 +73,24 @@ async def test_invalid_intent_model_output_is_rejected():
     agent = IntentMissionAgent(FakeChatModel("not JSON"))
     with pytest.raises(StructuredOutputError, match="invalid JSON"):
         await agent.interpret("Build a setup")
+
+
+@pytest.mark.anyio
+async def test_response_writer_retries_invalid_structured_output():
+    class RetryModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            return AIMessage(content="not JSON" if self.calls == 1 else '{"response":"What product category are you interested in?","product_ids":[]}')
+
+    model = RetryModel()
+    result = await ResponseWriterAgent(model, max_format_attempts=2).compose(initial_shopping_state("I want to buy something"))
+
+    assert model.calls == 2
+    assert result["final_response"] == "What product category are you interested in?"
+    assert result["response_claims"] == []
 
 
 @pytest.mark.anyio

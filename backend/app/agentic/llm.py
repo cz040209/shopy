@@ -26,6 +26,7 @@ class GeminiLangChainChatModel(BaseChatModel):
 
     timeout_seconds: float = 30.0
     max_output_tokens: int = 700
+    response_mime_type: str | None = "application/json"
 
     @property
     def _llm_type(self) -> str:
@@ -33,7 +34,11 @@ class GeminiLangChainChatModel(BaseChatModel):
 
     @property
     def _identifying_params(self) -> dict[str, Any]:
-        return {"timeout_seconds": self.timeout_seconds, "max_output_tokens": self.max_output_tokens}
+        return {
+            "timeout_seconds": self.timeout_seconds,
+            "max_output_tokens": self.max_output_tokens,
+            "response_mime_type": self.response_mime_type,
+        }
 
     def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
         raise RuntimeError("GeminiLangChainChatModel is async-only; call ainvoke().")
@@ -44,5 +49,6 @@ class GeminiLangChainChatModel(BaseChatModel):
             system_instruction=system_instruction,
             contents=contents,
             max_output_tokens=self.max_output_tokens,
+            response_mime_type=self.response_mime_type,
         )
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=reply))])

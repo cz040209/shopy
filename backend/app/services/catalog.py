@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import re
 from uuid import UUID
 
 from sqlalchemy import Select, or_, select
@@ -32,8 +33,25 @@ def list_products(
 ) -> Sequence[Product]:
     statement = active_products_query()
     if query:
-        term = f"%{query.strip()}%"
-        statement = statement.where(or_(Product.name.ilike(term), Product.brand.ilike(term), Product.description.ilike(term)))
+        # Search meaningful words independently and include category metadata.
+        # A shopper asking for "skincare facial product" should find a
+        # "Facial Cleanser" in the "Skincare" category even when that exact
+        # phrase does not occur in one database column.
+        terms = re.findall(r"[\w-]+", query.lower())
+        predicates = []
+        for term in terms:
+            pattern = f"%{term}%"
+            predicates.extend(
+                [
+                    Product.name.ilike(pattern),
+                    Product.brand.ilike(pattern),
+                    Product.description.ilike(pattern),
+                    Category.name.ilike(pattern),
+                    Category.slug.ilike(pattern),
+                ]
+            )
+        if predicates:
+            statement = statement.join(Product.category).where(or_(*predicates))
     if category_slug:
         statement = statement.join(Product.category).where(Category.slug == category_slug, Category.is_active.is_(True))
     if seller_slug:

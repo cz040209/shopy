@@ -9,6 +9,9 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from app.ai_logging import log_ai_event
+from app.config import settings
+
 from .intent import AsyncChatModel, StructuredOutputError, _json_object
 
 
@@ -42,8 +45,14 @@ class ResponseWriterAgent:
     source = "structured_llm_catalog_v1"
     _NON_SHOPPING_MISSIONS = {"information_request", "greeting", "smalltalk"}
 
-    def __init__(self, model: AsyncChatModel) -> None:
+    def __init__(
+        self,
+        model: AsyncChatModel,
+        *,
+        max_format_attempts: int = settings.agent_response_format_attempts,
+    ) -> None:
         self.model = model
+        self.max_format_attempts = max(1, max_format_attempts)
 
     @staticmethod
     def is_shopping_mission(mission_type: str | None) -> bool:
@@ -64,16 +73,37 @@ class ResponseWriterAgent:
             "optional_categories": state.get("optional_categories", []),
             "verified_catalog_products": products,
         }
-        response = await self.model.ainvoke(
-            [
-                SystemMessage(content=RESPONSE_WRITER_SYSTEM_PROMPT),
-                HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
-            ]
-        )
-        try:
-            draft = ResponseDraft.model_validate(_json_object(response.content))
-        except ValidationError as error:
-            raise ResponseDraftError("Response model output does not match the response schema.") from error
+        messages = [
+            SystemMessage(content=RESPONSE_WRITER_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        ]
+        draft: ResponseDraft | None = None
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_format_attempts + 1):
+            response = await self.model.ainvoke(messages)
+            try:
+                draft = ResponseDraft.model_validate(_json_object(response.content))
+                break
+            except (StructuredOutputError, ValidationError) as error:
+                last_error = error
+                log_ai_event(
+                    "agent.response_writer.format_retry",
+                    request_id=str(state.get("run_id", "")),
+                    attempt=attempt,
+                    max_attempts=self.max_format_attempts,
+                )
+                messages = [
+                    SystemMessage(content=RESPONSE_WRITER_SYSTEM_PROMPT),
+                    HumanMessage(
+                        content=(
+                            "Your prior draft was not valid for the required JSON schema. "
+                            "Return only one valid JSON object with `response` and `product_ids`.\n\n"
+                            + json.dumps(payload, ensure_ascii=False, default=str)
+                        )
+                    ),
+                ]
+        if draft is None:
+            raise ResponseDraftError("Response model did not return valid structured output.") from last_error
 
         expected_ids = {str(product["id"]) for product in products}
         drafted_ids = [str(product_id) for product_id in draft.product_ids]

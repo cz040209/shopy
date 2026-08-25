@@ -31,6 +31,10 @@ def test_catalog_cart_and_checkout_lifecycle(db_session):
         product_id = listed.json()["items"][0]["id"]
         assert product_id == str(product.id)
 
+        category_match = client.get("/api/v1/products?q=audio product")
+        assert category_match.status_code == 200
+        assert category_match.json()["items"][0]["id"] == str(product.id)
+
         registered = client.post("/api/v1/auth/register", json={"full_name": "Jeffrey Tan", "email": "commerce@example.com", "password": "Orbit2026!"})
         assert registered.status_code == 201
         added = client.post("/api/v1/cart/items", json={"product_id": product_id, "quantity": 2})

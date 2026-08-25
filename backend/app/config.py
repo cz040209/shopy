@@ -26,6 +26,7 @@ class Settings:
     agent_max_graph_iterations: int = int(os.getenv("AGENT_MAX_GRAPH_ITERATIONS", "12"))
     agent_max_tool_calls: int = int(os.getenv("AGENT_MAX_TOOL_CALLS", "8"))
     agent_max_repair_attempts: int = int(os.getenv("AGENT_MAX_REPAIR_ATTEMPTS", "2"))
+    agent_response_format_attempts: int = int(os.getenv("AGENT_RESPONSE_FORMAT_ATTEMPTS", "2"))
     agent_model_timeout_seconds: float = float(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "30"))
     agent_tool_timeout_seconds: float = float(os.getenv("AGENT_TOOL_TIMEOUT_SECONDS", "5"))
     database_url: str = os.getenv(
