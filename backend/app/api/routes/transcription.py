@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.ai_logging import customer_input_for_log, log_ai_event
@@ -45,9 +45,9 @@ def get_whisper_model():
         raise RuntimeError("Local Whisper could not be initialized.") from error
 
 
-def transcribe_local_audio(audio_path: str) -> TranscriptionResponse:
+def transcribe_local_audio(audio_path: str, language: str | None) -> TranscriptionResponse:
     model = get_whisper_model()
-    segments, info = model.transcribe(audio_path, vad_filter=True, beam_size=5)
+    segments, info = model.transcribe(audio_path, language=language, vad_filter=True, beam_size=5)
     transcript = " ".join(segment.text.strip() for segment in segments).strip()
     duration = getattr(info, "duration", None)
     return TranscriptionResponse(
@@ -58,10 +58,18 @@ def transcribe_local_audio(audio_path: str) -> TranscriptionResponse:
 
 
 @router.post("/api/v1/transcribe", response_model=TranscriptionResponse)
-async def transcribe_audio(audio: UploadFile = File(...)) -> TranscriptionResponse:
+async def transcribe_audio(
+    audio: UploadFile = File(...),
+    language: str | None = Form(default=None, max_length=12),
+) -> TranscriptionResponse:
     """Transcribe confirmed audio locally and remove its temporary file."""
     request_id = uuid4().hex[:12]
     started_at = time.perf_counter()
+    requested_language = (language or settings.whisper_default_language).strip().lower()
+    if requested_language in {"", "auto", "detect"}:
+        requested_language = "auto"
+    elif not requested_language.isalpha() or len(requested_language) not in {2, 3}:
+        raise HTTPException(status_code=422, detail="Language must be an ISO code such as 'en' or 'auto'.")
     suffix = Path(audio.filename or "recording.webm").suffix.lower()
     log_ai_event(
         "voice.received",
@@ -70,6 +78,7 @@ async def transcribe_audio(audio: UploadFile = File(...)) -> TranscriptionRespon
         filename=audio.filename or "recording.webm",
         mime_type=audio.content_type,
         extension=suffix or ".webm",
+        requested_language=requested_language,
     )
     if audio.content_type not in ALLOWED_AUDIO_TYPES and suffix not in ALLOWED_AUDIO_SUFFIXES:
         log_ai_event("voice.rejected", request_id=request_id, reason="unsupported_audio_format")
@@ -92,13 +101,14 @@ async def transcribe_audio(audio: UploadFile = File(...)) -> TranscriptionRespon
             bytes=len(audio_bytes),
             whisper_model=settings.whisper_model,
             device=settings.whisper_device,
+            requested_language=requested_language,
             reasoning_trace="Audio is validated, decoded, and passed to local Whisper with voice-activity detection.",
         )
         with tempfile.NamedTemporaryFile(suffix=suffix or ".webm", delete=False) as temporary_audio:
             temporary_audio.write(audio_bytes)
             temp_path = temporary_audio.name
 
-        result = await run_in_threadpool(transcribe_local_audio, temp_path)
+        result = await run_in_threadpool(transcribe_local_audio, temp_path, None if requested_language == "auto" else requested_language)
     except RuntimeError as error:
         log_ai_event(
             "voice.failed",
@@ -140,6 +150,7 @@ async def transcribe_audio(audio: UploadFile = File(...)) -> TranscriptionRespon
         input_type="voice",
         customer_input=customer_input_for_log(result.transcript),
         language=result.language,
+        requested_language=requested_language,
         audio_duration_seconds=result.duration_seconds,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         final_output="Transcript returned to the customer for editing and confirmation.",

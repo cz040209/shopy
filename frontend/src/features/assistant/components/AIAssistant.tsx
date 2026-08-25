@@ -226,6 +226,9 @@ export default function AIAssistant() {
     const filename = recordingBlob.type.includes("wav") ? "shopy-voice.wav" : "shopy-voice.webm";
     const formData = new FormData();
     formData.append("audio", recordingBlob, filename);
+    // Default to English rather than relying on multilingual auto-detection
+    // for short Malaysian-English recordings.
+    formData.append("language", "en");
     const controller = new AbortController();
     transcriptionAbortRef.current = controller;
 
