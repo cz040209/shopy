@@ -43,6 +43,9 @@ def test_catalog_cart_and_checkout_lifecycle(db_session):
         })
         assert checkout.status_code == 201
         assert checkout.json()["total_amount"] == "914.40"
+        history = client.get("/api/v1/orders")
+        assert history.status_code == 200
+        assert history.json()[0]["order_number"] == checkout.json()["order_number"]
         assert client.get("/api/v1/cart").json()["items"] == []
         assert db_session.scalar(select(Product).where(Product.id == product.id)).inventory_quantity == 6
     finally:

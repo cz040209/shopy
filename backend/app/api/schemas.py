@@ -249,3 +249,38 @@ class ReviewResponse(BaseModel):
     is_verified_purchase: bool
     created_at: datetime
     author_name: str
+
+
+class AgentRunRequest(BaseModel):
+    user_request: str = Field(min_length=1, max_length=4000)
+
+
+class OrchestrationEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    sequence: int
+    event_type: str
+    node_name: str | None
+    tool_name: str | None
+    status: str
+    input_data: dict[str, Any]
+    output_data: dict[str, Any]
+    error_message: str | None
+    created_at: datetime
+    duration_ms: int | None
+
+
+class OrchestrationRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    request_id: str
+    status: str
+    user_request: str
+    final_response: str | None
+    error_message: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+    events: list[OrchestrationEventResponse] = Field(default_factory=list)

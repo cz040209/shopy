@@ -16,6 +16,8 @@ EXPECTED_TABLES = {
     "categories",
     "order_items",
     "orders",
+    "orchestration_run_events",
+    "orchestration_runs",
     "payments",
     "product_images",
     "products",

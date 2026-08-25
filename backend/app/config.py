@@ -23,6 +23,11 @@ class Settings:
     ai_log_customer_input: bool = env_flag("AI_LOG_CUSTOMER_INPUT", True)
     auth_cookie_secure: bool = env_flag("AUTH_COOKIE_SECURE", False)
     auth_session_days: int = int(os.getenv("AUTH_SESSION_DAYS", "7"))
+    agent_max_graph_iterations: int = int(os.getenv("AGENT_MAX_GRAPH_ITERATIONS", "12"))
+    agent_max_tool_calls: int = int(os.getenv("AGENT_MAX_TOOL_CALLS", "8"))
+    agent_max_repair_attempts: int = int(os.getenv("AGENT_MAX_REPAIR_ATTEMPTS", "2"))
+    agent_model_timeout_seconds: float = float(os.getenv("AGENT_MODEL_TIMEOUT_SECONDS", "30"))
+    agent_tool_timeout_seconds: float = float(os.getenv("AGENT_TOOL_TIMEOUT_SECONDS", "5"))
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg://shopy@localhost:5433/shopy",

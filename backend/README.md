@@ -32,6 +32,34 @@ Authenticated commerce endpoints are available under `/api/v1`: `cart`,
 creates an order and a pending payment record; a real payment-provider capture
 must be added before calling it a completed payment.
 
+## Agent orchestration run logs
+
+Apply the latest migration before using agent runs:
+
+```bash
+poetry run alembic upgrade head
+```
+
+`POST /api/v1/agentic/runs` accepts an authenticated shopping request and
+persists its observable workflow in `orchestration_runs` and
+`orchestration_run_events`. The owner can inspect history with `GET
+/api/v1/agentic/runs` or one run with `GET /api/v1/agentic/runs/{run_id}`.
+
+Events include the structured mission output, need-plan output, validated tool
+inputs/results, audit outcome, repair attempts, and final response. They do
+not store model chain-of-thought or secrets. Set `AI_LOG_CUSTOMER_INPUT=false`
+to redact customer request content in both terminal and orchestration logs.
+
+Example DBeaver query:
+
+```sql
+SELECT r.request_id, r.status, e.sequence, e.event_type, e.node_name,
+       e.tool_name, e.input_data, e.output_data, e.error_message
+FROM orchestration_runs r
+JOIN orchestration_run_events e ON e.run_id = r.id
+ORDER BY r.created_at DESC, e.sequence;
+```
+
 Run backend tests with:
 
 ```bash

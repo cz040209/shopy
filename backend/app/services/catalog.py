@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Category, Product, ProductStatus, Seller, SellerStatus
+from app.models import Category, Product, ProductStatus, Review, Seller, SellerStatus
 
 
 def active_products_query() -> Select[tuple[Product]]:
@@ -49,3 +49,17 @@ def get_product(db: Session, identifier: UUID | str) -> Product | None:
         statement = statement.where(Product.slug == identifier)
     return db.scalar(statement)
 
+
+def get_seller(db: Session, identifier: UUID | str) -> Seller | None:
+    statement = select(Seller).where(Seller.status == SellerStatus.ACTIVE)
+    statement = statement.where(Seller.id == identifier) if isinstance(identifier, UUID) else statement.where(Seller.slug == identifier)
+    return db.scalar(statement)
+
+
+def get_product_reviews(db: Session, product_id: UUID, *, limit: int = 20) -> Sequence[Review]:
+    return db.scalars(
+        select(Review)
+        .where(Review.product_id == product_id, Review.is_published.is_(True))
+        .order_by(Review.created_at.desc())
+        .limit(limit)
+    ).all()

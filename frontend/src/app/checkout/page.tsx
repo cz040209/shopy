@@ -24,27 +24,6 @@ const currency = new Intl.NumberFormat("en-MY", {
   maximumFractionDigits: 0,
 });
 
-const invoiceCardStyle = {
-  borderRadius: "1rem",
-  backgroundImage: "linear-gradient(135deg, #071019 0%, #061018 100%)",
-  padding: "1px",
-  boxShadow: "0 18px 44px rgba(0, 0, 0, 0.28)",
-} as const;
-
-const invoicePanelStyle = {
-  borderRadius: "0.75rem",
-  backgroundColor: "rgba(17, 21, 39, 0.92)",
-  padding: "1.25rem",
-} as const;
-
-const invoiceDividerStyle = {
-  borderTop: "1px solid rgba(255, 255, 255, 0.06)",
-  paddingTop: "1rem",
-  display: "flex",
-  flexDirection: "column" as const,
-  gap: "0.75rem",
-} as const;
-
 function CheckoutContent() {
   const invoiceRef = useRef<HTMLDivElement | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState("Pending");
@@ -72,94 +51,183 @@ function CheckoutContent() {
       const pdf = new jsPDF("p", "mm", "a4");
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 14;
-      let y = 20;
+      const margin = 16;
+      const contentWidth = pageWidth - margin * 2;
+      const itemColumn = margin + 5;
+      const unitPriceColumn = pageWidth - margin - 65;
+      const quantityColumn = pageWidth - margin - 37;
+      const amountColumn = pageWidth - margin - 5;
+      const footerY = pageHeight - 11;
+      let y = 0;
 
-      pdf.setFillColor(250, 245, 220);
-      pdf.rect(0, 0, pageWidth, pageHeight, "F");
+      const drawPageChrome = (isContinuation = false) => {
+        pdf.setFillColor(10, 16, 33);
+        pdf.rect(0, 0, pageWidth, pageHeight, "F");
+        pdf.setFillColor(103, 79, 224);
+        pdf.rect(0, 0, pageWidth, 42, "F");
+        pdf.setFillColor(34, 211, 238);
+        pdf.rect(0, 40, pageWidth, 2, "F");
 
-      pdf.setFillColor(240, 200, 90);
-      pdf.roundedRect(margin - 2, 10, pageWidth - margin * 2 + 4, 32, 2, 2, "F");
+        pdf.setFillColor(255, 255, 255);
+        pdf.roundedRect(margin, 12, 11, 11, 2.5, 2.5, "F");
+        pdf.setTextColor(93, 70, 213);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(13);
+        pdf.text("S", margin + 5.5, 19.7, { align: "center" });
+
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFontSize(16);
+        pdf.text("SHOPY", margin + 15, 18);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(226, 232, 255);
+        pdf.text(isContinuation ? "INVOICE - CONTINUED" : "SECURE COMMERCE INVOICE", margin + 15, 24);
+
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8);
+        pdf.setTextColor(226, 232, 255);
+        pdf.text("INVOICE NUMBER", pageWidth - margin, 15, { align: "right" });
+        pdf.setFontSize(11);
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(`#${invoiceNumber}`, pageWidth - margin, 21, { align: "right" });
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8);
+        pdf.setTextColor(226, 232, 255);
+        pdf.text(`Issued ${invoiceDate}`, pageWidth - margin, 27, { align: "right" });
+      };
+
+      const drawItemHeader = (top: number) => {
+        pdf.setFillColor(28, 39, 67);
+        pdf.roundedRect(margin, top, contentWidth, 10, 2, 2, "F");
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(173, 187, 224);
+        pdf.text("ITEM", itemColumn, top + 6.3);
+        pdf.text("UNIT PRICE", unitPriceColumn, top + 6.3, { align: "right" });
+        pdf.text("QTY", quantityColumn, top + 6.3, { align: "right" });
+        pdf.text("AMOUNT", amountColumn, top + 6.3, { align: "right" });
+      };
+
+      const startNewPage = () => {
+        pdf.addPage();
+        drawPageChrome(true);
+        y = 55;
+        drawItemHeader(y);
+        y += 15;
+      };
+
+      drawPageChrome();
+      y = 53;
+
+      const cardGap = 6;
+      const cardWidth = (contentWidth - cardGap) / 2;
+      const rightCardX = margin + cardWidth + cardGap;
+      pdf.setFillColor(20, 30, 54);
+      pdf.roundedRect(margin, y, cardWidth, 34, 3, 3, "F");
+      pdf.roundedRect(rightCardX, y, cardWidth, 34, 3, 3, "F");
 
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(20);
-      pdf.setTextColor(60, 46, 12);
-      pdf.text("Shopy Invoice", margin, 22);
-
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(151, 166, 211);
+      pdf.text("BILLED TO", margin + 5, y + 7);
+      pdf.text("PAYMENT & DELIVERY", rightCardX + 5, y + 7);
+      pdf.setFontSize(10.5);
+      pdf.setTextColor(245, 247, 255);
+      pdf.text("Jeffrey Tan", margin + 5, y + 14);
+      pdf.text("Secure checkout", rightCardX + 5, y + 14);
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.setTextColor(95, 74, 30);
-      pdf.text(`Invoice #${invoiceNumber}`, margin, 29);
-      pdf.text(`Date: ${invoiceDate}`, pageWidth - margin - 38, 29);
-      y = 42;
+      pdf.setFontSize(8.5);
+      pdf.setTextColor(180, 193, 222);
+      pdf.text("+60 12 345 6789", margin + 5, y + 20);
+      pdf.text("Card payment - authorization pending", rightCardX + 5, y + 20);
+      pdf.text("Kuala Lumpur City Centre", margin + 5, y + 26);
+      pdf.text("Kuala Lumpur, Malaysia", rightCardX + 5, y + 26);
 
-      pdf.setDrawColor(210, 185, 95);
-      pdf.line(margin, y, pageWidth - margin, y);
-      y += 8;
-
-      pdf.setFillColor(255, 250, 232);
-      pdf.roundedRect(margin, y - 3, pageWidth - margin * 2, 30, 2, 2, "F");
-      pdf.setTextColor(70, 50, 10);
+      y += 48;
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(11);
-      pdf.text("Billing details", margin + 2, y + 4);
-      y += 8;
-
+      pdf.setFontSize(13);
+      pdf.setTextColor(245, 247, 255);
+      pdf.text("Order details", margin, y);
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(10);
-      pdf.text("Jeffrey Tan", margin + 2, y + 2);
-      pdf.text("+60 12 345 6789", margin + 2, y + 8);
-      pdf.text("Kuala Lumpur City Centre", margin + 2, y + 14);
-      y += 20;
-
-      pdf.setFont("helvetica", "bold");
-      pdf.text("Items", margin, y + 6);
-      y += 12;
-
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(9);
-      pdf.setTextColor(85, 66, 22);
-      const col1X = margin;
-      const col2X = pageWidth - margin - 50;
-      const col3X = pageWidth - margin - 24;
-      pdf.text("Description", col1X, y + 2);
-      pdf.text("Qty", col2X, y + 2);
-      pdf.text("Amount", col3X, y + 2);
-      y += 6;
-      pdf.setDrawColor(222, 201, 125);
-      pdf.line(margin, y, pageWidth - margin, y);
-      y += 4;
+      pdf.setFontSize(8.5);
+      pdf.setTextColor(160, 175, 211);
+      pdf.text(`${cartItems.length} item${cartItems.length === 1 ? "" : "s"} in this order`, margin, y + 5.5);
+      y += 11;
+      drawItemHeader(y);
+      y += 15;
 
       for (const item of cartItems) {
-        const name = `${item.name} (SKU ${item.id})`;
-        const lines = pdf.splitTextToSize(name, col2X - col1X - 2);
-        const lineCount = Math.max(1, lines.length);
+        const nameLines = pdf.splitTextToSize(item.name, 75) as string[];
+        const rowHeight = Math.max(18, nameLines.length * 4.3 + 10);
 
-        pdf.text(lines, col1X, y);
-        pdf.text(String(item.quantity), col2X, y);
-        pdf.text(currency.format(item.price * item.quantity), col3X, y);
-        y += lineCount * 3.5;
+        if (y + rowHeight > footerY - 45) {
+          startNewPage();
+        }
+
+        pdf.setFillColor(19, 28, 50);
+        pdf.roundedRect(margin, y, contentWidth, rowHeight, 2.5, 2.5, "F");
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(9.5);
+        pdf.setTextColor(245, 247, 255);
+        pdf.text(nameLines, itemColumn, y + 7);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(151, 166, 211);
+        pdf.text(`SKU ${item.id.slice(-8).toUpperCase()}`, itemColumn, y + 7 + nameLines.length * 4.3 + 2.5);
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(218, 226, 249);
+        pdf.text(currency.format(item.price), unitPriceColumn, y + 9, { align: "right" });
+        pdf.text(String(item.quantity), quantityColumn, y + 9, { align: "right" });
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(255, 255, 255);
+        pdf.text(currency.format(item.price * item.quantity), amountColumn, y + 9, { align: "right" });
+        y += rowHeight + 4;
       }
 
-      y += 6;
-      pdf.setDrawColor(222, 201, 125);
-      pdf.line(margin, y, pageWidth - margin, y);
-      y += 10;
+      const totalsHeight = 50;
+      if (y + totalsHeight > footerY) {
+        startNewPage();
+      }
 
+      const totalsWidth = 82;
+      const totalsX = pageWidth - margin - totalsWidth;
+      pdf.setFillColor(28, 39, 67);
+      pdf.roundedRect(totalsX, y, totalsWidth, totalsHeight, 3, 3, "F");
       pdf.setFont("helvetica", "bold");
-      pdf.text("Subtotal", margin, y);
-      pdf.text(currency.format(subtotal), col3X, y);
-      y += 5;
-      pdf.text("SST estimate", margin, y);
-      pdf.text(currency.format(tax), col3X, y);
-      y += 5;
-      pdf.text("Handling", margin, y);
-      pdf.text(currency.format(handling), col3X, y);
-      y += 16;
-      pdf.setFontSize(12);
-      pdf.setTextColor(60, 46, 12);
-      pdf.text("Total", margin, y);
-      pdf.text(currency.format(total), col3X, y);
+      pdf.setFontSize(8);
+      pdf.setTextColor(151, 166, 211);
+      pdf.text("PAYMENT SUMMARY", totalsX + 6, y + 8);
+
+      const totals = [
+        ["Subtotal", currency.format(subtotal)],
+        ["SST estimate", currency.format(tax)],
+        ["Handling", currency.format(handling)],
+      ];
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8.5);
+      for (const [index, [label, value]] of totals.entries()) {
+        const lineY = y + 16 + index * 6;
+        pdf.setTextColor(180, 193, 222);
+        pdf.text(label, totalsX + 6, lineY);
+        pdf.setTextColor(245, 247, 255);
+        pdf.text(value, totalsX + totalsWidth - 6, lineY, { align: "right" });
+      }
+      pdf.setDrawColor(74, 88, 128);
+      pdf.line(totalsX + 6, y + 35, totalsX + totalsWidth - 6, y + 35);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.setTextColor(255, 255, 255);
+      pdf.text("TOTAL", totalsX + 6, y + 44);
+      pdf.setTextColor(111, 235, 255);
+      pdf.text(currency.format(total), totalsX + totalsWidth - 6, y + 44, { align: "right" });
+
+      pdf.setDrawColor(39, 53, 87);
+      pdf.line(margin, footerY - 5, pageWidth - margin, footerY - 5);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(134, 149, 185);
+      pdf.text("Generated by Shopy - secure checkout reference.", margin, footerY);
+      pdf.text("Thank you for shopping with us.", pageWidth - margin, footerY, { align: "right" });
 
       pdf.save(`shopy-invoice-${invoiceNumber}.pdf`);
     } catch (error) {
@@ -195,7 +263,7 @@ function CheckoutContent() {
 
   return (
     <div className={styles.checkout}>
-      <section className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-end">
+      <section className={styles.checkoutHeader}>
         <div>
           <h1 className="max-w-3xl text-white title-fancy">Order Summary</h1>
           <p className="mt-4 max-w-2xl text-base text-[#8892a4] subtitle-fancy">
@@ -204,20 +272,11 @@ function CheckoutContent() {
           </p>
         </div>
 
-        <div className="rounded-lg bg-white/[0.03] p-6 lg:p-7">
-          <div className="flex items-center gap-4">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-400/10 text-emerald-300">
+        <div className={styles.paymentShield}>
+          <div className={styles.paymentShieldIcon}>
               <ShieldCheck size={20} />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-white">
-                Payment shield online
-              </p>
-              <p className="text-xs text-[#8892a4]">
-                AI risk scoring runs before authorization.
-              </p>
-            </div>
           </div>
+          <div><p>Payment shield online</p><strong>AI risk scoring runs before authorization.</strong><span>Protected checkout monitoring is active</span></div>
         </div>
       </section>
 
@@ -280,28 +339,27 @@ function CheckoutContent() {
           </div>
         </div>
 
-        <aside className="h-fit rounded-lg bg-white/[0.03] p-6 lg:p-7">
-          <div className="flex items-start justify-between gap-4">
+        <aside className={styles.invoiceSidebar}>
+          <div className={styles.invoiceHeader}>
             <div>
               <h3 className="text-lg font-semibold text-white">Shopy Invoice</h3>
               <p className="text-xs text-[#93a6bd]">Order summary & receipt</p>
             </div>
-            <div className="ml-auto flex items-center gap-2">
+            <div>
               <button
                 type="button"
                 onClick={exportInvoicePdf}
                 disabled={isExporting || cartItems.length === 0}
-                className="inline-flex items-center gap-2 rounded-full bg-white/6 px-3 py-1 text-sm text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className={styles.downloadButton}
               >
                 {isExporting ? "Preparing PDF..." : "Download PDF"}
               </button>
             </div>
           </div>
 
-          <div className="invoice-print-area mt-4" ref={invoiceRef} style={{ width: "100%" }}>
-            <div style={invoiceCardStyle}>
-              <div style={invoicePanelStyle}>
-                <div className="mb-4 flex items-center justify-between">
+          <div className={`${styles.invoicePrintArea} invoice-print-area`} ref={invoiceRef}>
+            <div className={styles.invoicePanel}>
+                <div className={styles.invoiceMeta}>
                   <div>
                     <p className="text-sm text-[#9aa8bf]">Invoice #</p>
                     <p className="text-sm font-medium text-white">#{invoiceNumber}</p>
@@ -352,7 +410,7 @@ function CheckoutContent() {
                   </table>
                 </div>
 
-                <div className="mt-5 text-sm" style={invoiceDividerStyle}>
+                <div className={styles.invoiceTotals}>
                   <div className="flex justify-between text-[#93a6bd]"><span>Subtotal</span><span className="text-white">{currency.format(subtotal)}</span></div>
                   <div className="flex justify-between text-[#93a6bd]"><span>SST estimate</span><span className="text-white">{currency.format(tax)}</span></div>
                   <div className="flex justify-between text-[#93a6bd]"><span>Handling</span><span className="text-white">{currency.format(handling)}</span></div>
@@ -361,26 +419,25 @@ function CheckoutContent() {
                     <span className="text-2xl font-extrabold text-white">{currency.format(total)}</span>
                   </div>
                 </div>
-              </div>
             </div>
           </div>
 
           <Button
             variant="primary"
             fullWidth
-            className="mt-6"
+            className={styles.createOrderButton}
             onClick={completeCheckout}
             disabled={cartItems.length === 0 || isPlacingOrder}
           >
             {isPlacingOrder ? "Creating order…" : "Create order"}
           </Button>
-          <Link href="/cart" className="mt-4 block">
+          <Link href="/cart" className={styles.returnToCart}>
             <Button variant="outline" fullWidth>
               Return to cart
             </Button>
           </Link>
 
-          <div className="mt-5 flex items-center gap-2 text-xs text-[#8892a4]">
+          <div className={styles.invoiceSecurity}>
             <Radio size={15} className="text-cyan-400" />
             Live fraud detection is monitoring this session.
           </div>

@@ -22,14 +22,28 @@ import {
 } from "lucide-react";
 import styles from "./profile.module.css";
 import RequireAuth from "@/components/auth/RequireAuth";
+import { apiFetch } from "@/lib/api";
 
-const sections = [
+type AccountOrder = {
+  id: string;
+  order_number: string;
+  status: string;
+  payment_status: string;
+  total_amount: string | number;
+  created_at: string;
+  items: Array<{ id: string; product_name: string; quantity: number }>;
+};
+
+const currency = new Intl.NumberFormat("en-MY", { style: "currency", currency: "MYR", maximumFractionDigits: 2 });
+
+function accountSections(orderCount: number) {
+  return [
   {
     title: "Order History",
     description: "Track active shipments and inspect previous purchases.",
     icon: PackageCheck,
-    href: "/cart",
-    metric: "12 orders",
+    href: "#order-history",
+    metric: `${orderCount} order${orderCount === 1 ? "" : "s"}`,
   },
   {
     title: "AI Insights",
@@ -52,7 +66,8 @@ const sections = [
     href: "/login",
     metric: "Verified",
   },
-];
+  ];
+}
 
 const AVATAR_SIZE = 160;
 
@@ -110,6 +125,9 @@ function ProfileContent() {
   const [avatar, setAvatar] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoadingUser, setIsLoadingUser] = useState(true);
+  const [orders, setOrders] = useState<AccountOrder[]>([]);
+  const [isLoadingOrders, setIsLoadingOrders] = useState(true);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -153,6 +171,22 @@ function ProfileContent() {
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+    const loadOrders = async () => {
+      try {
+        const result = await apiFetch("/api/v1/orders") as AccountOrder[];
+        if (isMounted) { setOrders(result); setOrdersError(null); }
+      } catch (error) {
+        if (isMounted) { setOrders([]); setOrdersError(error instanceof Error ? error.message : "Unable to load order history."); }
+      } finally {
+        if (isMounted) setIsLoadingOrders(false);
+      }
+    };
+    const requestId = window.setTimeout(() => void loadOrders(), 0);
+    return () => { isMounted = false; window.clearTimeout(requestId); };
+  }, []);
+
   async function signOut() {
     try {
       await logoutAccount();
@@ -191,7 +225,7 @@ function ProfileContent() {
           <div className={styles.subtitle}>Manage orders, payment preferences, and personalised shopping in one place.</div>
           <div className={styles.heroActions}><Link href="/shop" className={styles.primaryAction}>Explore products</Link><Link href="/cart" className={styles.secondaryAction}>View cart</Link></div>
         </div>
-        <div className={styles.heroStats}><div><strong>12</strong><span>Orders</span></div><div><strong>94%</strong><span>Match score</span></div><div><strong>24/7</strong><span>Wallet protection</span></div></div>
+        <div className={styles.heroStats}><div><strong>{isLoadingOrders ? "—" : orders.length}</strong><span>Orders</span></div><div><strong>94%</strong><span>Match score</span></div><div><strong>24/7</strong><span>Wallet protection</span></div></div>
       </section>
 
       <section className={styles.accountGrid}>
@@ -222,13 +256,17 @@ function ProfileContent() {
 
       <section className={styles.sectionHeader}><div><div className={styles.sectionKicker}>Your shortcuts</div><div className={styles.sectionTitle}>Everything you need, in one place</div></div><div className={styles.sectionNote}>Personalised for your account</div></section>
       <section className={styles.actionGrid}>
-        {sections.map((section) => {
+        {accountSections(orders.length).map((section) => {
           const Icon = section.icon;
           return <Link key={section.title} href={section.href} className={styles.actionCard}>
             <div className={styles.cardTop}><div className={styles.actionIcon}><Icon size={21} /></div><div className={styles.metric}>{section.metric}</div></div>
             <div className={styles.cardBottom}><div><div className={styles.actionTitle}>{section.title}</div><div className={styles.actionDescription}>{section.description}</div></div><ChevronRight size={21} className={styles.chevron} /></div>
           </Link>;
         })}
+      </section>
+      <section id="order-history" className={styles.ordersSection} aria-labelledby="order-history-heading">
+        <div className={styles.ordersHeader}><div><div className={styles.sectionKicker}>Order history</div><h2 id="order-history-heading" className={styles.sectionTitle}>Your recent orders</h2></div><span className={styles.sectionNote}>Synced with your Shopy account</span></div>
+        {isLoadingOrders ? <div className={styles.ordersEmpty}>Loading your orders…</div> : ordersError ? <div className={styles.ordersEmpty}>{ordersError}</div> : orders.length === 0 ? <div className={styles.ordersEmpty}>You have not placed an order yet. Completed checkout orders will appear here.</div> : <div className={styles.orderList}>{orders.map((order) => <article key={order.id} className={styles.orderCard}><div className={styles.orderTop}><div><span className={styles.orderLabel}>Order</span><strong>{order.order_number}</strong></div><span className={styles.orderStatus}>{order.status.replaceAll("_", " ")}</span></div><p className={styles.orderItems}>{order.items.map((item) => `${item.product_name} × ${item.quantity}`).join(", ")}</p><div className={styles.orderBottom}><span>{new Date(order.created_at).toLocaleDateString("en-MY", { dateStyle: "medium" })} · Payment {order.payment_status.replaceAll("_", " ")}</span><strong>{currency.format(Number(order.total_amount))}</strong></div></article>)}</div>}
       </section>
     </main>
   );

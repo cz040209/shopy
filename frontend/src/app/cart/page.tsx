@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   Minus,
   Plus,
+  ArrowRight,
   ShieldCheck,
   ShoppingBag,
   Trash2,
@@ -13,6 +14,7 @@ import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
 import styles from "./cart.module.css";
+import emptyStyles from "./empty-cart.module.css";
 
 const currency = new Intl.NumberFormat("en-MY", {
   currency: "MYR",
@@ -39,15 +41,16 @@ function CartContent() {
       </section>
 
       {cartItems.length === 0 ? (
-        <section className="rounded-lg bg-white/[0.03] p-10 text-center">
-          <ShoppingBag className="mx-auto mb-4 text-cyan-400" size={36} />
-          <h2 className="text-white">Your cart is clear</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm text-[#8892a4]">
+        <section className={emptyStyles.emptyCart}>
+          <div className={emptyStyles.emptyIcon}><ShoppingBag size={30} /></div>
+          <p className={emptyStyles.eyebrow}>Ready when you are</p>
+          <h2>Your cart is clear</h2>
+          <p className={emptyStyles.copy}>
             Add a few products from the shop and your checkout route will be
             ready.
           </p>
-          <Link href="/shop" className="mt-6 inline-flex">
-            <Button variant="primary">Explore shop</Button>
+          <Link href="/shop" className={emptyStyles.exploreShop}>
+            <span>Explore shop</span><ArrowRight size={17} />
           </Link>
         </section>
       ) : (

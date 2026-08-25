@@ -36,6 +36,7 @@ class User(TimestampMixin, Base):
     orders: Mapped[list["Order"]] = relationship("Order", back_populates="user")
     missions: Mapped[list["ShoppingMission"]] = relationship("ShoppingMission", back_populates="user")
     conversations: Mapped[list["AIConversation"]] = relationship("AIConversation", back_populates="user")
+    orchestration_runs: Mapped[list["OrchestrationRun"]] = relationship("OrchestrationRun", back_populates="user")
     sellers: Mapped[list["Seller"]] = relationship("Seller", back_populates="owner")
     auth_sessions: Mapped[list["AuthSession"]] = relationship(
         "AuthSession", back_populates="user", cascade="all, delete-orphan"

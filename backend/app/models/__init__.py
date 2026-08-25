@@ -32,6 +32,8 @@ from .enums import (
 )
 from .order import Order
 from .order_item import OrderItem
+from .orchestration_run import OrchestrationRun
+from .orchestration_run_event import OrchestrationRunEvent
 from .payment import Payment
 from .product import Product
 from .product_image import ProductImage
@@ -60,6 +62,8 @@ __all__ = [
     "Order",
     "OrderItem",
     "OrderStatus",
+    "OrchestrationRun",
+    "OrchestrationRunEvent",
     "Payment",
     "PaymentMethod",
     "PaymentStatus",
