@@ -5,7 +5,7 @@ the reusable workflow layer that future API, voice, and vision entry points use.
 """
 
 from .orchestrator import ShoppingOrchestrator
-from .response import ResponseWriterAgent
+from .brand_voice import BrandVoiceAgent
 from .state import ShoppingAgentState, initial_shopping_state
 
-__all__ = ["ShoppingAgentState", "ShoppingOrchestrator", "ResponseWriterAgent", "initial_shopping_state"]
+__all__ = ["BrandVoiceAgent", "ShoppingAgentState", "ShoppingOrchestrator", "initial_shopping_state"]

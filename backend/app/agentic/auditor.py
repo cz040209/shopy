@@ -23,6 +23,8 @@ class ShoppingAuditor:
     async def audit(self, state: dict[str, Any], tools: ToolExecutor | None) -> AuditResult:
         errors: list[dict[str, str]] = []
         selected = state.get("selected_products", [])
+        if state.get("response_source") in {"structured_llm_stock_v1", "structured_llm_brand_voice_stock_v1"}:
+            return await self._audit_stock_response(state, tools)
         if tools is None and selected:
             errors.append({"code": "tool_registry_unavailable", "message": "Current catalog facts cannot be verified."})
             return AuditResult(status="fail", errors=errors, total=None)
@@ -65,6 +67,36 @@ class ShoppingAuditor:
         self._validate_attachments(state, verified_products, errors)
         return AuditResult(status="pass" if not errors else "fail", errors=errors, total=str(total))
 
+    async def _audit_stock_response(self, state: dict[str, Any], tools: ToolExecutor | None) -> AuditResult:
+        errors: list[dict[str, str]] = []
+        claims = state.get("response_claims", [])
+        if tools is None:
+            errors.append({"code": "tool_registry_unavailable", "message": "Current stock facts cannot be verified."})
+            return AuditResult(status="fail", errors=errors, total="0")
+        if not isinstance(state.get("final_response"), str) or not state["final_response"].strip():
+            errors.append({"code": "missing_final_response", "message": "The response renderer did not produce a final response."})
+        if not isinstance(claims, list) or not claims:
+            errors.append({"code": "missing_stock_claims", "message": "The stock response contains no verified products."})
+            return AuditResult(status="fail", errors=errors, total="0")
+        for claim in claims:
+            try:
+                product_id = UUID(str(claim["id"]))
+                stock = await tools.execute("check_stock", {"product_id": str(product_id)})
+            except Exception:
+                errors.append({"code": "stock_not_verified", "message": "A stock result could not be verified."})
+                continue
+            expected = {"available_quantity": int(stock["available_quantity"]), "in_stock": bool(stock["in_stock"])}
+            if any(claim.get(key) != value for key, value in expected.items()):
+                errors.append({"code": "unsupported_stock_claim", "message": "A response stock claim differs from current catalog facts."})
+            name = str(claim.get("name", ""))
+            expected_line = (
+                f"{name}: {'in stock' if expected['in_stock'] else 'out of stock'} "
+                f"({expected['available_quantity']} available)"
+            )
+            if expected_line not in state["final_response"]:
+                errors.append({"code": "missing_response_product_reference", "message": "A verified product is missing from the response text."})
+        return AuditResult(status="pass" if not errors else "fail", errors=errors, total="0")
+
     @staticmethod
     def _validate_response_claims(
         state: dict[str, Any],
@@ -74,7 +106,7 @@ class ShoppingAuditor:
         """Accept only the structured writer and exact verified facts."""
         if state.get("response_source") is None:
             return
-        if state.get("response_source") != "structured_llm_catalog_v1":
+        if state.get("response_source") not in {"structured_llm_catalog_v1", "structured_llm_brand_voice_v1"}:
             errors.append({"code": "untrusted_response_source", "message": "The response was not created by the verified renderer."})
             return
         if not isinstance(state.get("final_response"), str) or not state["final_response"].strip():
@@ -109,6 +141,12 @@ class ShoppingAuditor:
             for claim in claims
             if isinstance(claim, dict) and "price" in claim
         }
+        for item in state.get("tool_context", []):
+            if not isinstance(item, dict) or item.get("tool") != "calculate_bundle_total":
+                continue
+            result = item.get("result")
+            if isinstance(result, dict) and "subtotal" in result:
+                expected_amounts.add(Decimal(str(result["subtotal"])).quantize(Decimal("0.01")))
         for amount in ShoppingAuditor._money_pattern.findall(state.get("final_response", "")):
             try:
                 parsed = Decimal(amount.replace(",", "")).quantize(Decimal("0.01"))

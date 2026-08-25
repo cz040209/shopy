@@ -9,11 +9,11 @@ from app.ai_logging import log_ai_event
 from app.config import settings
 
 from .auditor import ShoppingAuditor
+from .brand_voice import BrandVoiceAgent
 from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import GeminiLangChainChatModel
 from .planner import NeedPlannerAgent
 from .observability import OrchestrationRecorder
-from .response import ResponseWriterAgent
 from .state import ShoppingAgentState, initial_shopping_state
 from .tools import CommerceToolRegistry, ToolExecutionError
 
@@ -36,10 +36,10 @@ class ShoppingOrchestrator:
         recorder: OrchestrationRecorder | None = None,
     ) -> None:
         shared_model = model or GeminiLangChainChatModel(timeout_seconds=settings.agent_model_timeout_seconds)
-        self.intent_agent = IntentMissionAgent(shared_model)
-        self.need_planner = NeedPlannerAgent()
-        self.response_writer = ResponseWriterAgent(shared_model)
         self.tool_registry = tool_registry
+        self.intent_agent = IntentMissionAgent(shared_model, tools=tool_registry.tools if tool_registry else ())
+        self.need_planner = NeedPlannerAgent()
+        self.brand_voice = BrandVoiceAgent(shared_model)
         self.auditor = auditor or ShoppingAuditor()
         self.max_repairs = max_repairs
         self.max_graph_iterations = max_graph_iterations
@@ -51,7 +51,7 @@ class ShoppingOrchestrator:
         workflow.add_node("intent_agent", self._intent_node)
         workflow.add_node("need_planner", self._need_planner_node)
         workflow.add_node("product_search", self._product_search_node)
-        workflow.add_node("response_writer", self._response_writer_node)
+        workflow.add_node("brand_voice", self._brand_voice_node)
         workflow.add_node("audit", self._audit_node)
         workflow.add_node("repair", self._repair_node)
         workflow.add_edge(START, "intent_agent")
@@ -59,12 +59,12 @@ class ShoppingOrchestrator:
         workflow.add_conditional_edges(
             "need_planner",
             self._after_planner,
-            {"product_search": "product_search", "response_writer": "response_writer"},
+            {"product_search": "product_search", "brand_voice": "brand_voice"},
         )
-        workflow.add_edge("product_search", "response_writer")
-        workflow.add_edge("response_writer", "audit")
+        workflow.add_edge("product_search", "brand_voice")
+        workflow.add_edge("brand_voice", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "end": END})
-        workflow.add_edge("repair", "response_writer")
+        workflow.add_edge("repair", "brand_voice")
         return workflow.compile()
 
     def _event(self, state: ShoppingAgentState, node: str) -> dict[str, int]:
@@ -81,7 +81,7 @@ class ShoppingOrchestrator:
             inputs["mission"] = state.get("mission", {})
         elif node == "product_search":
             inputs["goal"] = state.get("goal")
-        elif node == "response_writer":
+        elif node == "brand_voice":
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
             inputs["selected_products"] = state.get("selected_products", [])
@@ -90,13 +90,25 @@ class ShoppingOrchestrator:
         self.recorder.record("node_completed", node_name=node, input_data=inputs, output_data=output)
 
     def _after_planner(self, state: ShoppingAgentState) -> str:
-        return "product_search" if self.response_writer.is_shopping_mission(state.get("mission_type")) else "response_writer"
+        return "product_search" if self._requires_catalog_lookup(state) else "brand_voice"
+
+    def _requires_catalog_lookup(self, state: ShoppingAgentState) -> bool:
+        """Keep catalog-fact requests on the tool-backed path.
+
+        The model's classification is useful context, but it is not the sole
+        authorization for a read-only catalog lookup. This catches a safe,
+        common failure mode where a stock request is mislabeled as a generic
+        information request.
+        """
+        return bool(self._requested_actions(state))
 
     async def _intent_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         mission = await self.intent_agent.interpret(state["user_request"])
         output = {
             **self._event(state, "intent_agent"),
-            "mission_type": mission.mission_type, "goal": mission.goal, "budget": mission.budget,
+            "mission_type": mission.mission_type, "goal": mission.goal, "catalog_query": mission.catalog_query,
+            "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions, "budget": mission.budget,
+            "bundle_items": [item.model_dump() for item in mission.bundle_items],
             "preferences": mission.preferences, "constraints": mission.constraints,
             "owned_items": mission.owned_items, "priorities": mission.priorities,
             "mission": mission.model_dump(),
@@ -112,33 +124,193 @@ class ShoppingOrchestrator:
         return output
 
     async def _product_search_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        result: dict[str, Any] = {**self._event(state, "product_search"), "next_stage": "response_writer"}
+        result: dict[str, Any] = {**self._event(state, "product_search"), "next_stage": "brand_voice"}
         if self.tool_registry is None:
             self._record_node(state, "product_search", result)
             return result
+        actions = self._requested_actions(state)
         try:
-            search = await self.tool_registry.execute("search_products", {"query": state["goal"] or state["user_request"], "limit": 8})
+            # A stock result is checked once here and once by the final audit.
+            # Reserve calls for both phases so a broad search cannot exhaust the
+            # request's tool budget before its answer is independently verified.
+            limit = self._stock_search_limit() if "check_stock" in actions else 8
+            search = await self.tool_registry.execute("search_products", {"query": self._catalog_query(state), "limit": limit})
         except ToolExecutionError as error:
             output = {**result, "errors": [*state["errors"], str(error)]}
             self._record_node(state, "product_search", output)
             return output
         candidates = search["products"]
+        if "check_stock" in actions:
+            stock_results: list[dict[str, Any]] = []
+            tool_results = [*state["tool_results"], {"tool": "search_products", "result_count": len(candidates)}]
+            for candidate in candidates:
+                try:
+                    stock = await self.tool_registry.execute("check_stock", {"product_id": str(candidate["id"])})
+                except ToolExecutionError as error:
+                    tool_results.append({"tool": "check_stock", "product_id": str(candidate["id"]), "error": str(error)})
+                    continue
+                stock_results.append({
+                    "id": str(candidate["id"]), "name": str(candidate["name"]), "brand": str(candidate["brand"]),
+                    "available_quantity": int(stock["available_quantity"]), "in_stock": bool(stock["in_stock"]),
+                })
+                tool_results.append({"tool": "check_stock", "product_id": str(candidate["id"]), "available_quantity": int(stock["available_quantity"])})
+            extra_actions = [action for action in actions if action not in {"search_products", "check_stock"}]
+            tool_context = await self._execute_requested_actions(extra_actions, candidates, state)
+            output = {
+                **result, "candidate_products": candidates, "stock_results": stock_results,
+                "tool_results": tool_results, "tool_context": tool_context,
+            }
+            self._record_node(state, "product_search", output)
+            return output
+        tool_context = await self._execute_requested_actions(actions, candidates, state)
         output = {
             **result,
             "candidate_products": candidates,
-            "selected_products": self.response_writer.select_catalog_products({**state, "candidate_products": candidates}),
+            "selected_products": (
+                self.brand_voice.select_catalog_products({**state, "candidate_products": candidates})
+                if self._should_recommend_products(actions) else []
+            ),
             "tool_results": [*state["tool_results"], {"tool": "search_products", "result_count": len(candidates)}],
+            "tool_context": tool_context,
         }
         self._record_node(state, "product_search", output)
         return output
 
-    async def _response_writer_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+    @staticmethod
+    def _is_stock_check(state: ShoppingAgentState) -> bool:
+        if (state.get("mission_type") or "").strip().lower() == "stock_check":
+            return True
+        request = state["user_request"].lower()
+        return any(marker in request for marker in ("stock", "in stock", "available", "availability", "sold out", "inventory"))
+
+    def _requested_actions(self, state: ShoppingAgentState) -> list[str]:
+        """Combine the model plan with conservative deterministic fallbacks."""
+        planned = [str(action) for action in state.get("requested_actions", [])]
+        request = state["user_request"].lower()
+        inferred: list[tuple[str, tuple[str, ...]]] = [
+            ("check_stock", ("stock", "in stock", "available", "availability", "sold out", "inventory")),
+            ("get_product_reviews", ("review", "rating", "feedback")),
+            ("get_seller", ("seller", "vendor", "store")),
+            ("compare_products", ("compare", " versus ", " vs ")),
+            ("calculate_bundle_total", ("bundle total", "total cost", "cart total", "total price")),
+            ("get_product", ("product details", "specification", "specs", "product info")),
+            ("search_products", ("find ", "recommend", "show me", "looking for", "search")),
+        ]
+        for action, markers in inferred:
+            if any(marker in request for marker in markers):
+                planned.append(action)
+        if not planned and (
+            state.get("catalog_query")
+            or state.get("catalog_queries")
+            or self._is_stock_check(state)
+            or self.brand_voice.is_shopping_mission(state.get("mission_type"))
+        ):
+            planned.append("search_products")
+        # Search is the safe identity-resolution step for every product-specific
+        # operation when the user has supplied a name rather than a UUID.
+        if planned and "search_products" not in planned:
+            planned.insert(0, "search_products")
+        return list(dict.fromkeys(planned))
+
+    async def _execute_requested_actions(
+        self, actions: list[str], candidates: list[dict[str, Any]], state: ShoppingAgentState
+    ) -> list[dict[str, Any]]:
+        if self.tool_registry is None:
+            return []
+        context: list[dict[str, Any]] = []
+        selected = candidates[:4]
+
+        async def execute(name: str, arguments: dict[str, Any]) -> None:
+            if self.tool_registry is None or self.tool_registry.remaining_calls < 1:
+                return
+            try:
+                context.append({"tool": name, "result": await self.tool_registry.execute(name, arguments)})
+            except ToolExecutionError as error:
+                context.append({"tool": name, "error": str(error)})
+
+        if "get_product" in actions and selected:
+            await execute("get_product", {"product_id": str(selected[0]["id"])})
+        if "get_product_reviews" in actions:
+            for product in selected[:2]:
+                await execute("get_product_reviews", {"product_id": str(product["id"])})
+        if "get_seller" in actions:
+            seller_ids = list(dict.fromkeys(str(product["seller_id"]) for product in selected))
+            for seller_id in seller_ids[:2]:
+                await execute("get_seller", {"seller_id": seller_id})
+        if "compare_products" in actions and len(selected) >= 2:
+            await execute("compare_products", {"product_ids": [str(product["id"]) for product in selected[:4]]})
+        if "calculate_bundle_total" in actions:
+            bundle_items = state.get("bundle_items", [])
+            resolved_items: list[dict[str, Any]] = []
+            for item in bundle_items:
+                if self.tool_registry.remaining_calls < 2:
+                    break
+                try:
+                    search = await self.tool_registry.execute("search_products", {"query": str(item["query"]), "limit": 8})
+                except ToolExecutionError as error:
+                    context.append({"tool": "search_products", "error": str(error)})
+                    continue
+                products = search["products"]
+                if not products:
+                    context.append({"tool": "search_products", "result": {"products": []}})
+                    continue
+                product = self._best_catalog_match(products, str(item["query"]))
+                resolved_items.append({"product_id": str(product["id"]), "quantity": int(item.get("quantity", 1))})
+                context.append({"tool": "search_products", "result": {"products": products}})
+            if resolved_items:
+                await execute("calculate_bundle_total", {"items": resolved_items})
+            elif selected:
+                # Preserve the previous useful fallback for an underspecified bundle.
+                await execute("calculate_bundle_total", {"items": [{"product_id": str(product["id"]), "quantity": 1} for product in selected[:3]]})
+        return context
+
+    @staticmethod
+    def _best_catalog_match(products: list[dict[str, Any]], query: str) -> dict[str, Any]:
+        """Resolve a named bundle item despite the catalog's broad OR search."""
+        normalized_query = query.casefold().strip()
+        terms = [term for term in normalized_query.replace("-", " ").split() if term]
+
+        def score(product: dict[str, Any]) -> tuple[int, int]:
+            name = str(product.get("name", "")).casefold()
+            brand = str(product.get("brand", "")).casefold()
+            exact = 100 if name == normalized_query else 0
+            phrase = 20 if normalized_query in name or normalized_query in brand else 0
+            term_matches = sum(term in name or term in brand for term in terms)
+            return exact + phrase + term_matches, -len(name)
+
+        return max(products, key=score)
+
+    @staticmethod
+    def _catalog_query(state: ShoppingAgentState) -> str:
+        queries = [str(item).strip() for item in state.get("catalog_queries", []) if str(item).strip()]
+        if queries:
+            return " ".join(queries)
+        query = (state.get("catalog_query") or "").strip()
+        if query:
+            return query
+        preferences = [str(item).strip() for item in state.get("preferences", []) if str(item).strip()]
+        if preferences:
+            return " ".join(preferences)
+        return state.get("goal") or state["user_request"]
+
+    def _stock_search_limit(self) -> int:
+        if self.tool_registry is None:
+            return 1
+        # search + one check per match + one audit check per reported match
+        return max(1, min(8, (self.tool_registry.max_calls - 1) // 2))
+
+    @staticmethod
+    def _should_recommend_products(actions: list[str]) -> bool:
+        """Only catalog-discovery requests produce recommendation cards/IDs."""
+        return set(actions) <= {"search_products"}
+
+    async def _brand_voice_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         output = {
-            **self._event(state, "response_writer"),
-            **(await self.response_writer.compose(state)),
+            **self._event(state, "brand_voice"),
+            **(await self.brand_voice.compose(state)),
             "next_stage": "audit",
         }
-        self._record_node(state, "response_writer", output)
+        self._record_node(state, "brand_voice", output)
         return output
 
     async def _audit_node(self, state: ShoppingAgentState) -> dict[str, Any]:
@@ -164,7 +336,7 @@ class ShoppingOrchestrator:
             "selected_products": [],
             "response_claims": [],
             "final_response": None,
-            "next_stage": "response_writer",
+            "next_stage": "brand_voice",
         }
         self._record_node(state, "repair", output)
         return output

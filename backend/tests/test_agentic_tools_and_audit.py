@@ -38,16 +38,67 @@ class ToolProductMissionModel:
         return AIMessage(content='{"mission_type":"product_search","goal":"Tool Product","budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
 
 
+class StockCheckMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            results = payload["verified_stock_results"]
+            response = "\n".join(
+                f"{item['name']}: {'in stock' if item['in_stock'] else 'out of stock'} "
+                f"({item['available_quantity']} available)"
+                for item in results
+            )
+            return AIMessage(content=json.dumps({"response": response, "product_ids": [item["id"] for item in results]}))
+        # Deliberately use the historical wrong label to prove that the
+        # deterministic route guard still executes the required tools.
+        return AIMessage(content='{"mission_type":"information_request","goal":"check stock","catalog_query":"spf 50 sunscreen","budget":null,"preferences":["spf 50 sunscreen"],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
+class CatalogActionMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "Here are the verified catalog details." if not products else "\n".join(f"{product['name']} — RM {product['price']}" for product in products),
+                "product_ids": [product["id"] for product in products],
+            }))
+        return AIMessage(content='{"mission_type":"product_search","goal":"Tool Product","catalog_query":"Tool Product","catalog_queries":["Tool Product"],"requested_actions":["get_product","get_product_reviews","get_seller","compare_products","calculate_bundle_total"],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
+class BundleMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "Here is the verified bundle total." if not products else "\n".join(f"{product['name']} — RM {product['price']}" for product in products),
+                "product_ids": [product["id"] for product in products],
+            }))
+        return AIMessage(content='{"mission_type":"product_search","goal":"calculate a bundle total","catalog_query":"tool","catalog_queries":["tool"],"requested_actions":["calculate_bundle_total"],"bundle_items":[{"query":"Basic Tool","quantity":2},{"query":"Premium Tool","quantity":3}],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
+class SellerMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        if "response-writing agent" in str(input[0].content):
+            payload = json.loads(str(input[1].content))
+            seller = payload["verified_tool_results"][0]["result"]
+            return AIMessage(content=json.dumps({
+                "response": f"Nova Gaming Laptop is sold by {seller['name']}.", "product_ids": [],
+            }))
+        return AIMessage(content='{"mission_type":"information_request","goal":"find the seller","catalog_query":"nova gaming laptop","catalog_queries":["nova gaming laptop"],"requested_actions":["get_seller"],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
 class AlwaysFailAuditor:
     async def audit(self, state, tools):
         return {"status": "fail", "errors": [{"code": "forced_failure", "message": "test"}], "total": "0"}
 
 
-def catalog_product(db_session, *, price=Decimal("100.00"), inventory=5, description="Safe catalog data.", image_url: str | None = None):
+def catalog_product(db_session, *, name="Tool Product", price=Decimal("100.00"), inventory=5, description="Safe catalog data.", image_url: str | None = None):
     seller = Seller(name="Tool Seller", slug="tool-seller", status=SellerStatus.ACTIVE)
     category = Category(name="Gaming", slug="gaming")
     product = Product(
-        seller=seller, category=category, sku="TOOL-001", slug="tool-product", name="Tool Product",
+        seller=seller, category=category, sku="TOOL-001", slug="tool-product", name=name,
         brand="Tool Brand", description=description, price=price, status=ProductStatus.ACTIVE,
         inventory_quantity=inventory, attributes={"connection": "wireless"},
     )
@@ -130,7 +181,7 @@ async def test_orchestrator_returns_only_audited_catalog_facts(db_session):
     result = await ShoppingOrchestrator(ToolProductMissionModel(), tool_registry=registry).ainvoke("Recommend a tool product")
 
     assert result["audit_result"]["status"] == "pass"
-    assert result["response_source"] == "structured_llm_catalog_v1"
+    assert result["response_source"] == "structured_llm_brand_voice_v1"
     assert str(product.id) in [item["id"] for item in result["selected_products"]]
     assert "Tool Product — RM 125.00" in result["final_response"]
     assert result["response_claims"] == [{
@@ -142,6 +193,84 @@ async def test_orchestrator_returns_only_audited_catalog_facts(db_session):
         "price": "125.00", "currency": "MYR", "image_url": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e",
         "image_alt_text": product.name,
     }]
+
+
+@pytest.mark.anyio
+async def test_stock_request_searches_then_checks_and_reports_current_stock(db_session):
+    product = catalog_product(db_session, name="SunGuard SPF 50 Sunscreen", inventory=0)
+    registry = CommerceToolRegistry(db_session, "stock-request", max_calls=20)
+
+    result = await ShoppingOrchestrator(StockCheckMissionModel(), tool_registry=registry).ainvoke(
+        "I want to check stock of SPF 50 sunscreen"
+    )
+
+    assert result["audit_result"]["status"] == "pass"
+    assert result["stock_results"] == [{
+        "id": str(product.id), "name": product.name, "brand": product.brand,
+        "available_quantity": 0, "in_stock": False,
+    }]
+    assert [item["tool"] for item in result["tool_results"]] == ["search_products", "check_stock"]
+    assert product.name in result["final_response"]
+    assert "0 available" in result["final_response"]
+
+
+@pytest.mark.anyio
+async def test_orchestrator_executes_each_planned_catalog_action(db_session):
+    first = catalog_product(db_session)
+    second = Product(
+        seller=first.seller, category=first.category, sku="TOOL-002", slug="tool-product-plus",
+        name="Tool Product Plus", brand="Tool Brand", description="Another safe catalog item.",
+        price=Decimal("150.00"), status=ProductStatus.ACTIVE, inventory_quantity=2,
+    )
+    db_session.add(second)
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "catalog-actions", max_calls=20)
+
+    result = await ShoppingOrchestrator(CatalogActionMissionModel(), tool_registry=registry).ainvoke(
+        "Show product details, reviews, seller, compare these products, and calculate the bundle total."
+    )
+
+    assert result["audit_result"]["status"] == "pass"
+    assert [item["tool"] for item in result["tool_context"]] == [
+        "get_product", "get_product_reviews", "get_product_reviews", "get_seller",
+        "compare_products", "calculate_bundle_total",
+    ]
+
+
+@pytest.mark.anyio
+async def test_bundle_action_resolves_each_item_and_preserves_requested_quantities(db_session):
+    first = catalog_product(db_session, name="Basic Tool", price=Decimal("100.00"))
+    second = Product(
+        seller=first.seller, category=first.category, sku="PREMIUM-TOOL", slug="premium-tool",
+        name="Premium Tool", brand="Tool Brand", description="A premium safe catalog item.",
+        price=Decimal("150.00"), status=ProductStatus.ACTIVE, inventory_quantity=3,
+    )
+    db_session.add(second)
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "bundle-action", max_calls=20)
+
+    result = await ShoppingOrchestrator(BundleMissionModel(), tool_registry=registry).ainvoke(
+        "What is the total for two Basic Tools and three Premium Tools?"
+    )
+
+    bundle = next(item["result"] for item in result["tool_context"] if item["tool"] == "calculate_bundle_total")
+    assert bundle["subtotal"] == "650.00"
+    assert [item["quantity"] for item in bundle["items"]] == [2, 3]
+
+
+@pytest.mark.anyio
+async def test_seller_lookup_uses_brand_voice_without_forcing_recommendation_ids(db_session):
+    product = catalog_product(db_session, name="Nova Gaming Laptop")
+    registry = CommerceToolRegistry(db_session, "seller-lookup", max_calls=20)
+
+    result = await ShoppingOrchestrator(SellerMissionModel(), tool_registry=registry).ainvoke(
+        "Who is the seller of Nova Gaming Laptop?"
+    )
+
+    assert result["audit_result"]["status"] == "pass"
+    assert result["selected_products"] == []
+    assert result["tool_context"][0]["tool"] == "get_seller"
+    assert result["final_response"] == "Nova Gaming Laptop is sold by Tool Seller."
 
 
 @pytest.mark.anyio

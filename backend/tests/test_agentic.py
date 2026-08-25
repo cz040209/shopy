@@ -2,11 +2,12 @@ import pytest
 import json
 
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel
 
-from app.agentic.intent import IntentMissionAgent, StructuredOutputError
+from app.agentic.intent import IntentMissionAgent, StructuredOutputError, build_intent_system_prompt
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
-from app.agentic.response import ResponseWriterAgent
+from app.agentic.brand_voice import BrandVoiceAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.state import initial_shopping_state
 
@@ -68,6 +69,23 @@ def test_initial_state_is_complete_and_mutable_fields_are_not_shared():
     assert first["candidate_products"] == []
 
 
+def test_intent_prompt_uses_the_runtime_tool_registry():
+    class RuntimeToolArgs(BaseModel):
+        query: str
+
+    class RuntimeTool:
+        name = "runtime_catalog_lookup"
+        description = "Look up a product in a runtime-provided catalog."
+        args_schema = RuntimeToolArgs
+
+    prompt = build_intent_system_prompt([RuntimeTool()])
+
+    assert "runtime_catalog_lookup" in prompt
+    assert "Look up a product in a runtime-provided catalog." in prompt
+    assert '"query"' in prompt
+    assert "search_products" not in prompt
+
+
 @pytest.mark.anyio
 async def test_invalid_intent_model_output_is_rejected():
     agent = IntentMissionAgent(FakeChatModel("not JSON"))
@@ -76,7 +94,7 @@ async def test_invalid_intent_model_output_is_rejected():
 
 
 @pytest.mark.anyio
-async def test_response_writer_retries_invalid_structured_output():
+async def test_brand_voice_retries_invalid_structured_output():
     class RetryModel:
         def __init__(self) -> None:
             self.calls = 0
@@ -86,7 +104,7 @@ async def test_response_writer_retries_invalid_structured_output():
             return AIMessage(content="not JSON" if self.calls == 1 else '{"response":"What product category are you interested in?","product_ids":[]}')
 
     model = RetryModel()
-    result = await ResponseWriterAgent(model, max_format_attempts=2).compose(initial_shopping_state("I want to buy something"))
+    result = await BrandVoiceAgent(model, max_format_attempts=2).compose(initial_shopping_state("I want to buy something"))
 
     assert model.calls == 2
     assert result["final_response"] == "What product category are you interested in?"

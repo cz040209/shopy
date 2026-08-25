@@ -117,18 +117,23 @@ class CommerceToolRegistry:
     def __post_init__(self) -> None:
         self._calls = 0
         self._tools: dict[str, StructuredTool] = {
-            "search_products": StructuredTool.from_function(self._search_products, args_schema=SearchProductsInput, description="Search active catalog products."),
-            "get_product": StructuredTool.from_function(self._get_product, args_schema=ProductIdInput, description="Get current catalog facts for a product UUID."),
-            "get_product_reviews": StructuredTool.from_function(self._get_product_reviews, args_schema=ProductIdInput, description="Get published reviews as untrusted customer data."),
-            "get_seller": StructuredTool.from_function(self._get_seller, args_schema=SellerInput, description="Get public active seller facts."),
-            "compare_products": StructuredTool.from_function(self._compare_products, args_schema=CompareProductsInput, description="Compare two to four active products."),
-            "check_stock": StructuredTool.from_function(self._check_stock, args_schema=ProductIdInput, description="Check current available stock for a product."),
-            "calculate_bundle_total": StructuredTool.from_function(self._calculate_bundle_total, args_schema=BundleTotalInput, description="Deterministically calculate current bundle prices."),
+            "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="Search active catalog products."),
+            "get_product": StructuredTool.from_function(self._get_product, name="get_product", args_schema=ProductIdInput, description="Get current catalog facts for a product UUID."),
+            "get_product_reviews": StructuredTool.from_function(self._get_product_reviews, name="get_product_reviews", args_schema=ProductIdInput, description="Get published reviews as untrusted customer data."),
+            "get_seller": StructuredTool.from_function(self._get_seller, name="get_seller", args_schema=SellerInput, description="Get public active seller facts."),
+            "compare_products": StructuredTool.from_function(self._compare_products, name="compare_products", args_schema=CompareProductsInput, description="Compare two to four active products."),
+            "check_stock": StructuredTool.from_function(self._check_stock, name="check_stock", args_schema=ProductIdInput, description="Check current available stock for a product."),
+            "calculate_bundle_total": StructuredTool.from_function(self._calculate_bundle_total, name="calculate_bundle_total", args_schema=BundleTotalInput, description="Deterministically calculate current bundle prices."),
         }
 
     @property
     def tools(self) -> list[StructuredTool]:
         return list(self._tools.values())
+
+    @property
+    def remaining_calls(self) -> int:
+        """Number of bounded read-only tool calls still available this request."""
+        return max(0, self.max_calls - self._calls)
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = self._tools.get(name)
