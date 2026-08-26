@@ -53,7 +53,7 @@ class ShoppingOrchestrator:
         self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
         self.brand_voice = BrandVoiceAgent(shared_model)
-        self.auditor = auditor or ShoppingAuditor()
+        self.auditor = auditor or ShoppingAuditor(shared_model)
         self.max_repairs = max_repairs
         self.max_graph_iterations = max_graph_iterations
         self.recorder = recorder
@@ -68,8 +68,10 @@ class ShoppingOrchestrator:
         workflow.add_node("review_intelligence", self._review_node)
         workflow.add_node("compatibility", self._compatibility_node)
         workflow.add_node("bundle_optimizer", self._bundle_optimizer_node)
-        workflow.add_node("brand_voice", self._brand_voice_node)
+        workflow.add_node("response_draft", self._response_draft_node)
         workflow.add_node("audit", self._audit_node)
+        workflow.add_node("brand_voice", self._brand_voice_node)
+        workflow.add_node("final_audit", self._final_audit_node)
         workflow.add_node("repair", self._repair_node)
         workflow.add_conditional_edges(START, self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
         workflow.add_edge("vision", "intent_agent")
@@ -77,15 +79,17 @@ class ShoppingOrchestrator:
         workflow.add_conditional_edges(
             "need_planner",
             self._after_planner,
-            {"product_search": "product_search", "brand_voice": "brand_voice"},
+            {"product_search": "product_search", "response_draft": "response_draft"},
         )
         workflow.add_edge("product_search", "review_intelligence")
         workflow.add_edge("review_intelligence", "compatibility")
         workflow.add_edge("compatibility", "bundle_optimizer")
-        workflow.add_edge("bundle_optimizer", "brand_voice")
-        workflow.add_edge("brand_voice", "audit")
-        workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "end": END})
-        workflow.add_edge("repair", "brand_voice")
+        workflow.add_edge("bundle_optimizer", "response_draft")
+        workflow.add_edge("response_draft", "audit")
+        workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "brand_voice": "brand_voice", "end": END})
+        workflow.add_edge("brand_voice", "final_audit")
+        workflow.add_conditional_edges("final_audit", self._after_final_audit, {"repair": "repair", "end": END})
+        workflow.add_edge("repair", "response_draft")
         return workflow.compile()
 
     def _event(self, state: ShoppingAgentState, node: str) -> dict[str, int]:
@@ -110,7 +114,7 @@ class ShoppingOrchestrator:
             inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
         elif node == "bundle_optimizer":
             inputs["required_categories"] = state.get("required_categories", [])
-        elif node == "brand_voice":
+        elif node in {"response_draft", "brand_voice", "final_audit"}:
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
             inputs["selected_products"] = state.get("selected_products", [])
@@ -119,7 +123,7 @@ class ShoppingOrchestrator:
         self.recorder.record("node_completed", node_name=node, input_data=inputs, output_data=output)
 
     def _after_planner(self, state: ShoppingAgentState) -> str:
-        return "product_search" if self._requires_catalog_lookup(state) else "brand_voice"
+        return "product_search" if self._requires_catalog_lookup(state) else "response_draft"
 
     @staticmethod
     def _route_start(state: ShoppingAgentState) -> str:
@@ -390,11 +394,20 @@ class ShoppingOrchestrator:
         """Only catalog-discovery requests produce recommendation cards/IDs."""
         return set(actions) <= {"search_products"}
 
+    async def _response_draft_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {
+            **self._event(state, "response_draft"),
+            **(await self.brand_voice.compose(state)),
+            "next_stage": "audit",
+        }
+        self._record_node(state, "response_draft", output)
+        return output
+
     async def _brand_voice_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         output = {
             **self._event(state, "brand_voice"),
-            **(await self.brand_voice.compose(state)),
-            "next_stage": "audit",
+            **(await self.brand_voice.polish(state)),
+            "next_stage": "final_audit",
         }
         self._record_node(state, "brand_voice", output)
         return output
@@ -407,6 +420,18 @@ class ShoppingOrchestrator:
         return output
 
     def _after_audit(self, state: ShoppingAgentState) -> str:
+        if state["audit_result"] and state["audit_result"].get("status") == "pass":
+            return "brand_voice"
+        return "repair" if state["repair_count"] < self.max_repairs else "end"
+
+    async def _final_audit_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        audit = await self.auditor.audit(state, self.tool_registry)
+        log_ai_event("agent.final_audit", request_id=state["run_id"], status=audit["status"], error_codes=[item["code"] for item in audit["errors"]])
+        output = {**self._event(state, "final_audit"), "audit_result": dict(audit)}
+        self._record_node(state, "final_audit", output)
+        return output
+
+    def _after_final_audit(self, state: ShoppingAgentState) -> str:
         if state["audit_result"] and state["audit_result"].get("status") == "pass":
             return "end"
         return "repair" if state["repair_count"] < self.max_repairs else "end"
@@ -422,7 +447,7 @@ class ShoppingOrchestrator:
             "selected_products": [],
             "response_claims": [],
             "final_response": None,
-            "next_stage": "brand_voice",
+            "next_stage": "response_draft",
         }
         self._record_node(state, "repair", output)
         return output

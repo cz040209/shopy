@@ -98,7 +98,7 @@ class GraphModel:
 async def test_image_mode_routes_vision_before_intent():
     result = await ShoppingOrchestrator(GraphModel(), vision_agent=GraphVisionAgent()).ainvoke("Shop this room", state_overrides={"vision_input": {"image_bytes": b"x", "mime_type": "image/png", "mode": "shop_room"}})
     assert result["vision_context"]["detected_objects"] == ["desk"]
-    assert result["graph_iterations"] == 5
+    assert result["graph_iterations"] == 7
 
 
 @pytest.mark.anyio

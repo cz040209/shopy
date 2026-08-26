@@ -112,12 +112,29 @@ async def test_brand_voice_retries_invalid_structured_output():
 
 
 @pytest.mark.anyio
+async def test_brand_voice_polishes_an_audited_draft_with_a_run_specific_strategy():
+    class PolishModel:
+        async def ainvoke(self, input, **kwargs):
+            assert "final brand-voice editor" in str(input[0].content)
+            payload = json.loads(str(input[1].content))
+            assert payload["variation"]["variation_token"] == "un-token"
+            return AIMessage(content='{"response":"Here is the same verified answer in fresher wording."}')
+
+    state = initial_shopping_state("Find a desk lamp")
+    state.update({"run_id": "example-run-token", "final_response": "Verified answer.", "response_claims": []})
+
+    result = await BrandVoiceAgent(PolishModel()).polish(state)
+
+    assert result["final_response"] == "Here is the same verified answer in fresher wording."
+
+
+@pytest.mark.anyio
 async def test_orchestrator_routes_intent_to_planner_and_audit():
     orchestrator = ShoppingOrchestrator(FakeChatModel(MISSION_JSON))
     result = await orchestrator.ainvoke("Build me a gaming setup under RM4,000.")
 
     assert result["goal"] == "gaming setup"
     assert result["required_categories"]
-    assert result["next_stage"] == "audit"
+    assert result["next_stage"] == "final_audit"
     assert result["audit_result"]["status"] == "pass"
     assert result["final_response"] is not None

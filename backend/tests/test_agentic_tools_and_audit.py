@@ -118,6 +118,20 @@ class AlwaysFailAuditor:
         return {"status": "fail", "errors": [{"code": "forced_failure", "message": "test"}], "total": "0"}
 
 
+class UnsupportedClaimAuditModel:
+    async def ainvoke(self, input, **kwargs):
+        if "final response auditor" in str(input[0].content):
+            return AIMessage(content=json.dumps({
+                "verdict": "fail",
+                "findings": [{
+                    "code": "unsupported_prose_claim",
+                    "message": "Waterproofing is not supported by the verified evidence.",
+                    "excerpt": "This product is waterproof.",
+                }],
+            }))
+        return AIMessage(content=MISSION_JSON)
+
+
 def catalog_product(db_session, *, name="Tool Product", price=Decimal("100.00"), inventory=5, description="Safe catalog data.", image_url: str | None = None):
     seller = Seller(name="Tool Seller", slug="tool-seller", status=SellerStatus.ACTIVE)
     category = Category(name="Gaming", slug="gaming")
@@ -178,6 +192,32 @@ async def test_auditor_rejects_invalid_ids_stock_budget_and_unsupported_claims(d
     assert any(error["code"] == "insufficient_stock" for error in no_stock["errors"])
     assert any(error["code"] == "budget_exceeded" for error in over_budget["errors"])
     assert any(error["code"] == "unsupported_product_claim" for error in hallucinated["errors"])
+
+
+@pytest.mark.anyio
+async def test_auditor_rejects_an_unsupported_prose_claim_reported_by_llm(db_session):
+    product = catalog_product(db_session)
+    registry = CommerceToolRegistry(db_session, "semantic-audit", max_calls=20)
+    audit = await ShoppingAuditor(UnsupportedClaimAuditModel()).audit(
+        {
+            "selected_products": [{"id": str(product.id), "quantity": 1}],
+            "budget": None,
+            "preferences": [],
+            "constraints": [],
+            "response_source": "structured_llm_brand_voice_v1",
+            "final_response": "Tool Product — RM 100.00. This product is waterproof.",
+            "response_claims": [{
+                "id": str(product.id), "name": product.name, "brand": product.brand,
+                "price": "100.00", "currency": "MYR", "in_stock": True,
+            }],
+            "attachments": [],
+        },
+        registry,
+    )
+
+    assert audit["status"] == "fail"
+    assert audit["llm_review"]["verdict"] == "fail"
+    assert any(error["code"] == "unsupported_prose_claim" for error in audit["errors"])
 
 
 @pytest.mark.anyio
