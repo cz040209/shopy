@@ -1,4 +1,6 @@
 <img width="1506" height="714" alt="Screenshot 2026-08-26 at 3 39 25 PM" src="https://github.com/user-attachments/assets/0908644a-8f59-4e40-a8e1-a196863b4fed" />
+
+
 # Shopy AI
 
 Shopy AI is a full-stack e-commerce platform: a Next.js storefront, FastAPI commerce API, PostgreSQL catalog, Redis short-term memory, and a LangChain/LangGraph shopping assistant.
