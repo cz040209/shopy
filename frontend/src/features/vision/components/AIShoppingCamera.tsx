@@ -1,7 +1,8 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, ImagePlus, RotateCcw, Sparkles, SwitchCamera, X } from "lucide-react";
+import { Camera, Check, ImagePlus, LampFloor, MonitorUp, PackageOpen, RotateCcw, ShoppingBag, Sparkles, SwitchCamera, X } from "lucide-react";
 import styles from "./AIShoppingCamera.module.css";
 import { API_URL } from "@/lib/api";
 
@@ -15,6 +16,18 @@ type VisionProductAttachment = {
   currency: string;
   image_url: string;
   image_alt_text?: string | null;
+  brand?: string | null;
+  category?: string | null;
+};
+
+type VisionContext = {
+  detected_objects?: string[];
+  category?: string[];
+  colors?: string[];
+  style?: string[];
+  existing_items?: string[];
+  possible_shopping_needs?: string[];
+  visual_constraints?: string[];
 };
 
 type Props = {
@@ -49,6 +62,9 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
   const [error, setError] = useState("");
   const [processingIndex, setProcessingIndex] = useState(0);
   const [analysis, setAnalysis] = useState("");
+  const [attachments, setAttachments] = useState<VisionProductAttachment[]>([]);
+  const [visionContext, setVisionContext] = useState<VisionContext>({});
+  const [lookStyle, setLookStyle] = useState("Minimalist");
   const [isCameraReady, setIsCameraReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -72,6 +88,8 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
     releasePreview();
     setError("");
     setAnalysis("");
+    setAttachments([]);
+    setVisionContext({});
     setSelectedMode(mode ?? null);
     setStage(null);
   };
@@ -195,7 +213,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
     void startCamera(useFrontCamera);
   };
 
-  const submitPhoto = async () => {
+  const submitPhoto = async (styleDirection?: string) => {
     if (!photo) return;
     setStage("processing");
     setProcessingIndex(0);
@@ -204,10 +222,14 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       const data = new FormData();
       data.append("image", photo, "shopy-vision.jpg");
       data.append("mode", activeMode);
+      if (styleDirection) data.append("style", styleDirection);
       const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", credentials: "include", body: data });
-      const result = await response.json() as { analysis?: string; detail?: string; attachments?: VisionProductAttachment[] };
+      const result = await response.json() as { analysis?: string; detail?: string; attachments?: VisionProductAttachment[]; vision_context?: VisionContext };
       if (!response.ok || !result.analysis) throw new Error(result.detail ?? "AI analysis could not be completed.");
       setAnalysis(result.analysis);
+      setAttachments(result.attachments ?? []);
+      setVisionContext(result.vision_context ?? {});
+      if (styleDirection) setLookStyle(styleDirection);
       onAnalysisComplete?.(result.analysis, result.attachments ?? []);
       setStage("result");
     } catch (submitError) {
@@ -224,6 +246,13 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
   // stop tracks and release image memory if the feature unmounts
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const visualProducts = attachments.slice(0, 4);
+  const isRoom = activeMode === "shop_room";
+  const isLook = activeMode === "complete_look";
+  const existingItems = visionContext.existing_items ?? [];
+  const shoppingNeeds = visionContext.possible_shopping_needs ?? [];
+  const detectedStyle = [...(visionContext.style ?? []), ...(visionContext.colors ?? [])].slice(0, 4);
 
   return (
     <>
@@ -268,7 +297,6 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
 
             {stage === "preview" && previewUrl && <div className={styles.previewStage}>
               {/* Blob URLs are created locally after explicit capture and are never stored automatically. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={previewUrl} alt="Your captured photo" className={styles.previewImage} />
               <div className={styles.previewScrim} />
               <div style={{ position: "absolute", right: 20, bottom: 98, left: 20, color: "#d7dded", fontSize: 11, lineHeight: 1.4, textAlign: "center", textShadow: "0 1px 10px #000" }}>Review your photo before it is sent for AI analysis.</div>
@@ -286,11 +314,41 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
               <ol className={styles.steps}>{processingSteps.map((step, index) => <li key={step} className={index <= processingIndex ? styles.stepActive : ""}><span>{index < processingIndex ? <Check size={14} /> : index + 1}</span>{step}</li>)}</ol>
             </div>}
 
-            {stage === "result" && <div className={styles.resultStage}>
-              <div className={styles.processingOrb}><Sparkles size={30} /></div>
-              <h2>Your AI shopping brief</h2>
-              <p>{analysis}</p>
-              <button type="button" className={styles.primaryAction} onClick={close}>Done</button>
+            {stage === "result" && (isRoom || isLook) && <div className={styles.visualResultStage}>
+              <div className={styles.visualScroll}>
+                {isRoom && <>
+                  <div className={styles.canvasIntro}><span><Sparkles size={13} /> YOUR ROOM, REIMAGINED</span><h2>AI found {Math.max(visualProducts.length, 3)} opportunities</h2></div>
+                  <div className={styles.roomCanvas}>
+                    {previewUrl && <img src={previewUrl} alt="Your room" />}
+                    <div className={styles.canvasShade} />
+                    {existingItems.slice(0, 3).map((item, index) => <span className={`${styles.roomTag} ${[styles.bedTag, styles.chairTag, styles.spaceTag][index]}`} key={item}>{index === 0 ? "◆" : index === 1 ? "●" : "■"} Existing {item}</span>)}
+                    {shoppingNeeds.length > 0 && <span className={`${styles.roomTag} ${styles.spaceTag}`}>✦ Opportunity detected</span>}
+                    <span className={styles.roomTitle}>YOUR ROOM</span>
+                  </div>
+                  <p className={styles.analysis}>{analysis}</p>
+                  <div className={styles.opportunityList}>
+                    {(shoppingNeeds.length ? shoppingNeeds : visualProducts.map((product) => product.category || product.name)).slice(0, 4).map((need, index) => {
+                      const product = visualProducts[index]; const Icon = [LampFloor, PackageOpen, MonitorUp, Sparkles][index] ?? Sparkles;
+                      return <article className={styles.opportunity} key={need}><span className={styles.opportunityIcon}><Icon size={19} /></span><div><small>0{index + 1} — {need}</small><p>{visionContext.visual_constraints?.[index] || `A considered addition for the ${need.toLowerCase()} opportunity detected in your room.`}</p>{product && <strong>{product.name} <b>RM {Number(product.price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></strong>}</div></article>;
+                    })}
+                  </div>
+                </>}
+                {isLook && <>
+                  <div className={styles.canvasIntro}><span><Sparkles size={13} /> COMPLETE YOUR LOOK</span><h2>Built around what you already wear</h2></div>
+                  <div className={styles.lookCanvas}>
+                    <span className={styles.lookStyle}>STYLE DETECTED · {detectedStyle.length ? detectedStyle.join(" · ").toUpperCase() : "ANALYZED FROM YOUR PHOTO"}</span>
+                    <div className={styles.lookTop}>{visualProducts[0] ? <><span>🧢</span><small>{visualProducts[0].name}<b>RM {Number(visualProducts[0].price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></small></> : "🧢"}</div>
+                    <div className={styles.lookPerson}>{previewUrl && <img src={previewUrl} alt="Your outfit" />}<span>{existingItems.slice(0, 3).join(" · ") || "YOUR CURRENT LOOK"}</span></div>
+                    <div className={styles.lookAccessories}>{visualProducts.slice(1, 3).map((product, index) => <div key={product.product_id}><span>{index ? "👜" : "⌚"}</span><small>{product.name}<b>RM {Number(product.price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></small></div>)}</div>
+                  </div>
+                  <div className={styles.styleChoices}>{["Streetwear", "Smart Casual", "Minimalist", "Date Night"].map((style) => <button type="button" key={style} onClick={() => void submitPhoto(style)} className={style === lookStyle ? styles.activeStyle : ""}>{style}</button>)}</div>
+                  <p className={styles.analysis}>{analysis}</p>
+                </>}
+                <button type="button" className={styles.completeAction} onClick={close}><ShoppingBag size={17} />{isRoom ? `Complete this room${visualProducts.length ? ` · RM ${visualProducts.reduce((total, product) => total + Number(product.price), 0).toLocaleString("en-MY", { maximumFractionDigits: 0 })}` : ""}` : `Shop the ${lookStyle.toLowerCase()} edit`}</button>
+              </div>
+            </div>}
+            {stage === "result" && !isRoom && !isLook && <div className={styles.resultStage}>
+              <div className={styles.processingOrb}><Sparkles size={30} /></div><h2>Your AI shopping brief</h2><p>{analysis}</p><button type="button" className={styles.primaryAction} onClick={close}>Done</button>
             </div>}
           </div>
         </section>

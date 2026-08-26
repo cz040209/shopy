@@ -45,10 +45,10 @@ class GeminiLangChainChatModel(BaseChatModel):
 
     async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None, **kwargs: Any) -> ChatResult:
         system_instruction, contents = _gemini_contents(messages)
-        reply = await GeminiClient(timeout_seconds=self.timeout_seconds).generate(
+        generation = await GeminiClient(timeout_seconds=self.timeout_seconds).generate_with_usage(
             system_instruction=system_instruction,
             contents=contents,
             max_output_tokens=self.max_output_tokens,
             response_mime_type=self.response_mime_type,
         )
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=reply))])
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=generation.text))])

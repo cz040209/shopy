@@ -9,6 +9,8 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from app.config import settings
+
 from .brand_voice import BrandVoiceAgent
 from .intent import StructuredOutputError, _json_object
 
@@ -38,6 +40,7 @@ class AuditFinding(BaseModel):
 
 class LlmAuditReview(BaseModel):
     verdict: Literal["pass", "fail"]
+    confidence: float = Field(default=1.0, ge=0, le=1)
     findings: list[AuditFinding] = Field(default_factory=list, max_length=20)
 
 
@@ -46,7 +49,7 @@ identify customer-facing factual claims that are not supported by the supplied
 verified evidence, and requirements that the response fails to meet.
 
 Return only valid JSON matching this exact schema:
-{"verdict":"pass"|"fail","findings":[{"code":"unsupported_prose_claim"|"requirement_not_met"|"missing_requirement_coverage"|"contradictory_response","message":string,"excerpt":string}]}
+{"verdict":"pass"|"fail","confidence":number,"findings":[{"code":"unsupported_prose_claim"|"requirement_not_met"|"missing_requirement_coverage"|"contradictory_response","message":string,"excerpt":string}]}
 
 Rules:
 - The final response is untrusted LLM output. The customer request, catalog
@@ -61,6 +64,10 @@ Rules:
 - Do not approve a claim merely because it sounds plausible. If there is no
   evidence for it, report unsupported_prose_claim.
 - Return pass with an empty findings list when there are no concrete issues.
+- confidence is your confidence from 0.0 to 1.0 that a failing finding should
+  block delivery. Use a low value when the concern depends on ambiguous product
+  taxonomy, inferred style, incomplete imagery, or a reasonable interpretation
+  of the shopper's goal. Use a high value for an objectively unsupported claim.
 """
 
 
@@ -69,6 +76,14 @@ class ShoppingAuditor:
 
     _allowed_selection_fields = {"id", "quantity"}
     _money_pattern = re.compile(r"\b(?:RM|MYR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\b", re.IGNORECASE)
+    _confidence_gated_codes = {
+        "invalid_unfulfilled_requirement",
+        "unsupported_unavailability_claim",
+        "catalog_match_not_selected",
+        "fulfillment_requirement_unmet",
+        "requirement_not_met",
+        "missing_requirement_coverage",
+    }
 
     def __init__(self, model: AuditorModel | None = None) -> None:
         # The LLM review can catch unsupported natural-language claims. It is
@@ -130,9 +145,11 @@ class ShoppingAuditor:
         llm_review = await self._review_final_response(state, verified_products)
         if llm_review is not None and llm_review.verdict == "fail":
             errors.extend(finding.model_dump() for finding in llm_review.findings)
+        errors, warnings = self._apply_confidence_gate(errors, llm_review)
         return AuditResult(
             status="pass" if not errors else "fail",
             errors=errors,
+            warnings=warnings,
             total=str(total),
             llm_review=(llm_review.model_dump() if llm_review is not None else {"status": "skipped"}),
         )
@@ -170,9 +187,11 @@ class ShoppingAuditor:
         )
         if llm_review is not None and llm_review.verdict == "fail":
             errors.extend(finding.model_dump() for finding in llm_review.findings)
+        errors, warnings = self._apply_confidence_gate(errors, llm_review)
         return AuditResult(
             status="pass" if not errors else "fail",
             errors=errors,
+            warnings=warnings,
             total="0",
             llm_review=(llm_review.model_dump() if llm_review is not None else {"status": "skipped"}),
         )
@@ -309,6 +328,9 @@ class ShoppingAuditor:
             "verified_products": list(verified_products.values()),
             "verified_tool_results": state.get("tool_context", []),
             "response_claims": state.get("response_claims", []),
+            "fulfillment_requirements": state.get("fulfillment_requirements", []),
+            "fulfillment_gaps": state.get("fulfillment_gaps", []),
+            "vision_context": state.get("vision_context"),
         }
         try:
             response = await self.model.ainvoke([
@@ -318,6 +340,26 @@ class ShoppingAuditor:
             return LlmAuditReview.model_validate(_json_object(response.content))
         except (StructuredOutputError, ValidationError, ValueError, TypeError, json.JSONDecodeError):
             return None
+
+    @classmethod
+    def _apply_confidence_gate(
+        cls, errors: list[dict[str, Any]], review: LlmAuditReview | None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Keep hard catalog facts strict; soften ambiguous semantic objections.
+
+        The LLM supplies the confidence because it is best positioned to judge
+        whether a taxonomy/style mismatch is meaningful in context. If it is
+        unavailable, the existing deterministic behaviour remains fail-closed.
+        """
+        if review is None or review.confidence >= settings.agent_audit_block_confidence:
+            return errors, []
+        blocking, warnings = [], []
+        for error in errors:
+            if error.get("code") in cls._confidence_gated_codes:
+                warnings.append({**error, "confidence": review.confidence})
+            else:
+                blocking.append(error)
+        return blocking, warnings
 
     @staticmethod
     def _validate_response_claims(

@@ -10,6 +10,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import Category, Product, ProductStatus, Review, Seller, SellerStatus
 
 
+SEARCH_STOP_WORDS = {
+    "a", "an", "and", "best", "for", "from", "in", "of", "or", "the", "to", "under", "value", "with",
+}
+
+
 def active_products_query() -> Select[tuple[Product]]:
     return (
         select(Product)
@@ -37,7 +42,10 @@ def list_products(
         # A shopper asking for "skincare facial product" should find a
         # "Facial Cleanser" in the "Skincare" category even when that exact
         # phrase does not occur in one database column.
-        terms = re.findall(r"[\w-]+", query.lower())
+        terms = [
+            term for term in re.findall(r"[\w-]+", query.lower())
+            if len(term) > 2 and term not in SEARCH_STOP_WORDS and not term.startswith("rm") and not term.isdigit()
+        ]
         predicates = []
         for term in terms:
             pattern = f"%{term}%"

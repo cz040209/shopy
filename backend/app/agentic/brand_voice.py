@@ -497,6 +497,8 @@ class BrandVoiceAgent:
                     "currency": product["currency"],
                     "image_url": image_url,
                     "image_alt_text": product.get("image_alt_text") or product["name"],
+                    "brand": product.get("brand"),
+                    "category": product.get("category"),
                 }
             )
         return attachments

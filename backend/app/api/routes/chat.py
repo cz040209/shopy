@@ -275,4 +275,21 @@ async def chat(
         final_output=reply,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )
-    return ChatResponse(reply=reply, conversation_id=conversation.id, attachments=attachments)
+    mission = {
+        "goal": trace.state.get("goal"),
+        "mission_type": trace.state.get("mission_type"),
+        "budget": trace.state.get("budget"),
+        "preferences": trace.state.get("preferences", []),
+        "owned_items": trace.state.get("owned_items", []),
+        "priorities": trace.state.get("priorities", []),
+    }
+    workspace = {
+        "bundle": trace.state.get("bundle"),
+        "compatibility": trace.state.get("compatibility_results", []),
+        "product_rankings": trace.state.get("product_rankings", []),
+        "audit": trace.state.get("audit_result", {}),
+    }
+    return ChatResponse(
+        reply=reply, conversation_id=conversation.id, attachments=attachments,
+        mission=mission, workspace=workspace,
+    )

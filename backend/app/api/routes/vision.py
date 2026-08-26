@@ -30,6 +30,7 @@ async def analyze_shopping_photo(
     http_response: Response,
     image: UploadFile = File(...),
     mode: VisionMode = Form(...),
+    style: str | None = Form(default=None, max_length=80),
     conversation_token: str | None = Cookie(default=None, alias=CONVERSATION_COOKIE_NAME),
     auth_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     current_user: User | None = Depends(get_optional_current_user),
@@ -85,12 +86,13 @@ async def analyze_shopping_photo(
             auth_session_token=auth_session_token,
             conversation_token=token,
         )
+        style_direction = f" Use a {style.strip()} style direction." if style and style.strip() else ""
         state = await ShoppingOrchestrator(
             tool_registry=registry,
             recorder=recorder,
             memory_store=get_shopping_memory_store(),
         ).ainvoke(
-            f"Shop this {mode.replace('_', ' ')} image.",
+            f"Shop this {mode.replace('_', ' ')} image.{style_direction}",
             state_overrides={
                 "vision_input": {"image_bytes": image_bytes, "mime_type": image.content_type, "mode": mode},
                 "memory_session_scope": memory_session_scope,
@@ -188,4 +190,7 @@ async def analyze_shopping_photo(
         final_output=analysis,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )
-    return VisionResponse(mode=mode, analysis=analysis, attachments=attachments)
+    return VisionResponse(
+        mode=mode, analysis=analysis, attachments=attachments,
+        vision_context=dict(state.get("vision_context", {})),
+    )

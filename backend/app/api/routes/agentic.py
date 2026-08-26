@@ -19,6 +19,9 @@ router = APIRouter(prefix="/api/v1/agentic", tags=["agentic shopping"])
 
 
 def run_response(run: OrchestrationRun) -> OrchestrationRunResponse:
+    # Do not rely on database relationship loading order: a timeline is only
+    # meaningful when the client receives the recorder's monotonic sequence.
+    run.events.sort(key=lambda event: event.sequence)
     return OrchestrationRunResponse.model_validate(run)
 
 

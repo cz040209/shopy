@@ -21,7 +21,7 @@ from .manager import WorkflowManager
 from .memory import MemoryUnavailableError, ShoppingMemoryStore, ShoppingSessionMemory, memory_from_state
 from .planner import NeedPlannerAgent
 from .planning import PlanningAgent
-from .observability import OrchestrationRecorder
+from .observability import OrchestrationRecorder, active_recorder
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
 from .review_intelligence import ReviewIntelligenceAgent
@@ -782,12 +782,15 @@ class ShoppingOrchestrator:
             self.recorder.start(state)
             if self.tool_registry:
                 self.tool_registry.recorder = self.recorder
+        recorder_token = active_recorder.set(self.recorder)
         try:
             result = await self.graph.ainvoke(state, config={"recursion_limit": self.max_graph_iterations})
         except Exception as error:
             if self.recorder:
                 self.recorder.fail(error)
             raise
+        finally:
+            active_recorder.reset(recorder_token)
         if self.recorder and not defer_finish:
             self.recorder.finish(result)
         return result

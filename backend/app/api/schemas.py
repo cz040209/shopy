@@ -31,18 +31,23 @@ class ChatProductAttachment(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     image_url: str = Field(min_length=1, max_length=2048)
     image_alt_text: str | None = Field(default=None, max_length=255)
+    brand: str | None = Field(default=None, max_length=220)
+    category: str | None = Field(default=None, max_length=220)
 
 
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: UUID
     attachments: list[ChatProductAttachment] = Field(default_factory=list)
+    mission: dict[str, Any] = Field(default_factory=dict)
+    workspace: dict[str, Any] = Field(default_factory=dict)
 
 
 class VisionResponse(BaseModel):
     mode: VisionMode
     analysis: str
     attachments: list[ChatProductAttachment] = Field(default_factory=list)
+    vision_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class TranscriptionResponse(BaseModel):
@@ -283,6 +288,9 @@ class OrchestrationEventResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     duration_ms: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
 
 
 class OrchestrationRunResponse(BaseModel):
@@ -297,4 +305,7 @@ class OrchestrationRunResponse(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     created_at: datetime
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
     events: list[OrchestrationEventResponse] = Field(default_factory=list)

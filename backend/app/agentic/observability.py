@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai_logging import customer_input_for_log
@@ -13,6 +15,7 @@ from app.models import Conversation, OrchestrationRun, OrchestrationRunEvent, Us
 
 SENSITIVE_KEYS = {"password", "token", "secret", "api_key", "authorization", "cookie", "card", "cvc"}
 MAX_STRING_LENGTH = 4_000
+active_recorder: ContextVar["OrchestrationRecorder | None"] = ContextVar("active_orchestration_recorder", default=None)
 
 
 def safe_audit_data(value: Any) -> Any:
@@ -71,10 +74,19 @@ class OrchestrationRecorder:
         output_data: dict[str, Any] | None = None,
         error_message: str | None = None,
         started_at: datetime | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
     ) -> None:
         if self.run is None:
             return
-        self._sequence += 1
+        # Resynchronise from persisted events before every append. This keeps a
+        # timeline monotonic even if a run is resumed or a recorder is reached
+        # from a nested async context.
+        persisted_sequence = self.db.scalar(
+            select(func.max(OrchestrationRunEvent.sequence)).where(OrchestrationRunEvent.run_id == self.run.id)
+        ) or 0
+        self._sequence = max(self._sequence, int(persisted_sequence)) + 1
         completed_at = datetime.now(timezone.utc)
         duration_ms = round((completed_at - started_at).total_seconds() * 1000) if started_at else None
         self.db.add(OrchestrationRunEvent(
@@ -82,8 +94,24 @@ class OrchestrationRecorder:
             node_name=node_name, tool_name=tool_name, status=status,
             input_data=safe_audit_data(input_data or {}), output_data=safe_audit_data(output_data or {}),
             error_message=error_message, started_at=started_at, completed_at=completed_at, duration_ms=duration_ms,
+            input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
         ))
         self.db.commit()
+
+    def record_llm_call(self, *, input_tokens: int | None, output_tokens: int | None, total_tokens: int | None, started_at: datetime | None = None) -> None:
+        """Persist provider-reported usage for one LLM call and update run totals."""
+        if self.run is None:
+            return
+        input_count = max(0, int(input_tokens or 0))
+        output_count = max(0, int(output_tokens or 0))
+        total_count = max(0, int(total_tokens if total_tokens is not None else input_count + output_count))
+        self.run.input_tokens += input_count
+        self.run.output_tokens += output_count
+        self.run.total_tokens += total_count
+        self.record(
+            "llm_call", status="completed", input_data={}, output_data={}, started_at=started_at,
+            input_tokens=input_count, output_tokens=output_count, total_tokens=total_count,
+        )
 
     def finish(
         self,

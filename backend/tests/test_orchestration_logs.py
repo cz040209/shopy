@@ -57,6 +57,18 @@ def test_sensitive_audit_fields_are_redacted():
     assert data == {"api_key": "[redacted]", "card_number": "[redacted]", "safe": "visible"}
 
 
+def test_llm_token_usage_is_recorded_per_call_and_aggregated(db_session):
+    recorder = OrchestrationRecorder(db_session, request_id="token-run-123")
+    recorder.start({"user_request": "Find a desk"})
+    recorder.record_llm_call(input_tokens=120, output_tokens=35, total_tokens=155)
+    recorder.record_llm_call(input_tokens=80, output_tokens=20, total_tokens=100)
+
+    assert recorder.run is not None
+    assert (recorder.run.input_tokens, recorder.run.output_tokens, recorder.run.total_tokens) == (200, 55, 255)
+    events = [event for event in recorder.run.events if event.event_type == "llm_call"]
+    assert [(event.input_tokens, event.output_tokens, event.total_tokens) for event in events] == [(120, 35, 155), (80, 20, 100)]
+
+
 def test_orchestration_run_can_be_linked_to_a_conversation(db_session):
     conversation = Conversation(session_token="camera-session", context={"channel": "web_camera"})
     recorder = OrchestrationRecorder(db_session, request_id="camera-run-123", conversation=conversation)
