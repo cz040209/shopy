@@ -11,6 +11,10 @@ class ShoppingAgentState(TypedDict):
     goal: str | None
     requires_planning: bool
     requires_catalog: bool
+    continues_context: bool
+    optimization_mode: str | None
+    memory_session_scope: NotRequired[str]
+    memory_context: dict[str, Any] | None
     catalog_query: str | None
     catalog_queries: list[str]
     requested_actions: list[str]
@@ -62,6 +66,9 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "goal": None,
         "requires_planning": False,
         "requires_catalog": False,
+        "continues_context": False,
+        "optimization_mode": None,
+        "memory_context": None,
         "catalog_query": None,
         "catalog_queries": [],
         "requested_actions": [],

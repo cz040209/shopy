@@ -144,6 +144,8 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       const context = canvas.getContext("2d");
       if (!context) throw new Error("Unable to prepare this image.");
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
       const compressed = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Unable to compress this image.")), "image/jpeg", quality));
       if (compressed.size > maxFileSizeMb * 1024 * 1024) {

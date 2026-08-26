@@ -321,6 +321,15 @@ class ShoppingAuditor:
             for claim in claims
             if isinstance(claim, dict) and "price" in claim
         }
+        # A customer-supplied budget is verified mission evidence, not a
+        # catalog price. It is therefore safe to repeat it in the response
+        # even when no product has been selected yet.
+        budget = state.get("budget")
+        if budget is not None:
+            try:
+                expected_amounts.add(Decimal(str(budget)).quantize(Decimal("0.01")))
+            except Exception:
+                errors.append({"code": "invalid_mission_budget", "message": "The mission budget is invalid."})
         for item in state.get("tool_context", []):
             if not isinstance(item, dict) or item.get("tool") != "calculate_bundle_total":
                 continue

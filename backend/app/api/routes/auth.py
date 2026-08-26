@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import get_db
+from app.agentic.memory import MemoryUnavailableError, build_memory_scope, get_shopping_memory_store
 from app.models import AuthSession, Cart, User, UserStatus, Wallet
 from app.security import (
     create_session_token,
@@ -155,7 +156,7 @@ def me(user: User = Depends(get_current_user)) -> UserResponse:
 
 
 @router.post("/logout", response_model=MessageResponse)
-def logout(
+async def logout(
     response: Response,
     session_token: Annotated[
         str | None, Cookie(alias=SESSION_COOKIE_NAME)
@@ -163,11 +164,23 @@ def logout(
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     if session_token:
-        db.execute(
-            delete(AuthSession).where(
+        auth_session = db.scalar(
+            select(AuthSession).options(joinedload(AuthSession.user)).where(
                 AuthSession.token_hash == hash_session_token(session_token)
             )
         )
+        if auth_session is not None:
+            memory_scope = build_memory_scope(
+                user_id=auth_session.user_id,
+                auth_session_token=session_token,
+                conversation_token="unused-for-authenticated-session",
+            )
+            try:
+                await get_shopping_memory_store().clear(memory_scope)
+            except MemoryUnavailableError:
+                # Logout must still revoke authentication if Redis is unavailable.
+                pass
+        db.execute(delete(AuthSession).where(AuthSession.token_hash == hash_session_token(session_token)))
         db.commit()
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,

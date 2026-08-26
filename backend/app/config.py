@@ -36,6 +36,10 @@ class Settings:
         "DATABASE_URL",
         "postgresql+psycopg://shopy@localhost:5433/shopy",
     )
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    shopping_memory_ttl_seconds: int = int(os.getenv("SHOPPING_MEMORY_TTL_SECONDS", "1800"))
+    shopping_memory_recent_turns: int = int(os.getenv("SHOPPING_MEMORY_RECENT_TURNS", "8"))
+    redis_socket_timeout_seconds: float = float(os.getenv("REDIS_SOCKET_TIMEOUT_SECONDS", "1"))
 
 
 settings = Settings()

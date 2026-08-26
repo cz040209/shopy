@@ -25,6 +25,8 @@ class MissionInterpretation(BaseModel):
     goal: str = Field(min_length=1, max_length=300)
     requires_planning: bool = False
     requires_catalog: bool = False
+    continues_context: bool = False
+    optimization_mode: str | None = Field(default=None, max_length=80)
     catalog_query: str | None = Field(default=None, min_length=1, max_length=160)
     catalog_queries: list[str] = Field(default_factory=list, max_length=4)
     requested_actions: list[str] = Field(default_factory=list, max_length=7)

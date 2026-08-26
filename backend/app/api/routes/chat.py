@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_logging import customer_input_for_log, log_ai_event
 from app.agentic.observability import OrchestrationRecorder
+from app.agentic.memory import build_memory_scope, get_shopping_memory_store
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.state import ShoppingAgentState
 from app.agentic.tools import CommerceToolRegistry
@@ -19,7 +20,7 @@ from app.models import AIConversation, AIMessage, MessageRole, User
 from app.security import create_session_token
 
 from ..schemas import ChatRequest, ChatResponse
-from .auth import get_optional_current_user
+from .auth import SESSION_COOKIE_NAME, get_optional_current_user
 
 
 router = APIRouter(tags=["assistant"])
@@ -40,16 +41,23 @@ async def start_chat_orchestration(
     request_id: str,
     user: User | None,
     user_request: str,
+    conversation: AIConversation,
+    memory_session_scope: str,
 ) -> ChatOrchestrationTrace:
     """Run the widget through the only permitted response-generation path."""
 
-    recorder = OrchestrationRecorder(db, request_id=request_id, user=user)
+    recorder = OrchestrationRecorder(db, request_id=request_id, user=user, conversation=conversation)
     registry = CommerceToolRegistry(db, request_id=request_id, recorder=recorder)
     try:
         state = await ShoppingOrchestrator(
             tool_registry=registry,
             recorder=recorder,
-        ).ainvoke(user_request, defer_finish=True)
+            memory_store=get_shopping_memory_store(),
+        ).ainvoke(
+            user_request,
+            state_overrides={"memory_session_scope": memory_session_scope},
+            defer_finish=True,
+        )
     except Exception as error:
         if recorder.run is not None and recorder.run.status == "running":
             recorder.fail(error)
@@ -123,8 +131,8 @@ def get_or_create_conversation(
 
 def persist_exchange(
     db: Session,
-    conversation_token: str | None,
-    user: User | None,
+    conversation: AIConversation,
+    conversation_token: str,
     customer_message: str,
     assistant_reply: str,
     attachments: list[dict[str, object]],
@@ -132,12 +140,6 @@ def persist_exchange(
     input_type: str,
     input_payload: dict[str, object],
 ) -> tuple[AIConversation, str]:
-    conversation, token = get_or_create_conversation(
-        db=db,
-        token=conversation_token,
-        user=user,
-        first_message=customer_message,
-    )
     conversation.messages.extend(
         [
             AIMessage(
@@ -159,7 +161,7 @@ def persist_exchange(
     )
     db.commit()
     db.refresh(conversation)
-    return conversation, token
+    return conversation, conversation_token
 
 
 @router.post("/api/chat", response_model=ChatResponse)
@@ -168,6 +170,9 @@ async def chat(
     http_response: Response,
     conversation_token: Annotated[
         str | None, Cookie(alias=CONVERSATION_COOKIE_NAME)
+    ] = None,
+    auth_session_token: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
     ] = None,
     current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
@@ -191,12 +196,26 @@ async def chat(
         log_ai_event("text.failed", request_id=request_id, reason="gemini_api_key_missing")
         raise HTTPException(status_code=503, detail="The Gemini API key is not configured.")
 
+    conversation, active_conversation_token = get_or_create_conversation(
+        db=db,
+        token=conversation_token,
+        user=current_user,
+        first_message=latest_customer_input.strip(),
+    )
+    memory_session_scope = build_memory_scope(
+        user_id=current_user.id if current_user is not None else None,
+        auth_session_token=auth_session_token,
+        conversation_token=active_conversation_token,
+    )
+
     try:
         trace = await start_chat_orchestration(
             db,
             request_id=request_id,
             user=current_user,
             user_request=latest_customer_input.strip(),
+            conversation=conversation,
+            memory_session_scope=memory_session_scope,
         )
     except Exception as error:
         log_ai_event(
@@ -218,8 +237,8 @@ async def chat(
     try:
         conversation, active_conversation_token = persist_exchange(
             db=db,
-            conversation_token=conversation_token,
-            user=current_user,
+            conversation=conversation,
+            conversation_token=active_conversation_token,
             customer_message=latest_customer_input.strip(),
             assistant_reply=reply,
             attachments=attachments,

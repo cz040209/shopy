@@ -133,6 +133,29 @@ class PlanningCatalogMissionModel:
         return AIMessage(content='{"mission_type":"planning_request","goal":"prepare a new house","requires_planning":true,"requires_catalog":true,"catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[],"fulfillment_requirements":[]}')
 
 
+class PlanningCatalogRecoveryModel:
+    """Simulates an initial planner omission corrected by the planning agent."""
+
+    async def ainvoke(self, input, **kwargs):
+        prompt = str(input[0].content)
+        if "general planning agent" in prompt:
+            return AIMessage(content=json.dumps({
+                "plan_type": "new_home", "summary": "Start with core rooms.",
+                "requires_catalog": True, "steps": ["Prioritize the first room."],
+                "follow_up_questions": [], "suggested_shopping_categories": ["tool product"],
+                "catalog_queries": ["Tool"],
+            }))
+        if "response-writing agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "A verified option for your home: " + products[0]["name"],
+                "product_ids": [product["id"] for product in products],
+                "unfulfilled_requirements": [],
+            }))
+        return AIMessage(content='{"mission_type":"planning_request","goal":"prepare a new house","requires_planning":true,"requires_catalog":false,"catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[],"fulfillment_requirements":[]}')
+
+
 class AlwaysFailAuditor:
     async def audit(self, state, tools):
         return {"status": "fail", "errors": [{"code": "forced_failure", "message": "test"}], "total": "0"}
@@ -293,6 +316,35 @@ async def test_planning_agent_can_dynamically_continue_to_catalog_search(db_sess
     assert result["planning_context"]["catalog_queries"] == ["Tool"]
     assert result["selected_products"] == [{"id": str(product.id), "quantity": 1}]
     assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_planning_agent_recovers_a_missing_catalog_flag_dynamically(db_session):
+    product = catalog_product(db_session)
+    registry = CommerceToolRegistry(db_session, "planning-catalog-recovery", max_calls=20)
+
+    result = await ShoppingOrchestrator(PlanningCatalogRecoveryModel(), tool_registry=registry).ainvoke(
+        "Tell me what products can fulfil my new house."
+    )
+
+    assert result["requires_catalog"] is True
+    assert result["planning_context"]["catalog_queries"] == ["Tool"]
+    assert result["selected_products"] == [{"id": str(product.id), "quantity": 1}]
+    assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_auditor_allows_a_response_to_repeat_the_verified_customer_budget(db_session):
+    registry = CommerceToolRegistry(db_session, "budget-echo", max_calls=20)
+
+    audit = await ShoppingAuditor().audit({
+        "selected_products": [], "budget": 200, "preferences": [], "constraints": [],
+        "response_source": "structured_llm_brand_voice_v1",
+        "final_response": "Your stated budget is under RM200.",
+        "response_claims": [], "attachments": [],
+    }, registry)
+
+    assert audit["status"] == "pass"
 
 
 @pytest.mark.anyio

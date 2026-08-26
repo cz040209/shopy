@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_logging import log_ai_event
 from app.agentic.observability import OrchestrationRecorder
+from app.agentic.memory import build_memory_scope, get_shopping_memory_store
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.tools import CommerceToolRegistry
 from app.ai.gemini import GeminiConnectionError, GeminiResponseError
@@ -16,7 +17,7 @@ from app.models import AIMessage, MessageRole, User
 
 from ..constants import VISION_PROMPTS
 from ..schemas import VisionMode, VisionResponse
-from .auth import get_optional_current_user
+from .auth import SESSION_COOKIE_NAME, get_optional_current_user
 from .chat import CONVERSATION_COOKIE_NAME, get_or_create_conversation, set_conversation_cookie
 
 
@@ -30,6 +31,7 @@ async def analyze_shopping_photo(
     image: UploadFile = File(...),
     mode: VisionMode = Form(...),
     conversation_token: str | None = Cookie(default=None, alias=CONVERSATION_COOKIE_NAME),
+    auth_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ) -> VisionResponse:
@@ -78,9 +80,21 @@ async def analyze_shopping_photo(
         )
         recorder = OrchestrationRecorder(db, request_id=request_id, user=current_user, conversation=conversation)
         registry = CommerceToolRegistry(db, request_id=request_id, recorder=recorder)
-        state = await ShoppingOrchestrator(tool_registry=registry, recorder=recorder).ainvoke(
+        memory_session_scope = build_memory_scope(
+            user_id=current_user.id if current_user is not None else None,
+            auth_session_token=auth_session_token,
+            conversation_token=token,
+        )
+        state = await ShoppingOrchestrator(
+            tool_registry=registry,
+            recorder=recorder,
+            memory_store=get_shopping_memory_store(),
+        ).ainvoke(
             f"Shop this {mode.replace('_', ' ')} image.",
-            state_overrides={"vision_input": {"image_bytes": image_bytes, "mime_type": image.content_type, "mode": mode}},
+            state_overrides={
+                "vision_input": {"image_bytes": image_bytes, "mime_type": image.content_type, "mode": mode},
+                "memory_session_scope": memory_session_scope,
+            },
             defer_finish=True,
         )
     except GeminiConnectionError as error:

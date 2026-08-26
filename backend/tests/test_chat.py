@@ -10,10 +10,10 @@ from app.models import AIConversation, AIMessage, MessageRole, OrchestrationRun,
 
 
 class FakeShoppingOrchestrator:
-    def __init__(self, *, tool_registry, recorder):
+    def __init__(self, *, tool_registry, recorder, memory_store=None):
         self.recorder = recorder
 
-    async def ainvoke(self, user_request, *, defer_finish=False):
+    async def ainvoke(self, user_request, *, state_overrides=None, defer_finish=False):
         assert defer_finish is True
         state = {
             "user_request": user_request,
@@ -216,10 +216,10 @@ def test_chat_does_not_fall_back_when_orchestration_fails(db_session, monkeypatc
     chat_route = import_module("app.api.routes.chat")
 
     class FailingShoppingOrchestrator:
-        def __init__(self, *, tool_registry, recorder):
+        def __init__(self, *, tool_registry, recorder, memory_store=None):
             self.recorder = recorder
 
-        async def ainvoke(self, user_request, *, defer_finish=False):
+        async def ainvoke(self, user_request, *, state_overrides=None, defer_finish=False):
             self.recorder.start({"user_request": user_request, "run_id": self.recorder.request_id})
             raise RuntimeError("intent agent unavailable")
 

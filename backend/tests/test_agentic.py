@@ -112,6 +112,60 @@ async def test_brand_voice_retries_invalid_structured_output():
 
 
 @pytest.mark.anyio
+async def test_brand_voice_retries_a_valid_draft_that_omits_a_verified_product_id():
+    product_id = "11111111-1111-1111-1111-111111111111"
+
+    class CoverageRetryModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(content='{"response":"Here is an option.","product_ids":[],"unfulfilled_requirements":[]}')
+            return AIMessage(content=json.dumps({
+                "response": "Verified option: Compact Desk.",
+                "product_ids": [product_id],
+                "unfulfilled_requirements": [],
+            }))
+
+    state = initial_shopping_state("Recommend a compact desk")
+    state.update({
+        "candidate_products": [{
+            "id": product_id, "slug": "compact-desk", "name": "Compact Desk", "brand": "Shopy",
+            "price": "199.00", "currency": "MYR", "inventory_quantity": 3,
+            "category": "Office Furniture", "specs": [], "attributes": {}, "image_url": None,
+        }],
+        "selected_products": [{"id": product_id, "quantity": 1}],
+    })
+    model = CoverageRetryModel()
+
+    result = await BrandVoiceAgent(model, max_format_attempts=2).compose(state)
+
+    assert model.calls == 2
+    assert result["response_claims"][0]["id"] == product_id
+
+
+def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_product():
+    state = initial_shopping_state("Build a work outfit")
+    state.update({
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "shirt", "field": None, "quantity": 1},
+            {"kind": "category", "value": "pants", "field": None, "quantity": 1},
+        ],
+        "candidate_products": [
+            {"id": "shirt", "name": "Formal Shirt", "brand": "Shopy", "category": "Formal Wear", "price": "109", "inventory_quantity": 4, "specs": [], "attributes": {"department": "apparel"}},
+            {"id": "pants", "name": "Flex Taper Chinos", "brand": "Shopy", "category": "Pants", "price": "139", "inventory_quantity": 4, "specs": [], "attributes": {"department": "apparel"}},
+            {"id": "bag", "name": "Work Bag", "brand": "Shopy", "category": "Accessories", "price": "89", "inventory_quantity": 4, "specs": [], "attributes": {"department": "apparel"}},
+        ],
+    })
+
+    assert BrandVoiceAgent.select_catalog_products(state) == [
+        {"id": "shirt", "quantity": 1}, {"id": "pants", "quantity": 1},
+    ]
+
+
+@pytest.mark.anyio
 async def test_brand_voice_polishes_an_audited_draft_with_a_run_specific_strategy():
     class PolishModel:
         async def ainvoke(self, input, **kwargs):

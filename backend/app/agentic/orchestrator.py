@@ -15,6 +15,7 @@ from .compatibility import CompatibilityAgent
 from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import GeminiLangChainChatModel
 from .manager import WorkflowManager
+from .memory import MemoryUnavailableError, ShoppingMemoryStore, ShoppingSessionMemory, memory_from_state
 from .planner import NeedPlannerAgent
 from .planning import PlanningAgent
 from .observability import OrchestrationRecorder
@@ -43,6 +44,7 @@ class ShoppingOrchestrator:
         max_graph_iterations: int = settings.agent_max_graph_iterations,
         recorder: OrchestrationRecorder | None = None,
         vision_agent: VisionAgent | None = None,
+        memory_store: ShoppingMemoryStore | None = None,
     ) -> None:
         shared_model = model or GeminiLangChainChatModel(timeout_seconds=settings.agent_model_timeout_seconds)
         self.tool_registry = tool_registry
@@ -56,6 +58,7 @@ class ShoppingOrchestrator:
         self.compatibility_agent = CompatibilityAgent(shared_model)
         self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
+        self.memory_store = memory_store
         self.brand_voice = BrandVoiceAgent(shared_model)
         self.auditor = auditor or ShoppingAuditor(shared_model)
         self.max_repairs = max_repairs
@@ -65,6 +68,7 @@ class ShoppingOrchestrator:
 
     def _build_graph(self):
         workflow = StateGraph(ShoppingAgentState)
+        workflow.add_node("memory_load", self._memory_load_node)
         workflow.add_node("vision", self._vision_node)
         workflow.add_node("intent_agent", self._intent_node)
         workflow.add_node("need_planner", self._need_planner_node)
@@ -79,7 +83,9 @@ class ShoppingOrchestrator:
         workflow.add_node("brand_voice", self._brand_voice_node)
         workflow.add_node("final_audit", self._final_audit_node)
         workflow.add_node("repair", self._repair_node)
-        workflow.add_conditional_edges(START, self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
+        workflow.add_node("memory_update", self._memory_update_node)
+        workflow.add_edge(START, "memory_load")
+        workflow.add_conditional_edges("memory_load", self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
         workflow.add_edge("vision", "intent_agent")
         workflow.add_edge("intent_agent", "need_planner")
         workflow.add_conditional_edges(
@@ -114,7 +120,8 @@ class ShoppingOrchestrator:
         workflow.add_edge("response_draft", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "brand_voice": "brand_voice", "end": END})
         workflow.add_edge("brand_voice", "final_audit")
-        workflow.add_conditional_edges("final_audit", self._after_final_audit, {"repair": "repair", "end": END})
+        workflow.add_conditional_edges("final_audit", self._after_final_audit, {"repair": "repair", "memory_update": "memory_update", "end": END})
+        workflow.add_edge("memory_update", END)
         workflow.add_edge("repair", "response_draft")
         return workflow.compile()
 
@@ -128,6 +135,8 @@ class ShoppingOrchestrator:
         inputs: dict[str, Any] = {"graph_iteration": state["graph_iterations"] + 1}
         if node == "intent_agent":
             inputs["user_request"] = state["user_request"]
+        elif node == "memory_load":
+            inputs["memory_session_scope"] = bool(state.get("memory_session_scope"))
         elif node == "need_planner":
             inputs["mission"] = state.get("mission", {})
         elif node == "planning":
@@ -150,6 +159,8 @@ class ShoppingOrchestrator:
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "repair":
             inputs["audit_result"] = state.get("audit_result")
+        elif node == "memory_update":
+            inputs["memory_session_scope"] = bool(state.get("memory_session_scope"))
         self.recorder.record("node_completed", node_name=node, input_data=inputs, output_data=output)
 
     def _after_manager(self, state: ShoppingAgentState) -> str:
@@ -194,6 +205,24 @@ class ShoppingOrchestrator:
         self._record_node(state, "vision", output)
         return output
 
+    async def _memory_load_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        if self.memory_store is None or not state.get("memory_session_scope"):
+            return {}
+        try:
+            memory = await self.memory_store.load(str(state["memory_session_scope"]))
+        except MemoryUnavailableError as error:
+            log_ai_event("agent.memory.load_unavailable", request_id=state["run_id"], error_type=type(error).__name__)
+            return {}
+        output = {
+            **self._event(state, "memory_load"),
+            "memory_context": memory.runtime_context() if memory is not None else None,
+            # Previously rejected items remain excluded from deterministic
+            # shortlisting for this active session.
+            "excluded_product_ids": memory.rejected_product_ids if memory is not None else [],
+        }
+        self._record_node(state, "memory_load", output)
+        return output
+
     def _requires_catalog_lookup(self, state: ShoppingAgentState) -> bool:
         """Keep catalog-fact requests on the tool-backed path.
 
@@ -206,17 +235,34 @@ class ShoppingOrchestrator:
 
     async def _intent_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         request = state["user_request"]
-        runtime_context = {"vision_context": state["vision_context"]} if state.get("vision_context") else None
+        runtime_context: dict[str, Any] = {}
+        if state.get("vision_context"):
+            runtime_context["vision_context"] = state["vision_context"]
+        if state.get("memory_context"):
+            runtime_context["short_term_memory"] = state["memory_context"]
         mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
+        memory_context = state.get("memory_context") or {}
+        previous_mission = memory_context.get("current_mission", {}) if isinstance(memory_context, dict) else {}
+        inherited_budget = memory_context.get("budget") if mission.continues_context and isinstance(memory_context, dict) else None
+        inherited_preferences = memory_context.get("preferences", []) if mission.continues_context and isinstance(memory_context, dict) else []
+        inherited_constraints = memory_context.get("constraints", []) if mission.continues_context and isinstance(memory_context, dict) else []
+        inherited_owned_items = memory_context.get("owned_items", []) if mission.continues_context and isinstance(memory_context, dict) else []
+        inherited_mission = previous_mission if mission.continues_context and isinstance(previous_mission, dict) else {}
         output = {
             **self._event(state, "intent_agent"),
             "mission_type": mission.mission_type, "goal": mission.goal,
             "requires_planning": mission.requires_planning, "requires_catalog": mission.requires_catalog,
-            "catalog_query": mission.catalog_query,
-            "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions, "budget": mission.budget,
+            "continues_context": mission.continues_context,
+            "optimization_mode": mission.optimization_mode or (
+                memory_context.get("optimization_mode") if mission.continues_context else None
+            ),
+            "catalog_query": mission.catalog_query or inherited_mission.get("catalog_query"),
+            "catalog_queries": mission.catalog_queries or inherited_mission.get("catalog_queries", []), "requested_actions": mission.requested_actions,
+            "budget": mission.budget if mission.budget is not None else inherited_budget,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
-            "preferences": mission.preferences, "constraints": mission.constraints,
-            "owned_items": mission.owned_items, "priorities": mission.priorities,
+            "preferences": list(dict.fromkeys([*inherited_preferences, *mission.preferences])),
+            "constraints": list(dict.fromkeys([*inherited_constraints, *mission.constraints])),
+            "owned_items": list(dict.fromkeys([*inherited_owned_items, *mission.owned_items])), "priorities": mission.priorities,
             "fulfillment_requirements": [item.model_dump() for item in mission.fulfillment_requirements],
             "mission": mission.model_dump(),
         }
@@ -524,8 +570,23 @@ class ShoppingOrchestrator:
 
     def _after_final_audit(self, state: ShoppingAgentState) -> str:
         if state["audit_result"] and state["audit_result"].get("status") == "pass":
-            return "end"
+            return "memory_update" if self.memory_store is not None and state.get("memory_session_scope") else "end"
         return "repair" if state["repair_count"] < self.max_repairs else "end"
+
+    async def _memory_update_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        if self.memory_store is None or not state.get("memory_session_scope"):
+            return {}
+        try:
+            previous = ShoppingSessionMemory.model_validate(state["memory_context"]) if state.get("memory_context") else None
+            await self.memory_store.save(
+                str(state["memory_session_scope"]), memory_from_state(previous, state)
+            )
+        except (MemoryUnavailableError, ValueError, TypeError) as error:
+            log_ai_event("agent.memory.update_unavailable", request_id=state["run_id"], error_type=type(error).__name__)
+            return {}
+        output = {**self._event(state, "memory_update")}
+        self._record_node(state, "memory_update", output)
+        return output
 
     async def _repair_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         attempt = state["repair_count"] + 1

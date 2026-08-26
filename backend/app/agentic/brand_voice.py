@@ -130,9 +130,8 @@ class BrandVoiceAgent:
             SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT),
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
-        draft = await self._draft(messages, payload, state)
-
         expected_ids = {str(product["id"]) for product in products}
+        draft = await self._draft_with_product_coverage(messages, payload, state, expected_ids)
         drafted_ids = [str(product_id) for product_id in draft.product_ids]
         # Tool-information responses (seller, reviews, details, comparisons,
         # and bundle totals) intentionally have no recommendation cards. The
@@ -140,7 +139,7 @@ class BrandVoiceAgent:
         # customer-facing claim, so discard it instead of failing the whole run.
         if not expected_ids:
             drafted_ids = []
-        elif len(drafted_ids) != len(set(drafted_ids)) or set(drafted_ids) != expected_ids:
+        elif not self._has_exact_product_coverage(drafted_ids, expected_ids):
             raise ResponseDraftError("Response model must reference exactly the verified selected products.")
 
         products_by_id = {str(product["id"]): product for product in products}
@@ -187,10 +186,10 @@ class BrandVoiceAgent:
             SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT),
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
-        draft = await self._draft(messages, payload, state)
         expected_ids = {str(product["id"]) for product in stock_results}
+        draft = await self._draft_with_product_coverage(messages, payload, state, expected_ids)
         drafted_ids = [str(product_id) for product_id in draft.product_ids]
-        if len(drafted_ids) != len(set(drafted_ids)) or set(drafted_ids) != expected_ids:
+        if not self._has_exact_product_coverage(drafted_ids, expected_ids):
             raise ResponseDraftError("Response model must reference exactly the verified stock results.")
         products_by_id = {str(product["id"]): product for product in stock_results}
         claims = [dict(products_by_id[product_id]) for product_id in drafted_ids]
@@ -232,6 +231,49 @@ class BrandVoiceAgent:
             raise ResponseDraftError("Response model did not return valid structured output.") from last_error
         return draft
 
+    async def _draft_with_product_coverage(
+        self,
+        messages: list[SystemMessage | HumanMessage],
+        payload: dict[str, Any],
+        state: dict[str, Any],
+        expected_ids: set[str],
+    ) -> ResponseDraft:
+        """Correct a valid-but-incomplete draft using the dynamic verified ID set."""
+        draft = await self._draft(messages, payload, state)
+        drafted_ids = [str(product_id) for product_id in draft.product_ids]
+        if not expected_ids or self._has_exact_product_coverage(drafted_ids, expected_ids):
+            return draft
+
+        correction_payload = {
+            **payload,
+            "required_response_product_ids": sorted(expected_ids),
+            "previous_draft": draft.model_dump(mode="json"),
+        }
+        for attempt in range(1, self.max_format_attempts + 1):
+            log_ai_event(
+                "agent.brand_voice.coverage_retry",
+                request_id=str(state.get("run_id", "")),
+                attempt=attempt,
+                max_attempts=self.max_format_attempts,
+            )
+            corrected = await self._draft([
+                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT),
+                HumanMessage(content=(
+                    "The prior draft used the wrong product_ids. Regenerate the entire response from the verified "
+                    "payload. Include each ID in required_response_product_ids exactly once, and mention every "
+                    "corresponding product in the response. Return JSON only.\n\n"
+                    + json.dumps(correction_payload, ensure_ascii=False, default=str)
+                )),
+            ], correction_payload, state)
+            corrected_ids = [str(product_id) for product_id in corrected.product_ids]
+            if self._has_exact_product_coverage(corrected_ids, expected_ids):
+                return corrected
+        raise ResponseDraftError("Response model could not cover the verified selected products.")
+
+    @staticmethod
+    def _has_exact_product_coverage(drafted_ids: list[str], expected_ids: set[str]) -> bool:
+        return len(drafted_ids) == len(set(drafted_ids)) and set(drafted_ids) == expected_ids
+
     @classmethod
     def _voice_guidance(cls, state: dict[str, Any]) -> dict[str, str]:
         seed = str(state.get("run_id", ""))
@@ -255,18 +297,54 @@ class BrandVoiceAgent:
         return {"strategy": strategies[index], "variation_token": seed[-8:]}
 
     @staticmethod
-    def select_catalog_products(state: dict[str, Any], *, limit: int = 3) -> list[dict[str, Any]]:
-        """Choose a small, deterministic, stock- and budget-aware shortlist."""
+    def select_catalog_products(state: dict[str, Any], *, limit: int | None = None) -> list[dict[str, Any]]:
+        """Choose a stock- and budget-aware shortlist that covers typed needs."""
         budget = state.get("budget")
         remaining = Decimal(str(budget)) if budget is not None else None
         selected: list[dict[str, Any]] = []
         excluded = {str(product_id) for product_id in state.get("excluded_product_ids", [])}
-        for product in state.get("candidate_products", []):
+        requirements = [item for item in state.get("fulfillment_requirements", []) if isinstance(item, dict)]
+        selection_limit = max(1, min(12, limit if limit is not None else (len(requirements) or 3)))
+        uncovered = set(range(len(requirements)))
+        candidates = list(state.get("candidate_products", []))
+        while candidates and len(selected) < selection_limit:
+            eligible: list[tuple[int, int, dict[str, Any], Decimal]] = []
+            for index, product in enumerate(candidates):
+                if str(product.get("id")) in excluded or int(product.get("inventory_quantity", 0)) < 1:
+                    continue
+                try:
+                    price = Decimal(str(product["price"]))
+                except (InvalidOperation, KeyError, TypeError):
+                    continue
+                if remaining is not None and price > remaining:
+                    continue
+                coverage = sum(
+                    1 for requirement_index in uncovered
+                    if BrandVoiceAgent._matches_requirement(product, requirements[requirement_index])
+                )
+                if requirements and coverage == 0:
+                    continue
+                eligible.append((coverage, -index, product, price))
+            if not eligible:
+                break
+            _, _, product, price = max(eligible, key=lambda item: (item[0], item[1]))
+            selected.append({"id": str(product["id"]), "quantity": 1})
+            if remaining is not None:
+                remaining -= price
+            uncovered = {
+                requirement_index for requirement_index in uncovered
+                if not BrandVoiceAgent._matches_requirement(product, requirements[requirement_index])
+            }
+            candidates = [candidate for candidate in candidates if str(candidate.get("id")) != str(product.get("id"))]
+            if requirements and not uncovered:
+                break
+        if requirements:
+            return selected
+        for product in candidates:
             if (
-                len(selected) >= limit
+                len(selected) >= selection_limit
                 or str(product.get("id")) in excluded
                 or int(product.get("inventory_quantity", 0)) < 1
-                or not BrandVoiceAgent._meets_fulfillment_requirements(product, state)
             ):
                 continue
             try:
@@ -306,7 +384,10 @@ class BrandVoiceAgent:
         facts = f"{product.get('specs', [])} {product.get('attributes', {})}".casefold()
         field = str(requirement.get("field") or "").casefold()
         if kind == "category":
-            return all(token in identity for token in value.split())
+            attributes = product.get("attributes", {})
+            department = attributes.get("department", "") if isinstance(attributes, dict) else ""
+            category_evidence = f"{identity} {department}".casefold()
+            return all(token in category_evidence for token in value.split())
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})
             return isinstance(attributes, dict) and value in str(attributes.get(field, "")).casefold()
