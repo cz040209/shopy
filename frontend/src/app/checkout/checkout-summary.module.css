@@ -1,0 +1,207 @@
+.checkoutHeader {
+  display: block !important;
+  width: 100%;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 10px 0 20px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+:global(.checkout) > .checkoutHeader:first-child {
+  display: block !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 0 18px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  text-align: left !important;
+}
+
+:global(.checkout) > .checkoutHeader:first-child > div:first-child {
+  display: block !important;
+}
+
+.checkoutHeader :global(.title-fancy) {
+  color: #fff !important;
+  background: none !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+.checkoutHeader p {
+  margin-top: 12px !important;
+}
+
+.checkoutIntro {
+  display: block;
+  width: 100%;
+  padding: 0 0 18px;
+  text-align: left;
+}
+
+.checkoutIntro h1 {
+  color: #f8fafc !important;
+  font-size: clamp(38px, 5vw, 58px) !important;
+  font-weight: 750 !important;
+  letter-spacing: -0.05em !important;
+  line-height: 1 !important;
+}
+
+.checkoutIntro :global(.title-fancy) {
+  color: #fff !important;
+  background: none !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+.checkoutIntro p {
+  margin-top: 12px !important;
+  color: #a5b1c5 !important;
+  font-size: 15px !important;
+  line-height: 1.6 !important;
+}
+
+.lineItems {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.itemLabel {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px 5px;
+  color: #91a1ba;
+  font-size: 11px;
+  font-weight: 780;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.itemLabel span:last-child {
+  color: #75dfea;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.lineItem {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(145, 166, 213, 0.14);
+  border-radius: 14px;
+  padding: 11px;
+  background: linear-gradient(135deg, rgba(24, 35, 66, 0.68), rgba(9, 16, 35, 0.58));
+}
+
+.itemImage {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(164, 186, 225, 0.2);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.itemImage img { width: 100%; height: 100%; object-fit: contain; padding: 5px; }
+.itemImage span { font-size: 24px; }
+
+.itemCopy { display: grid; min-width: 0; gap: 3px; }
+.itemCopy > span { overflow: hidden; color: #85dfe9; font-size: 10px; font-weight: 780; letter-spacing: 0.08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.itemCopy strong { overflow: hidden; color: #f8fbff; font-size: 15px; font-weight: 740; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.itemCopy small { color: #91a2bc; font-size: 11px; line-height: 1.35; }
+
+.itemAmount {
+  grid-column: 2;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(148, 166, 207, 0.11);
+}
+
+.itemAmount span { color: #8292ab; font-size: 10px; }
+.itemAmount strong { color: #fff; font-size: 14px; font-weight: 750; }
+
+.totals {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(148, 166, 207, 0.17);
+}
+
+.totals > div { display: flex; justify-content: space-between; color: #9aabc4; font-size: 14px; }
+.totals > div > span:last-child { color: #d9e3ef; font-weight: 650; }
+
+.grandTotal {
+  align-items: center;
+  margin-top: 4px;
+  border-top: 1px solid rgba(148, 166, 207, 0.17);
+  padding-top: 17px;
+}
+
+.grandTotal > span { color: #d6e0ee; font-size: 12px; font-weight: 820; letter-spacing: 0.1em; text-transform: uppercase; }
+.grandTotal > strong { color: #fff; font-family: var(--font-display), var(--font-sans), sans-serif; font-size: 30px; font-weight: 760; letter-spacing: -0.045em; }
+
+.createOrderAction,
+.returnAction {
+  min-height: 56px !important;
+  border-radius: 15px !important;
+  font-family: var(--font-display), var(--font-sans), sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.015em !important;
+  text-transform: none !important;
+}
+
+.createOrderAction {
+  margin-top: 19px;
+  border: 1px solid rgba(150, 217, 244, 0.34) !important;
+  background: linear-gradient(115deg, #7b69ed, #35b9dc) !important;
+  box-shadow: 0 14px 28px rgba(56, 128, 214, 0.24), inset 0 1px rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.createOrderAction:hover:not(:disabled) {
+  background: linear-gradient(115deg, #8877f2, #45c7e8) !important;
+  box-shadow: 0 18px 34px rgba(56, 128, 214, 0.32), inset 0 1px rgba(255, 255, 255, 0.25) !important;
+  transform: translateY(-2px);
+}
+
+.returnAction {
+  min-height: 50px !important;
+  border: 1px solid rgba(157, 177, 218, 0.28) !important;
+  background: rgba(255, 255, 255, 0.025) !important;
+  color: #cbd7e9 !important;
+}
+
+.returnAction:hover { border-color: rgba(112, 225, 240, 0.54) !important; background: rgba(66, 175, 203, 0.1) !important; color: #fff !important; }
+.createOrderAction :global(svg) { transition: transform 180ms ease; }
+.createOrderAction:hover :global(svg) { transform: translateX(3px); }
+
+.topUpAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 56px;
+  margin-top: 19px;
+  border: 1px solid rgba(255, 171, 193, 0.38);
+  border-radius: 15px;
+  background: linear-gradient(115deg, #b64f7d, #7b5cdd);
+  box-shadow: 0 14px 28px rgba(127, 57, 133, 0.23), inset 0 1px rgba(255,255,255,.16);
+  color: #fff;
+  font-family: var(--font-display), var(--font-sans), sans-serif;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -0.015em;
+  text-decoration: none;
+  transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+}
+
+.topUpAction:hover { color:#fff; filter:brightness(1.08); box-shadow:0 18px 34px rgba(127,57,133,.3); transform:translateY(-2px); }
+.topUpAction svg { transition:transform .18s ease; }.topUpAction:hover svg { transform:translateX(3px); }

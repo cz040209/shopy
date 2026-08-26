@@ -280,6 +280,7 @@ async def chat(
         "mission_type": trace.state.get("mission_type"),
         "budget": trace.state.get("budget"),
         "preferences": trace.state.get("preferences", []),
+        "key_requirements": trace.state.get("key_requirements", []),
         "owned_items": trace.state.get("owned_items", []),
         "priorities": trace.state.get("priorities", []),
     }

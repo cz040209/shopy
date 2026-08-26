@@ -10,7 +10,7 @@ import {
   getCurrentUser,
   logoutAccount,
 } from "@/lib/auth";
-import { Search, ShoppingBag, UserRound } from "lucide-react";
+import { ShoppingBag, UserRound } from "lucide-react";
 import styles from "./Navbar.module.css";
 import menuStyles from "./NavMenu.module.css";
 import fixStyles from "./NavbarFix.module.css";
@@ -42,16 +42,7 @@ export default function Navbar() {
   const router = useRouter();
   const { cartCount } = useCart();
   const [scrolled, setScrolled] = useState(false);
-  const [navbarHeight, setNavbarHeight] = useState(188);
-  const [shopQuery, setShopQuery] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    return pathname === "/shop"
-      ? new URLSearchParams(window.location.search).get("q") ?? ""
-      : "";
-  });
+  const [navbarHeight, setNavbarHeight] = useState(74);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
@@ -140,14 +131,6 @@ export default function Navbar() {
     router.refresh();
   }
 
-  function handleSearchSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const query = String(formData.get("q") ?? "").trim();
-    setShopQuery(query);
-    router.push(query ? `/shop?q=${encodeURIComponent(query)}` : "/shop");
-  }
-
   const linkClass = (active: boolean) =>
     [
       "inline-flex items-center justify-center rounded-full px-5 py-2.5 text-[0.8rem] font-semibold uppercase tracking-[0.12em]",
@@ -191,8 +174,22 @@ export default function Navbar() {
         ].join(" ")}
       >
         <div className="bg-[linear-gradient(90deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))] w-screen max-w-full">
-          <div className="flex w-screen max-w-full flex-wrap items-center justify-between gap-8 px-8 py-4 sm:px-10 lg:px-12">
-            <div   className="flex flex-wrap items-center"
+          <div className="flex w-screen max-w-full flex-wrap items-center gap-7 px-8 py-4 sm:px-10 lg:px-12">
+            <Link
+              href="/"
+              className={`group flex shrink-0 items-center ${fixStyles.logoFrame} ${logoStyles.frame}`}
+            >
+              <Image
+                src="/images/brand/shopy-logo-v2.png"
+                alt="Shopy"
+                width={240}
+                height={96}
+                priority
+                className={`h-14 w-auto object-contain ${fixStyles.logoImage} ${logoStyles.image}`}
+              />
+            </Link>
+
+            <div   className="flex flex-1 flex-wrap items-center"
                     style={{
                       columnGap: "10px",
                       rowGap: "10px",
@@ -208,7 +205,19 @@ export default function Navbar() {
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 sm:gap-6">
+            <div className="ml-auto flex flex-wrap items-center gap-3 sm:gap-5">
+              <Link
+                href={isLoggedIn ? "/cart" : "/login?next=%2Fcart"}
+                className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-white transition duration-200 hover:-translate-y-0.5 hover:border-cyan-300/40 hover:bg-white/10 hover:text-cyan-300"
+                aria-label="Cart"
+              >
+                <ShoppingBag size={21} strokeWidth={2.1} />
+                {cartCount > 0 && (
+                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan-400 px-1 text-[0.68rem] font-extrabold leading-none text-[#000000] shadow-[0_0_12px_rgba(0,212,255,0.35)]">
+                    {cartCount > 99 ? "99+" : cartCount}
+                  </span>
+                )}
+              </Link>
               <div className="group relative">
                 <Link
                   href={isLoggedIn ? "/profile" : "/login"}
@@ -256,61 +265,6 @@ export default function Navbar() {
           </div>
         </div>
 
-        <div className="bg-black w-screen max-w-full">
-          <div className="flex w-screen max-w-full items-center justify-between gap-8 px-8 py-5 sm:px-10 lg:px-12">
-            <Link
-              href="/"
-              className={`group flex shrink-0 items-center ${fixStyles.logoFrame} ${logoStyles.frame}`}
-            >
-              <Image
-                src="/images/brand/shopy-logo-v2.png"
-                alt="Shopy"
-                width={240}
-                height={96}
-                priority
-                className={`h-16 w-auto object-contain ${fixStyles.logoImage} ${logoStyles.image}`}
-              />
-            </Link>
-
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-10">
-              <form onSubmit={handleSearchSubmit} className="flex min-w-0 flex-1 max-w-[600px]">
-                <div className={`relative flex w-full items-center gap-3 rounded-full border border-white/20 pl-7 pr-12 py-4 transition duration-300 sm:pl-8 sm:pr-12 sm:py-4 ${fixStyles.searchShell}`}>
-                  <Search
-                    className="pointer-events-none absolute left-8 top-1/2 -translate-y-1/2 text-cyan-400 sm:left-10"
-                    size={22}
-                  />
-                  <input
-                    name="q"
-                    key={`${pathname}-${shopQuery}`}
-                    defaultValue={shopQuery}
-                    placeholder="Search products, brands, categories"
-                    className="w-full rounded-full border-0 bg-transparent pl-12 pr-4 text-sm text-white outline-none placeholder:text-white/50 sm:pl-12 sm:pr-5"
-                    style={{ height: 40 }}
-                  />
-                  <button
-                    type="submit"
-                    className={`mr-1 inline-flex items-center justify-center px-4 text-sm font-semibold uppercase text-white transition duration-200 sm:px-5 ${fixStyles.searchButton}`}
-                  >
-                    Search
-                  </button>
-                </div>
-              </form>
-
-              <Link
-                href={isLoggedIn ? "/cart" : "/login?next=%2Fcart"}
-                className="relative ml-10 flex h-16 w-16 items-center justify-center rounded-full bg-white/10 text-white transition duration-200 hover:-translate-y-0.5 hover:scale-[1.05] hover:bg-white/15 hover:text-cyan-400"
-                aria-label="Cart"
-              >
-                <ShoppingBag size={25} strokeWidth={2.1} />
-                {cartCount > 0 && (
-                  <span className="absolute -right-2 -top-2 flex h-7 min-w-7 items-center justify-center rounded-full bg-cyan-400 px-2 text-[0.9rem] font-extrabold leading-none text-[#000000] shadow-[0_0_12px_rgba(0,212,255,0.35)]">
-                    {cartCount > 99 ? "99+" : cartCount}
-                  </span>
-                )}
-              </Link>
-            </div>
-          </div>
-        </div>
       </header>
       <div
         aria-hidden="true"

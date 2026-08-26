@@ -5,7 +5,6 @@ import {
   Minus,
   Plus,
   ArrowRight,
-  ShieldCheck,
   ShoppingBag,
   Trash2,
 } from "lucide-react";
@@ -15,6 +14,8 @@ import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
 import styles from "./cart.module.css";
 import emptyStyles from "./empty-cart.module.css";
+import actionStyles from "./cart-actions.module.css";
+import redesignStyles from "./cart-redesign.module.css";
 
 const currency = new Intl.NumberFormat("en-MY", {
   currency: "MYR",
@@ -59,9 +60,9 @@ function CartContent() {
             {cartItems.map((item) => (
               <article
                 key={item.id}
-                className={`${styles.cartItem} grid min-w-0 gap-5 rounded-lg bg-white/[0.03] p-5 transition md:grid-cols-[96px_1fr_auto] lg:p-6`}
+                className={`${styles.cartItem} ${redesignStyles.cartItem}`}
               >
-                <Link href={`/product/${item.id}`} className="flex items-center justify-center overflow-hidden rounded-xl bg-slate-100" style={{ width: 96, height: 96 }}>
+                <Link href={`/product/${item.id}`} className={redesignStyles.productThumb}>
                   <ProductImage
                     src={item.image}
                     alt={item.name}
@@ -72,7 +73,7 @@ function CartContent() {
                   />
                 </Link>
 
-                <div className="min-w-0">
+                <div className={redesignStyles.itemInfo}>
                   <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-cyan-400">
                     {item.category} / {item.brand}
                   </p>
@@ -82,21 +83,14 @@ function CartContent() {
                   >
                     {item.name}
                   </Link>
-                  <p
-                    className="mt-2 line-clamp-2 max-w-xl text-sm text-[#8892a4]"
-                    style={{ fontSize: "14px", lineHeight: "1.65", color: "#b4bfd1" }}
-                  >
+                  <p className={redesignStyles.itemDescription}>
                     {item.desc}
                   </p>
+                  <span className={redesignStyles.unitPrice}>{currency.format(item.price)} each</span>
                 </div>
 
-                <div className={`${styles.itemControls} flex min-w-0 flex-wrap items-center justify-between gap-5 md:flex-col md:items-end`}>
-                  <p
-                    className={styles.itemTotal}
-                    style={{ color: "#f8fafc", fontSize: "16px", fontWeight: 800 }}
-                  >
-                    {currency.format(item.price * item.quantity)}
-                  </p>
+                <div className={`${styles.itemControls} ${redesignStyles.itemControls}`}>
+                  <div className={redesignStyles.itemPrice}><span>Item total</span><strong>{currency.format(item.price * item.quantity)}</strong></div>
                   <div className={styles.quantityControls}>
                     <div className={styles.quantityStepper} aria-label={`${item.name} quantity`}>
                       <button
@@ -154,19 +148,15 @@ function CartContent() {
             </div>
             <div className={styles.summaryActions}>
               <Link href="/checkout">
-                <Button variant="primary" fullWidth className={styles.checkoutButton}>
-                  Proceed to checkout
+                <Button variant="primary" fullWidth className={actionStyles.checkoutAction}>
+                  Proceed to checkout <ArrowRight size={17} />
                 </Button>
               </Link>
               <Link href="/shop">
-                <Button variant="outline" fullWidth className={styles.continueButton}>
+                <Button variant="outline" fullWidth className={actionStyles.continueAction}>
                   Continue shopping
                 </Button>
               </Link>
-            </div>
-            <div className="security-note mt-5">
-              <ShieldCheck size={18} className="mt-0.5 shrink-0 text-cyan-400" />
-              AI fraud checks and encrypted payment routing are active.
             </div>
           </aside>
         </section>

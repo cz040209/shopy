@@ -1,0 +1,44 @@
+.checkoutAction,
+.continueAction {
+  min-height: 56px !important;
+  border-radius: 15px !important;
+  font-family: var(--font-display), var(--font-sans), sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 760 !important;
+  letter-spacing: -0.015em !important;
+  text-transform: none !important;
+}
+
+.checkoutAction {
+  border: 1px solid rgba(150, 217, 244, 0.34) !important;
+  background: linear-gradient(115deg, #7b69ed, #35b9dc) !important;
+  box-shadow: 0 14px 28px rgba(56, 128, 214, 0.24), inset 0 1px rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.checkoutAction:hover {
+  background: linear-gradient(115deg, #8877f2, #45c7e8) !important;
+  box-shadow: 0 18px 34px rgba(56, 128, 214, 0.32), inset 0 1px rgba(255, 255, 255, 0.25) !important;
+  transform: translateY(-2px);
+}
+
+.continueAction {
+  border: 1px solid rgba(157, 177, 218, 0.28) !important;
+  background: rgba(255, 255, 255, 0.025) !important;
+  color: #cbd7e9 !important;
+}
+
+.continueAction:hover {
+  border-color: rgba(112, 225, 240, 0.54) !important;
+  background: rgba(66, 175, 203, 0.1) !important;
+  color: #fff !important;
+  transform: translateY(-2px);
+}
+
+.checkoutAction :global(svg) {
+  transition: transform 180ms ease;
+}
+
+.checkoutAction:hover :global(svg) {
+  transform: translateX(3px);
+}

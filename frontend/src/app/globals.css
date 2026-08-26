@@ -142,6 +142,29 @@ body[data-theme="light"] {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+.home-voice-recording {
+  background: rgba(248, 113, 113, 0.16) !important;
+  color: #fda4af !important;
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.11);
+  animation: homeVoicePulse 1.2s ease-in-out infinite;
+}
+
+.home-voice-spinner { animation: homeVoiceSpin 0.8s linear infinite; }
+
+.home-voice-hint {
+  margin: 10px 0 -4px;
+  color: #aab9d3;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@keyframes homeVoicePulse {
+  50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0); transform: scale(0.96); }
+}
+
+@keyframes homeVoiceSpin { to { transform: rotate(360deg); } }
+
 /* ─── GRADIENT TEXT ──────────────────────────────────────── */
 .gradient-text {
   background: linear-gradient(135deg, var(--cyan) 0%, #7b61ff 100%);

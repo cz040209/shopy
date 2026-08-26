@@ -3,26 +3,26 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
-import {
-  CreditCard,
-  LockKeyhole,
-  MapPin,
-  Radio,
-  ShieldCheck,
-} from "lucide-react";
+import { MapPin, ArrowRight, WalletCards } from "lucide-react";
 import Button from "@/components/ui/Button";
 import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
 import { apiFetch } from "@/lib/api";
+import { getCurrentUser } from "@/lib/auth";
 import styles from "./checkout.module.css";
-import invoiceStyles from "./invoice.module.css";
+import summaryStyles from "./checkout-summary.module.css";
 
 const currency = new Intl.NumberFormat("en-MY", {
   currency: "MYR",
   style: "currency",
   maximumFractionDigits: 0,
 });
+const DEFAULT_SHOPY_PAY_BALANCE = 420;
+type StoredWallet = {
+  balance?: unknown;
+  transactions?: unknown;
+};
 
 function CheckoutContent() {
   const invoiceRef = useRef<HTMLDivElement | null>(null);
@@ -31,9 +31,36 @@ function CheckoutContent() {
   const [isExporting, setIsExporting] = useState(false);
   const { cartItems, subtotal, refreshCart } = useCart();
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [shopyPayBalance, setShopyPayBalance] = useState(DEFAULT_SHOPY_PAY_BALANCE);
+  const [walletStorageKey, setWalletStorageKey] = useState<string | null>(null);
   const tax = Math.round(subtotal * 0.06);
   const handling = cartItems.length > 0 ? 24 : 0;
   const total = subtotal + tax + handling;
+  const balanceAfterOrder = shopyPayBalance - total;
+  const requiredTopUp = Math.max(total - shopyPayBalance, 0);
+  const hasSufficientBalance = shopyPayBalance >= total;
+  const walletIsReady = walletStorageKey !== null;
+
+  useEffect(() => {
+    let active = true;
+    void getCurrentUser().then((user) => {
+      if (!active || !user) return;
+      try {
+        const storageKey = `shopy-pay-wallet:${user.id}`;
+        const stored = window.localStorage.getItem(storageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as StoredWallet;
+          if (typeof parsed.balance === "number" && Number.isFinite(parsed.balance)) {
+            setShopyPayBalance(parsed.balance);
+          }
+        }
+        setWalletStorageKey(storageKey);
+      } catch {
+        // Keep the default wallet balance when local storage is unavailable.
+      }
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -139,7 +166,7 @@ function CheckoutContent() {
       pdf.setFontSize(8.5);
       pdf.setTextColor(180, 193, 222);
       pdf.text("+60 12 345 6789", margin + 5, y + 20);
-      pdf.text("Card payment - authorization pending", rightCardX + 5, y + 20);
+      pdf.text("ShopyPay wallet - authorization pending", rightCardX + 5, y + 20);
       pdf.text("Kuala Lumpur City Centre", margin + 5, y + 26);
       pdf.text("Kuala Lumpur, Malaysia", rightCardX + 5, y + 26);
 
@@ -238,8 +265,47 @@ function CheckoutContent() {
   };
 
   const completeCheckout = async () => {
+    if (!walletStorageKey || !hasSufficientBalance || cartItems.length === 0) return;
+
+    let previousWallet: string | null = null;
+    let previousBalance = shopyPayBalance;
     try {
       setIsPlacingOrder(true);
+      previousWallet = window.localStorage.getItem(walletStorageKey);
+      const storedWallet = previousWallet
+        ? (JSON.parse(previousWallet) as StoredWallet)
+        : {};
+      const currentBalance = typeof storedWallet.balance === "number"
+        ? storedWallet.balance
+        : shopyPayBalance;
+
+      if (currentBalance < total) {
+        setShopyPayBalance(currentBalance);
+        return;
+      }
+
+      previousBalance = currentBalance;
+      const transactions = Array.isArray(storedWallet.transactions)
+        ? storedWallet.transactions
+        : [];
+      const nextBalance = currentBalance - total;
+      window.localStorage.setItem(walletStorageKey, JSON.stringify({
+        balance: nextBalance,
+        transactions: [
+          {
+            id: `SP-${Date.now().toString().slice(-6)}`,
+            title: "ShopyPay purchase",
+            description: `Checkout payment · ${cartItems.length} item${cartItems.length === 1 ? "" : "s"}`,
+            amount: total,
+            type: "debit",
+            status: "Completed",
+            date: new Date().toLocaleString("en-MY", { day: "2-digit", hour: "numeric", minute: "2-digit", month: "short" }),
+          },
+          ...transactions,
+        ].slice(0, 8),
+      }));
+      setShopyPayBalance(nextBalance);
+
       const order = await apiFetch("/api/v1/orders/checkout", {
         method: "POST",
         body: JSON.stringify({
@@ -248,7 +314,7 @@ function CheckoutContent() {
             line1: "Kuala Lumpur City Centre", city: "Kuala Lumpur", state: "Kuala Lumpur",
             postal_code: "50088", country_code: "MY",
           },
-          payment_method: "card",
+          payment_method: "shopy_pay",
         }),
       }) as { order_number: string; placed_at: string };
       setInvoiceNumber(order.order_number);
@@ -256,6 +322,14 @@ function CheckoutContent() {
       await refreshCart();
     } catch (error) {
       console.error("Checkout failed", error);
+      if (walletStorageKey) {
+        if (previousWallet === null) {
+          window.localStorage.removeItem(walletStorageKey);
+        } else {
+          window.localStorage.setItem(walletStorageKey, previousWallet);
+        }
+        setShopyPayBalance(previousBalance);
+      }
     } finally {
       setIsPlacingOrder(false);
     }
@@ -263,31 +337,24 @@ function CheckoutContent() {
 
   return (
     <div className={styles.checkout}>
-      <section className={styles.checkoutHeader}>
+      <div className={summaryStyles.checkoutIntro}>
         <div>
-          <h1 className="max-w-3xl text-white title-fancy">Order Summary</h1>
-          <p className="mt-4 max-w-2xl text-base text-[#8892a4] subtitle-fancy">
-            Confirm your delivery vector, payment method, and final amount
+          <h1>Order Summary</h1>
+          <p>
+            Confirm your delivery details, ShopyPay balance, and final amount
             before the order enters fulfillment.
           </p>
         </div>
-
-        <div className={styles.paymentShield}>
-          <div className={styles.paymentShieldIcon}>
-              <ShieldCheck size={20} />
-          </div>
-          <div><p>Payment shield online</p><strong>AI risk scoring runs before authorization.</strong><span>Protected checkout monitoring is active</span></div>
-        </div>
-      </section>
+      </div>
 
       <section className="grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-6">
-          <div className="rounded-lg bg-white/[0.03] p-6 lg:p-7">
-            <div className="mb-6 flex items-center gap-4">
+          <div className={`${styles.detailCard} ${styles.deliveryCard}`}>
+            <div className={styles.sectionHeading}>
               <MapPin className="text-cyan-400" size={21} />
-              <h2 className="text-white subtitle-fancy">Delivery Coordinates</h2>
+              <div><span>01 · DELIVERY</span><h2>Where should we send it?</h2><p>Your saved details are ready. Make a quick edit if needed.</p></div>
             </div>
-            <div className="grid gap-5 md:grid-cols-2">
+            <div className={styles.deliveryFields}>
               <div>
                 <label htmlFor="name">Full name</label>
                 <input id="name" className="input" defaultValue="Jeffrey Tan" />
@@ -307,35 +374,21 @@ function CheckoutContent() {
             </div>
           </div>
 
-          <div className="rounded-lg bg-white/[0.03] p-6 lg:p-7">
-            <div className="mb-6 flex items-center gap-4">
-              <CreditCard className="text-cyan-400" size={21} />
-              <h2 className="text-white subtitle-fancy">Payment Method</h2>
+          <div className={`${styles.detailCard} ${styles.walletCard}`}>
+            <div className={styles.sectionHeading}>
+              <WalletCards className="text-cyan-400" size={21} />
+              <div><span>02 · PAYMENT</span><h2>Pay with ShopyPay</h2><p>Use your available wallet balance. No card details needed.</p></div>
             </div>
-            <div className="grid gap-5 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <label htmlFor="card">Card number</label>
-                <input
-                  id="card"
-                  className="input"
-                  defaultValue="4242 4242 4242 4242"
-                />
-              </div>
-              <div>
-                <label htmlFor="expiry">Expiry</label>
-                <input id="expiry" className="input" defaultValue="08 / 29" />
-              </div>
-              <div>
-                <label htmlFor="cvc">CVC</label>
-                <input id="cvc" className="input" defaultValue="128" />
-              </div>
+            <div className={styles.walletBalance}>
+              <div><span>Available balance</span><strong>{currency.format(shopyPayBalance)}</strong></div>
+              <WalletCards size={25} />
             </div>
-          </div>
-
-          <div className="security-note">
-            <LockKeyhole size={18} className="mt-0.5 shrink-0 text-cyan-400" />
-            Checkout uses encrypted fields, velocity checks, and device
-            fingerprint review before the final payment request.
+            <div className={styles.walletBreakdown}>
+              <div><span>This order</span><strong>{currency.format(total)}</strong></div>
+              <div><span>After checkout</span><strong className={balanceAfterOrder >= 0 ? styles.balancePositive : styles.balanceNegative}>{currency.format(balanceAfterOrder)}</strong></div>
+            </div>
+            {balanceAfterOrder < 0 && <p className={styles.balanceWarning}>Add {currency.format(requiredTopUp)} to continue with this order.</p>}
+            <Link href={hasSufficientBalance ? "/shopy-pay" : `/shopy-pay?top_up=${requiredTopUp}`} className={styles.walletLink}>{hasSufficientBalance ? "View ShopyPay wallet" : `Top up ${currency.format(requiredTopUp)}`} <ArrowRight size={15} /></Link>
           </div>
         </div>
 
@@ -370,77 +423,65 @@ function CheckoutContent() {
                   </div>
                 </div>
 
-                <div className={invoiceStyles.tableWrap}>
-                  <table className={invoiceStyles.table}>
-                    <thead>
-                      <tr className="text-[#93a6bd]">
-                        <th className="text-left pb-3">Description</th>
-                        <th className="text-right pb-3">Unit price</th>
-                        <th className="text-right pb-3">Qty</th>
-                        <th className="text-right pb-3">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cartItems.map((item) => (
-                        <tr key={item.id} className="align-top">
-                          <td className="py-4 pr-4">
-                            <div className={invoiceStyles.productDetails}>
-                              <div className={invoiceStyles.productImage}>
-                                <ProductImage
-                                  src={item.image}
-                                  alt={item.name}
-                                  width={112}
-                                  height={112}
-                                  sizes="56px"
-                                  fallback={<span role="img" aria-label={item.name}>{item.emoji}</span>}
-                                />
-                              </div>
-                              <div className={invoiceStyles.productCopy}>
-                                <div className="text-white font-semibold">{item.name}</div>
-                                <div className="text-xs text-[#9aa8bf]">SKU: {item.id} · {item.brand}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="py-4 text-right text-[#9aa8bf]">{currency.format(item.price)}</td>
-                          <td className="py-4 text-right text-[#9aa8bf]">{item.quantity}</td>
-                          <td className="py-4 text-right font-semibold text-white">{currency.format(item.price * item.quantity)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className={summaryStyles.lineItems}>
+                  <div className={summaryStyles.itemLabel}><span>Items</span><span>{cartItems.length} selected</span></div>
+                  {cartItems.map((item) => (
+                    <article className={summaryStyles.lineItem} key={item.id}>
+                      <div className={summaryStyles.itemImage}>
+                        <ProductImage
+                          src={item.image}
+                          alt={item.name}
+                          width={112}
+                          height={112}
+                          sizes="64px"
+                          fallback={<span role="img" aria-label={item.name}>{item.emoji}</span>}
+                        />
+                      </div>
+                      <div className={summaryStyles.itemCopy}>
+                        <span>{item.brand || item.category}</span>
+                        <strong>{item.name}</strong>
+                        <small>Qty {item.quantity} · {currency.format(item.price)} each</small>
+                      </div>
+                      <div className={summaryStyles.itemAmount}>
+                        <span>Item total</span>
+                        <strong>{currency.format(item.price * item.quantity)}</strong>
+                      </div>
+                    </article>
+                  ))}
                 </div>
 
-                <div className={styles.invoiceTotals}>
-                  <div className="flex justify-between text-[#93a6bd]"><span>Subtotal</span><span className="text-white">{currency.format(subtotal)}</span></div>
-                  <div className="flex justify-between text-[#93a6bd]"><span>SST estimate</span><span className="text-white">{currency.format(tax)}</span></div>
-                  <div className="flex justify-between text-[#93a6bd]"><span>Handling</span><span className="text-white">{currency.format(handling)}</span></div>
-                  <div className="flex justify-between items-center pt-3">
-                    <span className="text-sm uppercase tracking-widest text-[#93a6bd]">Total</span>
-                    <span className="text-2xl font-extrabold text-white">{currency.format(total)}</span>
+                <div className={summaryStyles.totals}>
+                  <div><span>Subtotal</span><span>{currency.format(subtotal)}</span></div>
+                  <div><span>SST estimate</span><span>{currency.format(tax)}</span></div>
+                  <div><span>Handling</span><span>{currency.format(handling)}</span></div>
+                  <div className={summaryStyles.grandTotal}>
+                    <span>Total</span>
+                    <strong>{currency.format(total)}</strong>
                   </div>
                 </div>
             </div>
           </div>
 
-          <Button
-            variant="primary"
-            fullWidth
-            className={styles.createOrderButton}
-            onClick={completeCheckout}
-            disabled={cartItems.length === 0 || isPlacingOrder}
-          >
-            {isPlacingOrder ? "Creating order…" : "Create order"}
-          </Button>
+          {hasSufficientBalance ? (
+            <Button
+              variant="primary"
+              fullWidth
+              className={summaryStyles.createOrderAction}
+              onClick={completeCheckout}
+              disabled={cartItems.length === 0 || isPlacingOrder || !walletIsReady}
+            >
+              {isPlacingOrder ? "Processing payment…" : walletIsReady ? "Pay with ShopyPay" : "Checking ShopyPay…"}<ArrowRight size={17} />
+            </Button>
+          ) : (
+            <Link href={`/shopy-pay?top_up=${requiredTopUp}`} className={summaryStyles.topUpAction}>
+              Top up {currency.format(requiredTopUp)} to continue <ArrowRight size={17} />
+            </Link>
+          )}
           <Link href="/cart" className={styles.returnToCart}>
-            <Button variant="outline" fullWidth>
+            <Button variant="outline" fullWidth className={summaryStyles.returnAction}>
               Return to cart
             </Button>
           </Link>
-
-          <div className={styles.invoiceSecurity}>
-            <Radio size={15} className="text-cyan-400" />
-            Live fraud detection is monitoring this session.
-          </div>
         </aside>
       </section>
     </div>

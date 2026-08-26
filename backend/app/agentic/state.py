@@ -27,6 +27,7 @@ class ShoppingAgentState(TypedDict):
     bundle_items: list[dict[str, Any]]
     budget: float | None
     preferences: list[str]
+    key_requirements: list[str]
     constraints: list[str]
     owned_items: list[str]
     priorities: list[str]
@@ -84,6 +85,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "bundle_items": [],
         "budget": None,
         "preferences": [],
+        "key_requirements": [],
         "constraints": [],
         "owned_items": [],
         "priorities": [],

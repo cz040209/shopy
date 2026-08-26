@@ -234,7 +234,7 @@ export default function AIAssistant() {
 
     try {
       const response = await fetch(`${ASSISTANT_API_URL}/api/v1/transcribe`, { method: "POST", body: formData, signal: controller.signal });
-      const data = await response.json() as { transcript?: string; detail?: string };
+      const data = await response.json() as { transcript?: string; detail?: string; language?: string | null; duration_seconds?: number | null };
       if (!response.ok || !data.transcript) throw new Error(data.detail ?? "No speech was detected.");
       sendTextMessage(data.transcript, {
         inputType: "voice",

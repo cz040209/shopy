@@ -9,7 +9,7 @@ import { getCurrentUser } from "@/lib/auth";
 import styles from "./shopy-pay.module.css";
 
 const INITIAL_BALANCE = 420;
-const dailyLimit = 3000;
+const dailyLimit = 20000;
 const monthlyLimit = 12000;
 const quickAmounts = [50, 100, 200, 500];
 const paymentSources = ["FPX Online Banking", "Visa ending 4242", "DuitNow Transfer"];
@@ -56,6 +56,13 @@ function ShopyPayContent() {
 
     void restoreWallet();
     return () => { isCurrent = false; };
+  }, []);
+  useEffect(() => {
+    const requestedTopUp = Number(new URLSearchParams(window.location.search).get("top_up"));
+    if (Number.isFinite(requestedTopUp) && requestedTopUp >= 10) {
+      const id = window.setTimeout(() => setTopUpAmount(String(Math.ceil(requestedTopUp))), 0);
+      return () => window.clearTimeout(id);
+    }
   }, []);
   useEffect(() => {
     if (!storageKey) return;

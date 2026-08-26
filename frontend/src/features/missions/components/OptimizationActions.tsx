@@ -1,5 +1,5 @@
 import { Gem, Heart, Palette, TrendingDown, Star } from "lucide-react";
-import styles from "./mission-workspace.module.css";
+import styles from "./mission-studio.module.css";
 
 const actions = [{ label: "Make it cheaper", prompt: "Make it cheaper", icon: TrendingDown }, { label: "Make it better", prompt: "Prioritize quality and performance", icon: Gem }, { label: "Make it prettier", prompt: "Make it prettier", icon: Palette }, { label: "More comfortable", prompt: "Make it more comfortable", icon: Heart }, { label: "Better reviewed", prompt: "Prioritize better reviewed options", icon: Star }];
 

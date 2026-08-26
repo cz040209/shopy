@@ -15,6 +15,7 @@ export type MissionData = {
   mission_type?: string | null;
   budget?: number | null;
   preferences?: string[];
+  key_requirements?: string[];
   owned_items?: string[];
   priorities?: string[];
 };

@@ -17,8 +17,8 @@ import {
   CreditCard,
   PackageCheck,
   Settings,
-  Sparkles,
   UserRound,
+  Bot,
 } from "lucide-react";
 import styles from "./profile.module.css";
 import RequireAuth from "@/components/auth/RequireAuth";
@@ -48,7 +48,7 @@ function accountSections(orderCount: number) {
   {
     title: "AI Insights",
     description: "Review recommendations tuned to your shopping patterns.",
-    icon: Sparkles,
+    icon: Bot,
     href: "/shop",
     metric: "94% match",
   },

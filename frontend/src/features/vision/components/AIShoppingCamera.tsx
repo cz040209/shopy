@@ -2,7 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, ImagePlus, LampFloor, MonitorUp, PackageOpen, RotateCcw, ShoppingBag, Sparkles, SwitchCamera, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Camera, Check, ImagePlus, LampFloor, MonitorUp, PackageOpen, RotateCcw, ShoppingBag, SwitchCamera, X } from "lucide-react";
 import styles from "./AIShoppingCamera.module.css";
 import { API_URL } from "@/lib/api";
 
@@ -261,7 +262,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       </button>
       <input ref={fileInputRef} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} />
 
-      {stage && (
+      {stage && createPortal(
         <section className={styles.overlay} data-shopy-camera-overlay="" role="dialog" aria-modal="true" aria-label={modeContent[activeMode].label}>
           <div className={styles.cameraShell}>
             <header className={styles.header}>
@@ -303,12 +304,12 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
               {error && <p className={styles.error}>{error}</p>}
               <div className={styles.previewActions}>
                 <button type="button" className={styles.secondaryAction} onClick={retake}><RotateCcw size={18} />Retake</button>
-                <button type="button" className={styles.primaryAction} onClick={() => void submitPhoto()}><Sparkles size={18} />Use photo</button>
+                <button type="button" className={styles.primaryAction} onClick={() => void submitPhoto()}><Camera size={18} />Use photo</button>
               </div>
             </div>}
 
             {stage === "processing" && <div className={styles.processingStage}>
-              <div className={styles.processingOrb}><Sparkles size={30} /></div>
+              <div className={styles.processingOrb}><Camera size={30} /></div>
               <h2>Creating your shopping mission</h2>
               <p>Shopy AI is turning your photo into relevant product ideas.</p>
               <ol className={styles.steps}>{processingSteps.map((step, index) => <li key={step} className={index <= processingIndex ? styles.stepActive : ""}><span>{index < processingIndex ? <Check size={14} /> : index + 1}</span>{step}</li>)}</ol>
@@ -317,7 +318,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
             {stage === "result" && (isRoom || isLook) && <div className={styles.visualResultStage}>
               <div className={styles.visualScroll}>
                 {isRoom && <>
-                  <div className={styles.canvasIntro}><span><Sparkles size={13} /> YOUR ROOM, REIMAGINED</span><h2>AI found {Math.max(visualProducts.length, 3)} opportunities</h2></div>
+                  <div className={styles.canvasIntro}><span>YOUR ROOM, REIMAGINED</span><h2>AI found {Math.max(visualProducts.length, 3)} opportunities</h2></div>
                   <div className={styles.roomCanvas}>
                     {previewUrl && <img src={previewUrl} alt="Your room" />}
                     <div className={styles.canvasShade} />
@@ -328,13 +329,13 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
                   <p className={styles.analysis}>{analysis}</p>
                   <div className={styles.opportunityList}>
                     {(shoppingNeeds.length ? shoppingNeeds : visualProducts.map((product) => product.category || product.name)).slice(0, 4).map((need, index) => {
-                      const product = visualProducts[index]; const Icon = [LampFloor, PackageOpen, MonitorUp, Sparkles][index] ?? Sparkles;
+                      const product = visualProducts[index]; const Icon = [LampFloor, PackageOpen, MonitorUp, Camera][index] ?? Camera;
                       return <article className={styles.opportunity} key={need}><span className={styles.opportunityIcon}><Icon size={19} /></span><div><small>0{index + 1} — {need}</small><p>{visionContext.visual_constraints?.[index] || `A considered addition for the ${need.toLowerCase()} opportunity detected in your room.`}</p>{product && <strong>{product.name} <b>RM {Number(product.price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></strong>}</div></article>;
                     })}
                   </div>
                 </>}
                 {isLook && <>
-                  <div className={styles.canvasIntro}><span><Sparkles size={13} /> COMPLETE YOUR LOOK</span><h2>Built around what you already wear</h2></div>
+                  <div className={styles.canvasIntro}><span>COMPLETE YOUR LOOK</span><h2>Built around what you already wear</h2></div>
                   <div className={styles.lookCanvas}>
                     <span className={styles.lookStyle}>STYLE DETECTED · {detectedStyle.length ? detectedStyle.join(" · ").toUpperCase() : "ANALYZED FROM YOUR PHOTO"}</span>
                     <div className={styles.lookTop}>{visualProducts[0] ? <><span>🧢</span><small>{visualProducts[0].name}<b>RM {Number(visualProducts[0].price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></small></> : "🧢"}</div>
@@ -348,11 +349,11 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
               </div>
             </div>}
             {stage === "result" && !isRoom && !isLook && <div className={styles.resultStage}>
-              <div className={styles.processingOrb}><Sparkles size={30} /></div><h2>Your AI shopping brief</h2><p>{analysis}</p><button type="button" className={styles.primaryAction} onClick={close}>Done</button>
+              <div className={styles.processingOrb}><Camera size={30} /></div><h2>Your AI shopping brief</h2><p>{analysis}</p><button type="button" className={styles.primaryAction} onClick={close}>Done</button>
             </div>}
           </div>
         </section>
-      )}
+      , document.body)}
     </>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, LockKeyhole, Mail, Shield, Sparkles, UserRound } from "lucide-react";
+import { ArrowRight, LockKeyhole, Mail, Shield, UserRound } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { getSafeReturnPath, notifyAuthChanged, registerAccount } from "@/lib/auth";
 import { useRouter } from "next/navigation";
@@ -65,7 +65,7 @@ export default function SignUp() {
               <h2 className="mt-2 text-white">Create your account</h2>
             </div>
             <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-400/10 text-cyan-400">
-              <Sparkles size={24} />
+              <UserRound size={24} />
             </span>
           </div>
 

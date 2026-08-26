@@ -1,0 +1,16 @@
+.cartItem { display:grid; grid-template-columns:104px minmax(0,1fr) 190px; gap:24px; align-items:center; min-height:168px; padding:22px 24px; border:1px solid rgba(148,163,184,.16); border-radius:20px; background:linear-gradient(145deg,rgba(19,29,53,.96),rgba(11,17,33,.98)); box-shadow:0 16px 34px rgba(0,0,0,.16),inset 0 1px 0 rgba(255,255,255,.04); transition:transform .2s ease,border-color .2s ease; }
+.cartItem:hover { border-color:rgba(112,225,240,.36); transform:translateY(-2px); }
+.productThumb { display:flex; width:104px; height:104px; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(169,188,226,.24); border-radius:16px; background:linear-gradient(145deg,#f8fafc,#e3eaf4); }
+.productThumb img { width:100%; height:100%; object-fit:contain; padding:11px; }
+.itemInfo { display:grid; min-width:0; align-content:center; gap:7px; }
+.itemInfo > p:first-child { overflow:hidden; color:#83e0eb; font-size:10px; font-weight:800; letter-spacing:.13em; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
+.itemInfo > a { color:#f7f9ff; font-family:var(--font-display),sans-serif; font-size:22px; font-weight:720; letter-spacing:-.03em; line-height:1.15; }
+.itemInfo > a:hover { color:#81e8ef; }
+.itemDescription { display:-webkit-box; max-width:620px; overflow:hidden; color:#aab7cc; font-size:13px; line-height:1.55; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.unitPrice { color:#7789a8; font-size:11px; }
+.itemControls { display:grid; justify-items:end; gap:18px; align-self:center; }
+.itemPrice { display:grid; gap:4px; justify-items:end; }
+.itemPrice span { color:#7789a8; font-size:10px; font-weight:750; letter-spacing:.1em; text-transform:uppercase; }
+.itemPrice strong { color:#fff; font-family:var(--font-display),sans-serif; font-size:22px; font-weight:760; letter-spacing:-.03em; }
+@media(max-width:950px){.cartItem{grid-template-columns:92px minmax(0,1fr);gap:18px}.productThumb{width:92px;height:92px}.itemControls{grid-column:2;display:flex;align-items:center;justify-content:space-between;width:100%}.itemPrice{justify-items:start}}
+@media(max-width:640px){.cartItem{grid-template-columns:76px minmax(0,1fr);gap:14px;min-height:0;padding:16px}.productThumb{width:76px;height:76px}.itemInfo > a{font-size:18px}.itemDescription{font-size:12px}.itemControls{grid-column:1 / -1;gap:12px}.itemPrice strong{font-size:19px}.itemPrice{justify-items:start}}

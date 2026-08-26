@@ -269,6 +269,7 @@ class ShoppingOrchestrator:
             "budget": mission.budget if mission.budget is not None else inherited_budget,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
             "preferences": list(dict.fromkeys([*inherited_preferences, *mission.preferences])),
+            "key_requirements": mission.key_requirements,
             "constraints": list(dict.fromkeys([*inherited_constraints, *mission.constraints])),
             "owned_items": list(dict.fromkeys([*inherited_owned_items, *mission.owned_items])), "priorities": mission.priorities,
             "selection_criteria": [item.model_dump() for item in mission.selection_criteria],

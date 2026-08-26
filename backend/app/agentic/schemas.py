@@ -44,6 +44,7 @@ class MissionInterpretation(BaseModel):
     bundle_items: list[BundleItemPlan] = Field(default_factory=list, max_length=20)
     budget: float | None = Field(default=None, ge=0)
     preferences: list[str] = Field(default_factory=list, max_length=20)
+    key_requirements: list[str] = Field(default_factory=list, max_length=6)
     constraints: list[str] = Field(default_factory=list, max_length=20)
     owned_items: list[str] = Field(default_factory=list, max_length=30)
     priorities: list[str] = Field(default_factory=list, max_length=10)
