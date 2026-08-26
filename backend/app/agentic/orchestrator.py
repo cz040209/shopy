@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -83,6 +85,7 @@ class ShoppingOrchestrator:
         workflow.add_node("audit", self._audit_node)
         workflow.add_node("brand_voice", self._brand_voice_node)
         workflow.add_node("final_audit", self._final_audit_node)
+        workflow.add_node("restore_audited_draft", self._restore_audited_draft_node)
         workflow.add_node("repair", self._repair_node)
         workflow.add_node("memory_update", self._memory_update_node)
         workflow.add_edge(START, "memory_load")
@@ -121,7 +124,11 @@ class ShoppingOrchestrator:
         workflow.add_edge("response_draft", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "brand_voice": "brand_voice", "end": END})
         workflow.add_edge("brand_voice", "final_audit")
-        workflow.add_conditional_edges("final_audit", self._after_final_audit, {"repair": "repair", "memory_update": "memory_update", "end": END})
+        workflow.add_conditional_edges(
+            "final_audit", self._after_final_audit,
+            {"repair": "repair", "restore_audited_draft": "restore_audited_draft", "memory_update": "memory_update", "end": END},
+        )
+        workflow.add_edge("restore_audited_draft", "final_audit")
         workflow.add_edge("memory_update", END)
         workflow.add_edge("repair", "response_draft")
         return workflow.compile()
@@ -264,6 +271,7 @@ class ShoppingOrchestrator:
             "preferences": list(dict.fromkeys([*inherited_preferences, *mission.preferences])),
             "constraints": list(dict.fromkeys([*inherited_constraints, *mission.constraints])),
             "owned_items": list(dict.fromkeys([*inherited_owned_items, *mission.owned_items])), "priorities": mission.priorities,
+            "selection_criteria": [item.model_dump() for item in mission.selection_criteria],
             "fulfillment_requirements": [item.model_dump() for item in mission.fulfillment_requirements],
             "mission": mission.model_dump(),
         }
@@ -304,7 +312,9 @@ class ShoppingOrchestrator:
             output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
             return output
-        candidates = search_output["candidate_products"]
+        candidates, selection_context = self._apply_optimization_context(
+            state, search_output["candidate_products"]
+        )
         result = {**result, "product_rankings": search_output["product_rankings"]}
         if "check_stock" in actions:
             stock_results: list[dict[str, Any]] = []
@@ -339,10 +349,12 @@ class ShoppingOrchestrator:
         # generic browse request is expected to have several valid matches.
         # An empty/ambiguous resolver result must not discard those matches.
         response_candidates = action_candidates or candidates
-        fulfillment_gaps = self.brand_voice.fulfillment_gaps(response_candidates, state)
+        no_eligible_alternative = bool(selection_context.get("no_eligible_alternative"))
+        fulfillment_gaps = [] if no_eligible_alternative else self.brand_voice.fulfillment_gaps(response_candidates, state)
         output = {
             **result,
             "candidate_products": candidates,
+            "selection_context": selection_context,
             "selected_products": (
                 self.brand_voice.select_catalog_products({**state, "candidate_products": response_candidates})
                 if self._should_recommend_products(actions) else []
@@ -353,6 +365,106 @@ class ShoppingOrchestrator:
         }
         self._record_node(state, "product_search", output)
         return output
+
+    @staticmethod
+    def _apply_optimization_context(
+        state: ShoppingAgentState, candidates: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Rank catalog facts from LLM-supplied, typed optimisation criteria.
+
+        The intent model decides which catalog facts matter. This layer only
+        resolves those field names against verified product data, compares
+        reference-backed numeric criteria, and keeps the result auditable.
+        """
+        criteria = [
+            item for item in state.get("selection_criteria", [])
+            if isinstance(item, dict) and str(item.get("field", "")).strip()
+        ]
+        if not state.get("continues_context") or not criteria:
+            return candidates, {}
+        memory = state.get("memory_context")
+        prior_selected = memory.get("selected_products", []) if isinstance(memory, dict) else []
+        prior_ids = {
+            str(item.get("id")) for item in prior_selected
+            if isinstance(item, dict) and item.get("id")
+        }
+        reference_products = [product for product in candidates if str(product.get("id")) in prior_ids]
+        filtered = list(candidates)
+        applied: list[dict[str, Any]] = []
+        for criterion in criteria:
+            operator = str(criterion.get("operator", ""))
+            if operator not in {"lower_than_reference", "higher_than_reference"}:
+                continue
+            field = str(criterion["field"])
+            references = [
+                value for product in reference_products
+                if (value := ShoppingOrchestrator._numeric_catalog_fact(product, field)) is not None
+            ]
+            if not references:
+                continue
+            reference = min(references) if operator == "lower_than_reference" else max(references)
+            eligible = [
+                product for product in filtered
+                if (value := ShoppingOrchestrator._numeric_catalog_fact(product, field)) is not None
+                and (value < reference if operator == "lower_than_reference" else value > reference)
+            ]
+            applied.append({
+                "field": field, "operator": operator, "reference_value": str(reference),
+                "eligible_count": len(eligible),
+            })
+            filtered = eligible
+        context = {
+            "optimization_mode": state.get("optimization_mode"),
+            "criteria": criteria,
+            "reference_product_ids": sorted(prior_ids),
+            "applied_comparisons": applied,
+            "eligible_alternative_count": len(filtered),
+            "no_eligible_alternative": bool(applied and not filtered),
+        }
+        if context["no_eligible_alternative"]:
+            return [], context
+        return sorted(filtered, key=lambda product: ShoppingOrchestrator._optimization_sort_key(product, criteria)), context
+
+    @staticmethod
+    def _catalog_fact(product: dict[str, Any], field: str) -> object | None:
+        """Read a top-level or structured attribute without catalog-specific mappings."""
+        normalized = field.casefold().strip()
+        for key, value in product.items():
+            if str(key).casefold() == normalized:
+                return value
+        attributes = product.get("attributes")
+        if isinstance(attributes, dict):
+            for key, value in attributes.items():
+                if str(key).casefold() == normalized:
+                    return value
+        return None
+
+    @staticmethod
+    def _numeric_catalog_fact(product: dict[str, Any], field: str) -> Decimal | None:
+        value = ShoppingOrchestrator._catalog_fact(product, field)
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _optimization_sort_key(product: dict[str, Any], criteria: list[dict[str, Any]]) -> tuple[Any, ...]:
+        """Create a stable preference ordering from verified product evidence."""
+        match_score = 0
+        numeric_orders: list[Decimal] = []
+        evidence = json.dumps(product, ensure_ascii=False, default=str).casefold()
+        for criterion in criteria:
+            operator = str(criterion.get("operator", ""))
+            weight = int(criterion.get("weight", 1) or 1)
+            if operator == "prefer_match":
+                desired = str(criterion.get("value") or criterion.get("field", "")).strip()
+                if desired and BrandVoiceAgent._terms_present(desired, evidence):
+                    match_score += weight
+            elif operator in {"lower_than_reference", "higher_than_reference"}:
+                value = ShoppingOrchestrator._numeric_catalog_fact(product, str(criterion.get("field", "")))
+                if value is not None:
+                    numeric_orders.append(value if operator == "lower_than_reference" else -value)
+        return (-match_score, *numeric_orders, str(product.get("name", "")))
 
     async def _review_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         insights = {} if state.get("stock_results") else await self.review_agent.run(state)
@@ -567,6 +679,8 @@ class ShoppingOrchestrator:
         audit = await self.auditor.audit(state, self.tool_registry)
         log_ai_event("agent.audit", request_id=state["run_id"], status=audit["status"], error_codes=[item["code"] for item in audit["errors"]])
         output = {**self._event(state, "audit"), "audit_result": dict(audit)}
+        if audit["status"] == "pass" and isinstance(state.get("final_response"), str):
+            output["audited_response"] = state["final_response"]
         self._record_node(state, "audit", output)
         return output
 
@@ -585,7 +699,23 @@ class ShoppingOrchestrator:
     def _after_final_audit(self, state: ShoppingAgentState) -> str:
         if state["audit_result"] and state["audit_result"].get("status") == "pass":
             return "memory_update" if self.memory_store is not None and state.get("memory_session_scope") else "end"
+        audited = state.get("audited_response")
+        if isinstance(audited, str) and audited.strip() and audited != state.get("final_response"):
+            return "restore_audited_draft"
         return "repair" if state["repair_count"] < self.max_repairs else "end"
+
+    async def _restore_audited_draft_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        """Fall back to the initial audited draft if final wording added a claim."""
+        audited = state.get("audited_response")
+        if not isinstance(audited, str) or not audited.strip():
+            return {}
+        output = {
+            **self._event(state, "restore_audited_draft"),
+            "final_response": audited,
+            "next_stage": "final_audit",
+        }
+        self._record_node(state, "restore_audited_draft", output)
+        return output
 
     async def _memory_update_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         if self.memory_store is None or not state.get("memory_session_scope"):

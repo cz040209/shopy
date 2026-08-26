@@ -21,6 +21,7 @@ class ShoppingAgentState(TypedDict):
     execution_plan: dict[str, Any]
     fulfillment_requirements: list[dict[str, Any]]
     fulfillment_gaps: list[str]
+    selection_context: dict[str, Any]
     unfulfilled_requirements: list[str]
     planning_context: dict[str, Any] | None
     bundle_items: list[dict[str, Any]]
@@ -29,6 +30,7 @@ class ShoppingAgentState(TypedDict):
     constraints: list[str]
     owned_items: list[str]
     priorities: list[str]
+    selection_criteria: list[dict[str, Any]]
     required_categories: list[str]
     optional_categories: list[str]
     candidate_products: list[dict[str, Any]]
@@ -46,6 +48,7 @@ class ShoppingAgentState(TypedDict):
     audit_result: dict[str, Any] | None
     repair_count: int
     final_response: str | None
+    audited_response: str | None
     response_claims: list[dict[str, Any]]
     response_source: str | None
     attachments: list[dict[str, Any]]
@@ -75,6 +78,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "execution_plan": {},
         "fulfillment_requirements": [],
         "fulfillment_gaps": [],
+        "selection_context": {},
         "unfulfilled_requirements": [],
         "planning_context": None,
         "bundle_items": [],
@@ -83,6 +87,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "constraints": [],
         "owned_items": [],
         "priorities": [],
+        "selection_criteria": [],
         "required_categories": [],
         "optional_categories": [],
         "candidate_products": [],
@@ -99,6 +104,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "audit_result": None,
         "repair_count": 0,
         "final_response": None,
+        "audited_response": None,
         "response_claims": [],
         "response_source": None,
         "attachments": [],

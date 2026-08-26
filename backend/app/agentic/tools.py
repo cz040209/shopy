@@ -61,6 +61,8 @@ class ProductToolOutput(BaseModel):
     price: Decimal
     currency: str
     inventory_quantity: int
+    rating_average: Decimal
+    review_count: int
     image_url: str | None
     image_alt_text: str | None
     specs: list[dict[str, Any]]
@@ -95,6 +97,7 @@ def _product_output(product) -> ProductToolOutput:
         id=product.id, slug=product.slug, name=product.name, brand=product.brand, category=product.category.name,
         seller_id=product.seller.id, seller_name=product.seller.name, price=product.price,
         currency=product.currency, inventory_quantity=max(0, product.inventory_quantity - product.reserved_quantity),
+        rating_average=product.rating_average, review_count=product.review_count,
         image_url=primary_image.url if primary_image else None,
         image_alt_text=primary_image.alt_text if primary_image else None,
         specs=product.specs, attributes=product.attributes,

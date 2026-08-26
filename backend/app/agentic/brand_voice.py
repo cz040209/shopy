@@ -41,6 +41,10 @@ Rules:
   order status, or capabilities.
 - For product recommendations, include every listed product ID exactly once in
   product_ids and use only its supplied facts in the response.
+- Write catalog prices only as "RM <amount>" (for example, "RM 3999.00").
+- Except for a stock-check response, do not say that a product is available,
+  in stock, out of stock, purchasable, or has a quantity. Product discovery is
+  not a live stock confirmation.
 - For stock checks, report the supplied matching products' availability and exact
   available quantities. Include every verified stock-result ID exactly once in
   product_ids, including products that are out of stock. Never infer stock from
@@ -57,6 +61,12 @@ Rules:
   and clearly explain any verified requirement that cannot be fulfilled. Never
   hide an unmet requirement. Copy each unmet requirement's value exactly into
   unfulfilled_requirements; otherwise return an empty list.
+- When selection_context says no_eligible_alternative is true, explain that no
+  verified alternative met the supplied optimisation criteria. State only the
+  reference values and criteria that selection_context supplies, ask for a
+  useful trade-off or requirement, and leave both product_ids and
+  unfulfilled_requirements empty. Do not claim the product type itself is
+  unavailable.
 - Apply the supplied brand_voice_guidance style, but phrase the answer naturally
   for this request. Avoid canned openings such as "I can help with that" and do
   not reuse a fixed sentence template. Lead with the requested fact or result."""
@@ -75,6 +85,10 @@ Rules:
 - Use the supplied variation strategy to change phrasing and sentence structure.
   Do not mention the strategy or its token to the customer.
 - Avoid generic openings and do not copy the draft sentence-for-sentence.
+- Never introduce stock, availability, purchasability, or inventory wording.
+  Only retain such wording when the supplied verified_stock_results explicitly
+  supports it; otherwise remove it while preserving the remaining facts.
+- Keep any catalog price in the "RM <amount>" form.
 - If a safe rewrite is not possible, return the original draft unchanged."""
 
 
@@ -124,6 +138,7 @@ class BrandVoiceAgent:
             "planning_context": state.get("planning_context"),
             "fulfillment_gaps": state.get("fulfillment_gaps", []),
             "fulfillment_requirements": state.get("fulfillment_requirements", []),
+            "selection_context": state.get("selection_context", {}),
             "repair_feedback": state.get("repair_feedback", []),
             "brand_voice_guidance": self._voice_guidance(state),
         }

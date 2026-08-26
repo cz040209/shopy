@@ -203,6 +203,10 @@ class ShoppingAuditor:
         # This check uses the same typed matcher as selection, so it applies to
         # every future catalog domain without keyword-specific prose rules.
         budget = state.get("budget")
+        no_eligible_optimization_alternative = (
+            isinstance(state.get("selection_context"), dict)
+            and state["selection_context"].get("no_eligible_alternative") is True
+        )
         for requirement in state.get("fulfillment_requirements", []):
             if not isinstance(requirement, dict):
                 continue
@@ -250,6 +254,12 @@ class ShoppingAuditor:
                     "requirement": value,
                 })
             if matches < quantity:
+                if no_eligible_optimization_alternative:
+                    # A continuation can validly ask the customer to relax an
+                    # intent-derived criterion when verified search returned
+                    # no qualifying alternative. This is not an unavailable
+                    # product-type claim.
+                    continue
                 # The writer must declare the exact unmet typed requirement.
                 # This avoids fragile language-specific matching in free prose.
                 if not verified_products and value in declared_unfulfilled and value in allowed_unfulfilled:

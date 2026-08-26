@@ -189,6 +189,54 @@ def test_catalog_queries_remove_only_redundant_subqueries():
     assert ShoppingOrchestrator._catalog_queries(state) == ["cheap laptop", "toner"]
 
 
+def test_optimisation_continuation_uses_llm_criteria_and_a_prior_catalog_fact():
+    state = initial_shopping_state("This is too expensive for me")
+    state.update({
+        "continues_context": True,
+        "optimization_mode": "cheaper",
+        "selection_criteria": [{
+            "field": "price", "operator": "lower_than_reference", "value": None, "weight": 3,
+        }],
+        "memory_context": {"selected_products": [{"id": "current-phone", "quantity": 1}]},
+    })
+    candidates = [
+        {"id": "current-phone", "name": "Current Phone", "price": "3999.00"},
+        {"id": "lower-phone", "name": "Lower-Priced Phone", "price": "3499.00"},
+        {"id": "higher-phone", "name": "Higher-Priced Phone", "price": "4599.00"},
+    ]
+
+    alternatives, context = ShoppingOrchestrator._apply_optimization_context(state, candidates)
+
+    assert [item["id"] for item in alternatives] == ["lower-phone"]
+    assert context["reference_product_ids"] == ["current-phone"]
+    assert context["eligible_alternative_count"] == 1
+    assert context["no_eligible_alternative"] is False
+    assert context["applied_comparisons"] == [{
+        "field": "price", "operator": "lower_than_reference",
+        "reference_value": "3999.00", "eligible_count": 1,
+    }]
+
+
+def test_optimisation_can_rank_by_dynamic_qualitative_catalog_evidence():
+    state = initial_shopping_state("Make it more comfortable")
+    state.update({
+        "continues_context": True,
+        "optimization_mode": "comfort",
+        "selection_criteria": [{
+            "field": "comfort", "operator": "prefer_match", "value": "ergonomic lumbar support", "weight": 5,
+        }],
+    })
+    candidates = [
+        {"id": "basic", "name": "Basic Chair", "price": "200", "attributes": {}, "specs": [{"text": "fixed seat"}]},
+        {"id": "ergonomic", "name": "Ergonomic Chair", "price": "400", "attributes": {"support": "adjustable lumbar support"}, "specs": []},
+    ]
+
+    alternatives, context = ShoppingOrchestrator._apply_optimization_context(state, candidates)
+
+    assert [item["id"] for item in alternatives] == ["ergonomic", "basic"]
+    assert context["no_eligible_alternative"] is False
+
+
 @pytest.mark.anyio
 async def test_brand_voice_polishes_an_audited_draft_with_a_run_specific_strategy():
     class PolishModel:

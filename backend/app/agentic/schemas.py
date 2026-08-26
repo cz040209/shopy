@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -20,6 +22,15 @@ class FulfillmentRequirement(BaseModel):
     quantity: int = Field(default=1, ge=1, le=99)
 
 
+class SelectionCriterion(BaseModel):
+    """An intent-derived preference used to rank a continuation's catalog matches."""
+
+    field: str = Field(min_length=1, max_length=120)
+    operator: Literal["lower_than_reference", "higher_than_reference", "prefer_match"]
+    value: str | float | int | None = Field(default=None)
+    weight: int = Field(default=1, ge=1, le=10)
+
+
 class MissionInterpretation(BaseModel):
     mission_type: str = Field(min_length=1, max_length=80)
     goal: str = Field(min_length=1, max_length=300)
@@ -36,6 +47,7 @@ class MissionInterpretation(BaseModel):
     constraints: list[str] = Field(default_factory=list, max_length=20)
     owned_items: list[str] = Field(default_factory=list, max_length=30)
     priorities: list[str] = Field(default_factory=list, max_length=10)
+    selection_criteria: list[SelectionCriterion] = Field(default_factory=list, max_length=10)
     fulfillment_requirements: list[FulfillmentRequirement] = Field(default_factory=list, max_length=30)
 
 
