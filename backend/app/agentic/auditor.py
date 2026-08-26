@@ -9,6 +9,7 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from .brand_voice import BrandVoiceAgent
 from .intent import StructuredOutputError, _json_object
 
 
@@ -197,6 +198,31 @@ class ShoppingAuditor:
                 "code": "invalid_unfulfilled_requirement",
                 "message": "The response declared a fulfillment gap that is not supported by catalog search results.",
             })
+        # A response may not declare a need unavailable when the search has
+        # already supplied an in-stock, budget-eligible verified candidate.
+        # This check uses the same typed matcher as selection, so it applies to
+        # every future catalog domain without keyword-specific prose rules.
+        budget = state.get("budget")
+        for requirement in state.get("fulfillment_requirements", []):
+            if not isinstance(requirement, dict):
+                continue
+            value = str(requirement.get("value", "")).casefold().strip()
+            if value not in declared_unfulfilled:
+                continue
+            for candidate in state.get("candidate_products", []):
+                if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
+                    continue
+                try:
+                    within_budget = budget is None or Decimal(str(candidate["price"])) <= Decimal(str(budget))
+                except Exception:
+                    within_budget = False
+                if within_budget and BrandVoiceAgent._matches_requirement(candidate, requirement):
+                    errors.append({
+                        "code": "unsupported_unavailability_claim",
+                        "message": "The response declares a requirement unavailable despite a verified eligible catalog match.",
+                        "requirement": value,
+                    })
+                    break
         for requirement in state.get("fulfillment_requirements", []):
             if not isinstance(requirement, dict):
                 continue
@@ -204,19 +230,25 @@ class ShoppingAuditor:
             quantity = int(requirement.get("quantity", 1) or 1)
             if not value:
                 continue
+            eligible_candidates = []
+            for candidate in state.get("candidate_products", []):
+                if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
+                    continue
+                try:
+                    within_budget = budget is None or Decimal(str(candidate["price"])) <= Decimal(str(budget))
+                except Exception:
+                    within_budget = False
+                if within_budget and BrandVoiceAgent._matches_requirement(candidate, requirement):
+                    eligible_candidates.append(candidate)
             matches = 0
             for product in verified_products.values():
-                identity = f"{product.get('name', '')} {product.get('brand', '')} {product.get('category', '')}".casefold()
-                facts = f"{product.get('specs', [])} {product.get('attributes', {})}".casefold()
-                field = str(requirement.get("field") or "").casefold()
-                if kind == "category":
-                    matched = all(token in identity for token in value.split())
-                elif kind == "attribute" and field:
-                    attributes = product.get("attributes", {})
-                    matched = isinstance(attributes, dict) and value in str(attributes.get(field, "")).casefold()
-                else:
-                    matched = value in facts or value in identity
-                matches += int(matched)
+                matches += int(BrandVoiceAgent._matches_requirement(product, requirement))
+            if len(eligible_candidates) >= quantity and matches < quantity:
+                errors.append({
+                    "code": "catalog_match_not_selected",
+                    "message": "Verified catalog matches were retrieved but not carried into the customer response.",
+                    "requirement": value,
+                })
             if matches < quantity:
                 # The writer must declare the exact unmet typed requirement.
                 # This avoids fragile language-specific matching in free prose.

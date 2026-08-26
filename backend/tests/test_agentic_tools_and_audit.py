@@ -494,3 +494,26 @@ async def test_graph_iteration_limit_is_enforced():
     orchestrator = ShoppingOrchestrator(FakeChatModel(), max_graph_iterations=3)
     with pytest.raises(GraphRecursionError):
         await orchestrator.ainvoke("Build a gaming setup")
+
+
+@pytest.mark.anyio
+async def test_auditor_rejects_when_a_verified_match_is_lost_before_response(db_session):
+    """Search evidence must not degrade into a false unavailable response."""
+    audit = await ShoppingAuditor().audit(
+        {
+            "selected_products": [],
+            "candidate_products": [{
+                "id": "candidate-laptop", "name": "Acer Swift Go 14", "brand": "Acer", "category": "Laptops",
+                "price": "3699.00", "inventory_quantity": 3, "specs": [],
+                "attributes": {"department": "electronics", "device_category": "laptops"},
+            }],
+            "fulfillment_requirements": [{"kind": "attribute", "field": "category", "value": "laptop", "quantity": 1}],
+            "fulfillment_gaps": [], "unfulfilled_requirements": [], "budget": None,
+            "preferences": [], "constraints": [], "response_source": "structured_llm_brand_voice_v1",
+            "final_response": "No result was selected.", "response_claims": [], "attachments": [],
+        },
+        CommerceToolRegistry(db_session, "lost-selection"),
+    )
+
+    assert audit["status"] == "fail"
+    assert any(error["code"] == "catalog_match_not_selected" for error in audit["errors"])

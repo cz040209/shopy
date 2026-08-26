@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
@@ -376,6 +377,14 @@ class BrandVoiceAgent:
 
     @staticmethod
     def _matches_requirement(product: dict[str, Any], requirement: dict[str, Any]) -> bool:
+        """Compare typed needs against catalog evidence without exact-label coupling.
+
+        Product categories are human labels (often plural) while an intent can
+        express a singular product type or store it in a domain-specific
+        attribute.  Matching normalized terms across the verified identity and
+        relevant structured attributes keeps selection grounded without a
+        catalogue-specific synonym table.
+        """
         kind = str(requirement.get("kind", ""))
         value = str(requirement.get("value", "")).casefold().strip()
         if not value:
@@ -387,11 +396,41 @@ class BrandVoiceAgent:
             attributes = product.get("attributes", {})
             department = attributes.get("department", "") if isinstance(attributes, dict) else ""
             category_evidence = f"{identity} {department}".casefold()
-            return all(token in category_evidence for token in value.split())
+            return BrandVoiceAgent._terms_present(value, category_evidence)
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})
-            return isinstance(attributes, dict) and value in str(attributes.get(field, "")).casefold()
+            attribute_value = str(attributes.get(field, "")) if isinstance(attributes, dict) else ""
+            # Intent models sometimes encode the product type as an attribute
+            # named category/type even when the catalog represents it as a
+            # category label.  Treat those as category evidence, not as a
+            # missing arbitrary attribute.
+            if field in {"category", "type", "product_type"}:
+                return BrandVoiceAgent._terms_present(value, f"{attribute_value} {identity}")
+            return BrandVoiceAgent._terms_present(value, attribute_value)
         return value in facts or value in identity
+
+    @staticmethod
+    def _terms_present(need: str, evidence: str) -> bool:
+        """Require every meaningful normalized term without substring mistakes."""
+        requested = BrandVoiceAgent._normalized_terms(need)
+        available = set(BrandVoiceAgent._normalized_terms(evidence))
+        return bool(requested) and set(requested).issubset(available)
+
+    @staticmethod
+    def _normalized_terms(value: str) -> list[str]:
+        terms: list[str] = []
+        for token in re.findall(r"[\w]+", value.casefold()):
+            if len(token) < 2:
+                continue
+            # A light grammatical normalization is deliberately generic. It
+            # handles category labels such as "laptops"/"laptop" while keeping
+            # product names and attributes as catalog-supplied evidence.
+            if len(token) > 4 and token.endswith("ies"):
+                token = f"{token[:-3]}y"
+            elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+                token = token[:-1]
+            terms.append(token)
+        return terms
 
     @staticmethod
     def _response_products(state: dict[str, Any]) -> list[dict[str, Any]]:

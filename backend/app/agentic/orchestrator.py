@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -518,7 +519,20 @@ class ShoppingOrchestrator:
         items.extend(str(item).strip() for item in state.get("catalog_queries", []))
         if state.get("catalog_query"):
             items.append(str(state["catalog_query"]).strip())
-        return list(dict.fromkeys(item for item in items if item)) or [ShoppingOrchestrator._catalog_query(state)]
+        unique = list(dict.fromkeys(item for item in items if item))
+
+        def terms(query: str) -> set[str]:
+            return set(re.findall(r"[\w]+", query.casefold()))
+
+        # Intent may return both a descriptive search phrase and its shorter
+        # product-type form. The shorter query contributes no new retrieval
+        # evidence and wastes a tool call, so retain only the more specific
+        # query. Independent bundle items remain separate.
+        filtered = [
+            query for query in unique
+            if not any(terms(query) < terms(other) for other in unique if other != query)
+        ]
+        return filtered or [ShoppingOrchestrator._catalog_query(state)]
 
     def _stock_search_limit(self) -> int:
         if self.tool_registry is None:
@@ -598,7 +612,11 @@ class ShoppingOrchestrator:
             if isinstance(item, dict) and item.get("code") in {"product_not_found", "insufficient_stock"} and item.get("product_id")
         }
         selected = [item for item in state.get("selected_products", []) if str(item.get("id")) not in excluded]
-        if excluded and not selected and self._should_recommend_products(self._requested_actions(state)):
+        selection_was_lost = any(
+            isinstance(item, dict) and item.get("code") == "catalog_match_not_selected"
+            for item in audit_errors
+        )
+        if (excluded or selection_was_lost) and self._should_recommend_products(self._requested_actions(state)):
             selected = self.brand_voice.select_catalog_products({
                 **state, "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
             })

@@ -71,7 +71,10 @@ Set catalog_query to null, requested_actions to [], and bundle_items to [] when 
 need a catalog lookup. For every explicit shopping need that can be checked against
 catalog facts, add a fulfillment_requirement. Use category for a requested item
 type, feature for a capability such as wireless, and attribute for a named field
-such as color, size, or material. Do not invent requirements."""
+such as color, size, or material. A category value must contain only the
+normalized product-type phrase: keep quality, price, budget, and preference
+words in their dedicated fields. Do not use field "category" for an item-type
+requirement. Do not invent requirements."""
 
 
 def build_intent_system_prompt(tools: Iterable[Any]) -> str:

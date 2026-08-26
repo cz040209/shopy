@@ -165,6 +165,30 @@ def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_prod
     ]
 
 
+def test_catalog_selection_normalizes_product_type_across_category_fields():
+    """A singular intent requirement must match plural/domain catalog labels."""
+    state = initial_shopping_state("I want to buy a cheap laptop")
+    state.update({
+        # Mirrors a malformed-but-recoverable intent field from a live run.
+        "fulfillment_requirements": [{"kind": "attribute", "field": "category", "value": "laptop", "quantity": 1}],
+        "candidate_products": [{
+            "id": "laptop", "name": "Acer Swift Go 14", "brand": "Acer", "category": "Laptops",
+            "price": "3699", "inventory_quantity": 5, "specs": [],
+            "attributes": {"department": "electronics", "device_category": "laptops"},
+        }],
+    })
+
+    assert BrandVoiceAgent.fulfillment_gaps(state["candidate_products"], state) == []
+    assert BrandVoiceAgent.select_catalog_products(state) == [{"id": "laptop", "quantity": 1}]
+
+
+def test_catalog_queries_remove_only_redundant_subqueries():
+    state = initial_shopping_state("Find a cheap laptop")
+    state.update({"catalog_queries": ["cheap laptop", "toner"], "catalog_query": "laptop"})
+
+    assert ShoppingOrchestrator._catalog_queries(state) == ["cheap laptop", "toner"]
+
+
 @pytest.mark.anyio
 async def test_brand_voice_polishes_an_audited_draft_with_a_run_specific_strategy():
     class PolishModel:

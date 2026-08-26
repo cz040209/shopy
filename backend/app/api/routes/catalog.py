@@ -34,7 +34,7 @@ def products(
     category: str | None = Query(default=None, max_length=140),
     seller: str | None = Query(default=None, max_length=180),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=200, ge=1, le=1000),
+    page_size: int = Query(default=500, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> ProductListResponse:
     records = list_products(db, query=q, category_slug=category, seller_slug=seller, offset=(page - 1) * page_size, limit=page_size)
