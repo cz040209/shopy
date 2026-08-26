@@ -43,6 +43,21 @@ FURNITURE_PRODUCTS = [
     ("FURNITURE-020", "Nest Side Table Set", "Weave Studio", "Tables", "Weave Studio", "279.00", "Pair of nesting side tables that can separate for flexible small-room surfaces.", "Tempered glass, powder-coated steel", "Large Ø 45 × H 50 cm; small Ø 35 × H 44 cm", ["Black Smoke", "Brass Clear", "White"], ["Living room", "Bedroom"], "Beside sofa or bed", "https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=900&q=85", None),
 ]
 
+# Stable catalog ratings make product comparisons realistic while keeping this
+# idempotent seed deterministic across environments and future reruns.
+FURNITURE_RATINGS = {
+    "FURNITURE-001": Decimal("4.80"), "FURNITURE-002": Decimal("4.30"),
+    "FURNITURE-003": Decimal("4.70"), "FURNITURE-004": Decimal("3.90"),
+    "FURNITURE-005": Decimal("4.50"), "FURNITURE-006": Decimal("3.60"),
+    "FURNITURE-007": Decimal("4.10"), "FURNITURE-008": Decimal("4.60"),
+    "FURNITURE-009": Decimal("3.80"), "FURNITURE-010": Decimal("4.40"),
+    "FURNITURE-011": Decimal("4.70"), "FURNITURE-012": Decimal("3.70"),
+    "FURNITURE-013": Decimal("3.40"), "FURNITURE-014": Decimal("4.20"),
+    "FURNITURE-015": Decimal("3.50"), "FURNITURE-016": Decimal("4.00"),
+    "FURNITURE-017": Decimal("4.60"), "FURNITURE-018": Decimal("3.00"),
+    "FURNITURE-019": Decimal("3.30"), "FURNITURE-020": Decimal("4.10"),
+}
+
 
 def run() -> int:
     with SessionLocal() as db:
@@ -71,13 +86,23 @@ def run() -> int:
                 "badge": ProductBadge(badge) if badge else None, "inventory_quantity": 15 + position, "reserved_quantity": 0, "emoji": "🛋️",
                 "specs": [{"label": "Materials", "value": materials}, {"label": "Dimensions", "value": dimensions}, {"label": "Color variants", "value": ", ".join(colors)}, {"label": "Best rooms", "value": ", ".join(rooms)}, {"label": "Placement", "value": placement}, {"label": "Seller", "value": seller_name}],
                 "attributes": {"colors": colors, "materials": materials, "dimensions": dimensions, "rooms": rooms, "placement": placement, "department": "furniture"},
-                "rating_average": Decimal("4.60"), "review_count": 20 + position, "published_at": datetime.now(timezone.utc),
+                "rating_average": FURNITURE_RATINGS[sku], "review_count": 20 + position, "published_at": datetime.now(timezone.utc),
             }
             if product is None:
                 product = Product(sku=sku, **values); db.add(product)
             else:
                 for field, value in values.items(): setattr(product, field, value)
-            db.flush(); product.images.clear(); product.images.append(ProductImage(url=image_url, alt_text=name, sort_order=0))
+            db.flush()
+            # Update the primary image in place on reruns. Clearing and adding
+            # a new sort-order-zero row in one flush violates the per-product
+            # image ordering constraint in PostgreSQL.
+            primary_image = min(product.images, key=lambda item: item.sort_order) if product.images else None
+            if primary_image is None:
+                product.images.append(ProductImage(url=image_url, alt_text=name, sort_order=0))
+            else:
+                primary_image.url = image_url
+                primary_image.alt_text = name
+                primary_image.sort_order = 0
         db.commit()
     print(f"Furniture catalog seed complete: {len(FURNITURE_PRODUCTS)} products upserted.")
     return 0

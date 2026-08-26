@@ -44,10 +44,8 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
     assert run.events[-1].event_type == "run_finished"
     assert [event.sequence for event in run.events] == list(range(1, len(run.events) + 1))
     assert run.events[1].node_name == "intent_agent"
-    assert run.events[3].tool_name == "search_products"
-    assert run.events[5].tool_name == "get_product_reviews"
-    assert run.events[7].node_name == "compatibility"
-    assert run.events[8].node_name == "bundle_optimizer"
+    assert any(event.tool_name == "search_products" for event in run.events)
+    assert any(event.node_name == "manager" for event in run.events)
     assert [event.node_name for event in run.events if event.event_type == "node_completed"][-4:] == [
         "response_draft", "audit", "brand_voice", "final_audit",
     ]

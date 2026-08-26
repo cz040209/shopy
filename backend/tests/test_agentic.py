@@ -138,3 +138,25 @@ async def test_orchestrator_routes_intent_to_planner_and_audit():
     assert result["next_stage"] == "final_audit"
     assert result["audit_result"]["status"] == "pass"
     assert result["final_response"] is not None
+
+
+@pytest.mark.anyio
+async def test_orchestrator_routes_general_planning_requests_to_planning_agent():
+    class PlanningModel:
+        async def ainvoke(self, input, **kwargs):
+            prompt = str(input[0].content)
+            if "general planning agent" in prompt:
+                return AIMessage(content=json.dumps({
+                    "plan_type": "move_in", "summary": "Start with essentials.",
+                    "steps": ["Set up utilities.", "Prepare one room at a time."],
+                    "follow_up_questions": ["Which room comes first?"],
+                    "suggested_shopping_categories": ["cleaning essentials"],
+                }))
+            if "response-writing agent" in prompt:
+                return AIMessage(content='{"response":"Start with utilities, then set up one room at a time.","product_ids":[],"unfulfilled_requirements":[]}')
+            return AIMessage(content='{"mission_type":"planning_request","goal":"prepare a new home","requires_planning":true,"requires_catalog":false,"catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"bundle_items":[],"preferences":[],"constraints":[],"owned_items":[],"priorities":[],"fulfillment_requirements":[]}')
+
+    result = await ShoppingOrchestrator(PlanningModel()).ainvoke("I am moving into a new house. What should I prepare?")
+
+    assert result["planning_context"]["plan_type"] == "move_in"
+    assert result["audit_result"]["status"] == "pass"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import json
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -116,6 +117,7 @@ class CommerceToolRegistry:
 
     def __post_init__(self) -> None:
         self._calls = 0
+        self._result_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._tools: dict[str, StructuredTool] = {
             "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="Search active catalog products."),
             "get_product": StructuredTool.from_function(self._get_product, name="get_product", args_schema=ProductIdInput, description="Get current catalog facts for a product UUID."),
@@ -139,12 +141,19 @@ class CommerceToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise ToolExecutionError(f"Tool '{name}' is not registered.")
-        if self._calls >= self.max_calls:
-            raise ToolExecutionError("Tool-call limit reached.")
         try:
             validated = tool.args_schema.model_validate(arguments)
         except ValidationError as error:
             raise ToolExecutionError("Tool arguments are invalid.") from error
+        validated_arguments = validated.model_dump(mode="json")
+        # Catalog facts are immutable enough for the lifetime of one response.
+        # Stock is deliberately never cached: both audits must see fresh stock.
+        cache_key = (name, json.dumps(validated_arguments, sort_keys=True, separators=(",", ":")))
+        if name != "check_stock" and cache_key in self._result_cache:
+            log_ai_event("agent.tool.cache_hit", request_id=self.request_id, tool=name, call_count=self._calls)
+            return self._result_cache[cache_key]
+        if self._calls >= self.max_calls:
+            raise ToolExecutionError("Tool-call limit reached.")
         self._calls += 1
         log_ai_event("agent.tool.started", request_id=self.request_id, tool=name, call_count=self._calls)
         started_at = time.monotonic()
@@ -167,7 +176,9 @@ class CommerceToolRegistry:
             raise ToolExecutionError("Tool execution failed.") from error
         log_ai_event("agent.tool.completed", request_id=self.request_id, tool=name, call_count=self._calls)
         if self.recorder:
-            self.recorder.record("tool_completed", tool_name=name, input_data=validated.model_dump(mode="json"), output_data=result)
+            self.recorder.record("tool_completed", tool_name=name, input_data=validated_arguments, output_data=result)
+        if name != "check_stock":
+            self._result_cache[cache_key] = result
         return result
 
     def _search_products(self, query: str, category_slug: str | None = None, seller_slug: str | None = None, limit: int = 8) -> dict[str, Any]:

@@ -113,6 +113,26 @@ class ProductFactMissionModel:
         return AIMessage(content='{"mission_type":"information_request","goal":"find product colors","catalog_query":"Frame Mirrorlesscamera","catalog_queries":["Frame Mirrorlesscamera"],"requested_actions":["search_products"],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
 
 
+class PlanningCatalogMissionModel:
+    async def ainvoke(self, input, **kwargs):
+        prompt = str(input[0].content)
+        if "general planning agent" in prompt:
+            return AIMessage(content=json.dumps({
+                "plan_type": "new_home", "summary": "Start with the essentials.",
+                "steps": ["Choose the first room."], "follow_up_questions": [],
+                "suggested_shopping_categories": ["tool product"], "catalog_queries": ["Tool"],
+            }))
+        if "response-writing agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "Here is a verified essential: " + products[0]["name"],
+                "product_ids": [product["id"] for product in products],
+                "unfulfilled_requirements": [],
+            }))
+        return AIMessage(content='{"mission_type":"planning_request","goal":"prepare a new house","requires_planning":true,"requires_catalog":true,"catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[],"fulfillment_requirements":[]}')
+
+
 class AlwaysFailAuditor:
     async def audit(self, state, tools):
         return {"status": "fail", "errors": [{"code": "forced_failure", "message": "test"}], "total": "0"}
@@ -173,8 +193,10 @@ async def test_tool_call_limit_is_enforced(db_session):
     catalog_product(db_session)
     registry = CommerceToolRegistry(db_session, "test-request", max_calls=1)
     await registry.execute("search_products", {"query": "Tool"})
+    # Cached immutable catalog reads do not consume the request call budget.
+    await registry.execute("search_products", {"query": "Tool"})
     with pytest.raises(ToolExecutionError, match="limit"):
-        await registry.execute("search_products", {"query": "Tool"})
+        await registry.execute("search_products", {"query": "Different query"})
 
 
 @pytest.mark.anyio
@@ -260,6 +282,20 @@ async def test_orchestrator_returns_only_audited_catalog_facts(db_session):
 
 
 @pytest.mark.anyio
+async def test_planning_agent_can_dynamically_continue_to_catalog_search(db_session):
+    product = catalog_product(db_session)
+    registry = CommerceToolRegistry(db_session, "planning-catalog", max_calls=20)
+
+    result = await ShoppingOrchestrator(PlanningCatalogMissionModel(), tool_registry=registry).ainvoke(
+        "What products should I prepare for a new house?"
+    )
+
+    assert result["planning_context"]["catalog_queries"] == ["Tool"]
+    assert result["selected_products"] == [{"id": str(product.id), "quantity": 1}]
+    assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
 async def test_stock_request_searches_then_checks_and_reports_current_stock(db_session):
     product = catalog_product(db_session, name="SunGuard SPF 50 Sunscreen", inventory=0)
     registry = CommerceToolRegistry(db_session, "stock-request", max_calls=20)
@@ -296,9 +332,10 @@ async def test_orchestrator_executes_each_planned_catalog_action(db_session):
 
     assert result["audit_result"]["status"] == "pass"
     assert [item["tool"] for item in result["tool_context"]] == [
-        "product_resolution", "get_product", "get_product_reviews", "get_product_reviews", "get_seller",
+        "product_resolution", "get_product", "get_seller",
         "compare_products", "calculate_bundle_total",
     ]
+    assert result["review_insights"]
 
 
 @pytest.mark.anyio

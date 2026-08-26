@@ -106,15 +106,15 @@ class ShoppingAuditor:
             try:
                 product = await tools.execute("get_product", {"product_id": str(product_id)}) if tools else None
             except Exception:
-                errors.append({"code": "product_not_found", "message": "A selected product no longer exists."})
+                errors.append({"code": "product_not_found", "message": "A selected product no longer exists.", "product_id": str(product_id)})
                 continue
             if product is None:
-                errors.append({"code": "product_not_found", "message": "A selected product no longer exists."})
+                errors.append({"code": "product_not_found", "message": "A selected product no longer exists.", "product_id": str(product_id)})
                 continue
             verified_products[str(product_id)] = product
             stock = int(product["inventory_quantity"])
             if stock < quantity:
-                errors.append({"code": "insufficient_stock", "message": "A selected product does not have enough available stock."})
+                errors.append({"code": "insufficient_stock", "message": "A selected product does not have enough available stock.", "product_id": str(product_id)})
                 continue
             total += Decimal(str(product["price"])) * quantity
             self._validate_constraints(product, state, errors)
@@ -123,6 +123,7 @@ class ShoppingAuditor:
         if budget is not None and total > Decimal(str(budget)):
             errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the mission budget."})
         self._validate_response_coverage(state, selected_ids, errors)
+        self._validate_fulfillment(state, verified_products, errors)
         self._validate_response_claims(state, verified_products, errors)
         self._validate_attachments(state, verified_products, errors)
         llm_review = await self._review_final_response(state, verified_products)
@@ -174,6 +175,62 @@ class ShoppingAuditor:
             total="0",
             llm_review=(llm_review.model_dump() if llm_review is not None else {"status": "skipped"}),
         )
+
+    @staticmethod
+    def _validate_fulfillment(
+        state: dict[str, Any], verified_products: dict[str, dict[str, Any]], errors: list[dict[str, str]]
+    ) -> None:
+        """Require explicit user requirements to be covered by verified products."""
+        declared_unfulfilled = {
+            str(value).casefold().strip()
+            for value in state.get("unfulfilled_requirements", [])
+            if isinstance(value, str) and value.strip()
+        }
+        allowed_unfulfilled = {
+            str(requirement.get("value", "")).casefold().strip()
+            for requirement in state.get("fulfillment_requirements", [])
+            if isinstance(requirement, dict)
+            and any(str(requirement.get("value", "")).casefold().strip() in str(gap).casefold() for gap in state.get("fulfillment_gaps", []))
+        }
+        if not declared_unfulfilled.issubset(allowed_unfulfilled):
+            errors.append({
+                "code": "invalid_unfulfilled_requirement",
+                "message": "The response declared a fulfillment gap that is not supported by catalog search results.",
+            })
+        for requirement in state.get("fulfillment_requirements", []):
+            if not isinstance(requirement, dict):
+                continue
+            kind, value = str(requirement.get("kind", "")), str(requirement.get("value", "")).casefold().strip()
+            quantity = int(requirement.get("quantity", 1) or 1)
+            if not value:
+                continue
+            matches = 0
+            for product in verified_products.values():
+                identity = f"{product.get('name', '')} {product.get('brand', '')} {product.get('category', '')}".casefold()
+                facts = f"{product.get('specs', [])} {product.get('attributes', {})}".casefold()
+                field = str(requirement.get("field") or "").casefold()
+                if kind == "category":
+                    matched = all(token in identity for token in value.split())
+                elif kind == "attribute" and field:
+                    attributes = product.get("attributes", {})
+                    matched = isinstance(attributes, dict) and value in str(attributes.get(field, "")).casefold()
+                else:
+                    matched = value in facts or value in identity
+                matches += int(matched)
+            if matches < quantity:
+                # The writer must declare the exact unmet typed requirement.
+                # This avoids fragile language-specific matching in free prose.
+                if not verified_products and value in declared_unfulfilled and value in allowed_unfulfilled:
+                    continue
+                errors.append({
+                    "code": "fulfillment_requirement_unmet",
+                    "message": f"A required {kind or 'product'} need is not covered by verified selections.",
+                    "requirement": value,
+                })
+        # Bundle gaps are shown to the customer by the response writer. They
+        # become hard failures only when represented by an explicit typed user
+        # requirement above; a broad search query alone is not reliable enough
+        # to claim that no matching product exists.
 
     @staticmethod
     def _validate_response_coverage(state: dict[str, Any], selected_ids: list[str], errors: list[dict[str, str]]) -> None:

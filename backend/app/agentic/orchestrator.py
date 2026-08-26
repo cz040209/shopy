@@ -14,7 +14,9 @@ from .bundle_optimizer import BundleOptimizerAgent
 from .compatibility import CompatibilityAgent
 from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import GeminiLangChainChatModel
+from .manager import WorkflowManager
 from .planner import NeedPlannerAgent
+from .planning import PlanningAgent
 from .observability import OrchestrationRecorder
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
@@ -46,6 +48,8 @@ class ShoppingOrchestrator:
         self.tool_registry = tool_registry
         self.intent_agent = IntentMissionAgent(shared_model, tools=tool_registry.tools if tool_registry else ())
         self.need_planner = NeedPlannerAgent()
+        self.planning_agent = PlanningAgent(shared_model)
+        self.manager = WorkflowManager()
         self.product_resolver = ProductResolutionAgent(shared_model)
         self.product_search_agent = ProductSearchAgent(tool_registry)
         self.review_agent = ReviewIntelligenceAgent(shared_model, tool_registry)
@@ -64,6 +68,8 @@ class ShoppingOrchestrator:
         workflow.add_node("vision", self._vision_node)
         workflow.add_node("intent_agent", self._intent_node)
         workflow.add_node("need_planner", self._need_planner_node)
+        workflow.add_node("planning", self._planning_node)
+        workflow.add_node("manager", self._manager_node)
         workflow.add_node("product_search", self._product_search_node)
         workflow.add_node("review_intelligence", self._review_node)
         workflow.add_node("compatibility", self._compatibility_node)
@@ -77,14 +83,34 @@ class ShoppingOrchestrator:
         workflow.add_edge("vision", "intent_agent")
         workflow.add_edge("intent_agent", "need_planner")
         workflow.add_conditional_edges(
-            "need_planner",
-            self._after_planner,
+            "need_planner", self._after_need_planner,
+            {"planning": "planning", "manager": "manager"},
+        )
+        workflow.add_conditional_edges(
+            "planning", self._after_planning,
+            {"manager": "manager", "response_draft": "response_draft"},
+        )
+        workflow.add_conditional_edges(
+            "manager",
+            self._after_manager,
             {"product_search": "product_search", "response_draft": "response_draft"},
         )
-        workflow.add_edge("product_search", "review_intelligence")
-        workflow.add_edge("review_intelligence", "compatibility")
-        workflow.add_edge("compatibility", "bundle_optimizer")
-        workflow.add_edge("bundle_optimizer", "response_draft")
+        workflow.add_conditional_edges(
+            "product_search", self._after_product_search,
+            {"review_intelligence": "review_intelligence", "compatibility": "compatibility", "bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
+        )
+        workflow.add_conditional_edges(
+            "review_intelligence", self._after_review,
+            {"compatibility": "compatibility", "bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
+        )
+        workflow.add_conditional_edges(
+            "compatibility", self._after_compatibility,
+            {"bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
+        )
+        workflow.add_conditional_edges(
+            "bundle_optimizer", self._after_bundle_optimizer,
+            {"compatibility": "compatibility", "response_draft": "response_draft"},
+        )
         workflow.add_edge("response_draft", "audit")
         workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "brand_voice": "brand_voice", "end": END})
         workflow.add_edge("brand_voice", "final_audit")
@@ -104,6 +130,10 @@ class ShoppingOrchestrator:
             inputs["user_request"] = state["user_request"]
         elif node == "need_planner":
             inputs["mission"] = state.get("mission", {})
+        elif node == "planning":
+            inputs["mission"] = state.get("mission", {})
+        elif node == "manager":
+            inputs["requested_actions"] = state.get("requested_actions", [])
         elif node == "product_search":
             inputs["goal"] = state.get("goal")
         elif node == "vision":
@@ -122,8 +152,28 @@ class ShoppingOrchestrator:
             inputs["audit_result"] = state.get("audit_result")
         self.recorder.record("node_completed", node_name=node, input_data=inputs, output_data=output)
 
-    def _after_planner(self, state: ShoppingAgentState) -> str:
+    def _after_manager(self, state: ShoppingAgentState) -> str:
         return "product_search" if self._requires_catalog_lookup(state) else "response_draft"
+
+    @staticmethod
+    def _after_need_planner(state: ShoppingAgentState) -> str:
+        return "planning" if state.get("requires_planning") else "manager"
+
+    @staticmethod
+    def _after_planning(state: ShoppingAgentState) -> str:
+        return "manager" if state.get("requires_catalog") else "response_draft"
+
+    def _after_product_search(self, state: ShoppingAgentState) -> str:
+        return self.manager.next_stage(state)
+
+    def _after_review(self, state: ShoppingAgentState) -> str:
+        return self.manager.next_stage(state, "review_intelligence")
+
+    def _after_compatibility(self, state: ShoppingAgentState) -> str:
+        return self.manager.next_stage(state, "compatibility")
+
+    def _after_bundle_optimizer(self, state: ShoppingAgentState) -> str:
+        return self.manager.next_stage(state, "bundle_optimizer")
 
     @staticmethod
     def _route_start(state: ShoppingAgentState) -> str:
@@ -160,11 +210,14 @@ class ShoppingOrchestrator:
         mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
         output = {
             **self._event(state, "intent_agent"),
-            "mission_type": mission.mission_type, "goal": mission.goal, "catalog_query": mission.catalog_query,
+            "mission_type": mission.mission_type, "goal": mission.goal,
+            "requires_planning": mission.requires_planning, "requires_catalog": mission.requires_catalog,
+            "catalog_query": mission.catalog_query,
             "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions, "budget": mission.budget,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
             "preferences": mission.preferences, "constraints": mission.constraints,
             "owned_items": mission.owned_items, "priorities": mission.priorities,
+            "fulfillment_requirements": [item.model_dump() for item in mission.fulfillment_requirements],
             "mission": mission.model_dump(),
         }
         self._record_node(state, "intent_agent", output)
@@ -177,13 +230,29 @@ class ShoppingOrchestrator:
         self._record_node(state, "need_planner", output)
         return output
 
+    async def _manager_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        actions = self._requested_actions(state)
+        output = {**self._event(state, "manager"), "execution_plan": self.manager.plan(state, actions)}
+        self._record_node(state, "manager", output)
+        return output
+
+    async def _planning_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {**self._event(state, "planning"), **(await self.planning_agent.run(state))}
+        self._record_node(state, "planning", output)
+        return output
+
     async def _product_search_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        result: dict[str, Any] = {**self._event(state, "product_search"), "next_stage": "brand_voice"}
+        result: dict[str, Any] = {**self._event(state, "product_search")}
         if self.tool_registry is None:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
-        search_output = await self.product_search_agent.run(state, query=self._catalog_query(state), limit=self._stock_search_limit() if "check_stock" in actions else 8, include_out_of_stock="check_stock" in actions)
+        search_output = await self.product_search_agent.run_many(
+            state,
+            queries=self._catalog_queries(state),
+            limit=self._stock_search_limit() if "check_stock" in actions else 8,
+            include_out_of_stock="check_stock" in actions,
+        )
         if search_output["errors"]:
             output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
@@ -213,8 +282,17 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", output)
             return output
         action_candidates, resolution_context = await self._resolve_action_candidates(state, actions, candidates)
-        tool_context = [*resolution_context, *(await self._execute_requested_actions(actions, action_candidates, state))]
-        response_candidates = action_candidates if resolution_context else candidates
+        immediate_actions = list(actions)
+        if "review_intelligence" in state.get("execution_plan", {}).get("stages", []):
+            # Review Intelligence owns review retrieval and summarisation; do
+            # not spend the request budget fetching the same reviews twice.
+            immediate_actions = [action for action in immediate_actions if action != "get_product_reviews"]
+        tool_context = [*resolution_context, *(await self._execute_requested_actions(immediate_actions, action_candidates, state))]
+        # Resolution is required for a named product/detail request, but a
+        # generic browse request is expected to have several valid matches.
+        # An empty/ambiguous resolver result must not discard those matches.
+        response_candidates = action_candidates or candidates
+        fulfillment_gaps = self.brand_voice.fulfillment_gaps(response_candidates, state)
         output = {
             **result,
             "candidate_products": candidates,
@@ -224,6 +302,7 @@ class ShoppingOrchestrator:
             ),
             "tool_results": [*state["tool_results"], *search_output["tool_results"]],
             "tool_context": tool_context,
+            "fulfillment_gaps": fulfillment_gaps,
         }
         self._record_node(state, "product_search", output)
         return output
@@ -270,9 +349,12 @@ class ShoppingOrchestrator:
         if not planned and (
             state.get("catalog_query")
             or state.get("catalog_queries")
+            or state.get("fulfillment_requirements")
             or self._is_stock_check(state)
             or self.brand_voice.is_shopping_mission(state.get("mission_type"))
         ):
+            planned.append("search_products")
+        if state.get("requires_catalog"):
             planned.append("search_products")
         # Search is the safe identity-resolution step for every product-specific
         # operation when the user has supplied a name rather than a UUID.
@@ -383,11 +465,20 @@ class ShoppingOrchestrator:
             return " ".join(preferences)
         return state.get("goal") or state["user_request"]
 
+    @staticmethod
+    def _catalog_queries(state: ShoppingAgentState) -> list[str]:
+        """Keep multi-item requests separate so catalog search stays precise."""
+        items = [str(item.get("query", "")).strip() for item in state.get("bundle_items", []) if isinstance(item, dict)]
+        items.extend(str(item).strip() for item in state.get("catalog_queries", []))
+        if state.get("catalog_query"):
+            items.append(str(state["catalog_query"]).strip())
+        return list(dict.fromkeys(item for item in items if item)) or [ShoppingOrchestrator._catalog_query(state)]
+
     def _stock_search_limit(self) -> int:
         if self.tool_registry is None:
             return 1
-        # search + one check per match + one audit check per reported match
-        return max(1, min(8, (self.tool_registry.max_calls - 1) // 2))
+        # search + check_stock + initial audit + final audit for each result.
+        return max(1, min(8, (self.tool_registry.max_calls - 1) // 3))
 
     @staticmethod
     def _should_recommend_products(actions: list[str]) -> bool:
@@ -439,13 +530,25 @@ class ShoppingOrchestrator:
     async def _repair_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         attempt = state["repair_count"] + 1
         log_ai_event("agent.repair", request_id=state["run_id"], attempt=attempt)
-        # Conservative foundation: remove unverifiable selections. Future
-        # Bundle Optimizer/Repair agents can replace this deterministic step.
+        audit_errors = list((state.get("audit_result") or {}).get("errors", []))
+        excluded = {
+            str(item["product_id"])
+            for item in audit_errors
+            if isinstance(item, dict) and item.get("code") in {"product_not_found", "insufficient_stock"} and item.get("product_id")
+        }
+        selected = [item for item in state.get("selected_products", []) if str(item.get("id")) not in excluded]
+        if excluded and not selected and self._should_recommend_products(self._requested_actions(state)):
+            selected = self.brand_voice.select_catalog_products({
+                **state, "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
+            })
+        # Preserve verified selections and give the response writer exact repair
+        # feedback. This avoids replacing a useful answer with an empty one.
         output = {
             **self._event(state, "repair"),
             "repair_count": attempt,
-            "selected_products": [],
-            "response_claims": [],
+            "selected_products": selected,
+            "excluded_product_ids": [*state.get("excluded_product_ids", []), *sorted(excluded)],
+            "repair_feedback": [item for item in audit_errors if isinstance(item, dict)],
             "final_response": None,
             "next_stage": "response_draft",
         }

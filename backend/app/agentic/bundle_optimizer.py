@@ -40,7 +40,7 @@ class BundleOptimizerAgent:
     async def _plan(self, products: list[dict[str, Any]], state: ShoppingAgentState) -> BundlePlan:
         if self.model is None:
             return BundlePlan(mode="best_value")
-        payload = {"mission": state.get("mission", {}), "priorities": state.get("priorities", []), "preferences": state.get("preferences", []), "review_insights": state.get("review_insights", {}), "compatibility": state.get("compatibility_results", []), "products": [{"id": str(item["id"]), "name": item.get("name"), "category": item.get("category"), "price": str(item.get("price")), "specs": item.get("specs", []), "attributes": item.get("attributes", {})} for item in products]}
+        payload = {"mission": state.get("mission", {}), "priorities": state.get("priorities", []), "preferences": state.get("preferences", []), "vision_context": state.get("vision_context"), "review_insights": state.get("review_insights", {}), "compatibility": state.get("compatibility_results", []), "products": [{"id": str(item["id"]), "name": item.get("name"), "category": item.get("category"), "price": str(item.get("price")), "specs": item.get("specs", []), "attributes": item.get("attributes", {})} for item in products]}
         try:
             response = await self.model.ainvoke([SystemMessage(content=PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str))])
             plan = BundlePlan.model_validate(_json_object(response.content))
@@ -118,4 +118,8 @@ class BundleOptimizerAgent:
             "rationale": [f"Optimized deterministically for {plan.mode}.", "Excluded out-of-stock and deterministically incompatible products."],
             "trade_offs": ([f"No verified candidate covered: {', '.join(missing)}."] if missing else []),
         }
-        return {"bundle": bundle, "selected_products": [{"id": str(product["id"]), "quantity": 1} for product in selected]}
+        return {
+            "bundle": bundle,
+            "selected_products": [{"id": str(product["id"]), "quantity": 1} for product in selected],
+            "fulfillment_gaps": [f"No verified candidate covered: {category}" for category in missing],
+        }

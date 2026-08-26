@@ -65,7 +65,8 @@ class CompatibilityAgent:
         return CompatibilityPlan(fields=[item for item in plan.fields if item.field in available])
 
     async def run(self, state: ShoppingAgentState) -> dict[str, Any]:
-        products = list(state.get("candidate_products", []))
+        selected_ids = {str(item.get("id")) for item in state.get("selected_products", []) if isinstance(item, dict)}
+        products = [product for product in state.get("candidate_products", []) if str(product.get("id")) in selected_ids] or list(state.get("candidate_products", []))
         results: list[dict[str, Any]] = []
         for product in products:
             if int(product.get("inventory_quantity", 0)) < 1:
@@ -85,4 +86,10 @@ class CompatibilityAgent:
                         results.append({"status": "incompatible", "reason": f"Verified {field.field} values do not satisfy {field.rule}.", "affected_product_ids": [str(left["id"]), str(right["id"])]})
         if not results:
             results.append({"status": "compatible", "reason": "No deterministic incompatibilities found for the LLM-selected verified fields.", "affected_product_ids": [str(product["id"]) for product in products]})
+        if state.get("owned_items"):
+            results.append({
+                "status": "needs_confirmation",
+                "reason": "The customer-owned items have no verified catalog specifications to compare automatically.",
+                "affected_product_ids": [str(product["id"]) for product in products],
+            })
         return {"compatibility_results": results, "compatibility_plan": plan.model_dump()}

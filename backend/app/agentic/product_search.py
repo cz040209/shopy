@@ -29,10 +29,39 @@ class ProductSearchAgent:
             "errors": [],
         }
 
+    async def run_many(
+        self, state: ShoppingAgentState, *, queries: list[str], limit: int = 8, include_out_of_stock: bool = False
+    ) -> dict[str, Any]:
+        """Search each requested item independently, then merge stable results."""
+        merged: dict[str, dict[str, Any]] = {}
+        rankings: dict[str, dict[str, Any]] = {}
+        tool_results: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for query in list(dict.fromkeys(item.strip() for item in queries if item.strip())):
+            result = await self.run(state, query=query, limit=limit, include_out_of_stock=include_out_of_stock)
+            errors.extend(result["errors"])
+            tool_results.extend(result["tool_results"])
+            for product in result["candidate_products"]:
+                merged.setdefault(str(product["id"]), product)
+            for ranking in result["product_rankings"]:
+                previous = rankings.get(str(ranking["product_id"]))
+                if previous is None or ranking["score"] > previous["score"]:
+                    rankings[str(ranking["product_id"])] = ranking
+        ordered = sorted(
+            merged.values(),
+            key=lambda product: (-float(rankings.get(str(product["id"]), {}).get("score", 0)), str(product["name"])),
+        )
+        return {"candidate_products": ordered, "product_rankings": list(rankings.values()), "tool_results": tool_results, "errors": errors}
+
     @staticmethod
     def _rank(products: list[dict[str, Any]], state: ShoppingAgentState, *, include_out_of_stock: bool) -> list[dict[str, Any]]:
         budget = Decimal(str(state["budget"])) if state.get("budget") is not None else None
-        requested = [*state.get("preferences", []), *state.get("constraints", []), *state.get("required_categories", [])]
+        vision = state.get("vision_context", {})
+        requested = [
+            *state.get("preferences", []), *state.get("constraints", []), *state.get("required_categories", []),
+            *(vision.get("colors", []) if isinstance(vision, dict) else []),
+            *(vision.get("visual_constraints", []) if isinstance(vision, dict) else []),
+        ]
         owned = " ".join(map(str, state.get("owned_items", []))).lower()
         ranked: list[dict[str, Any]] = []
         for product in products:

@@ -36,8 +36,11 @@ const modeContent: Record<VisionMode, { label: string; title: string; helper: st
 };
 
 const processingSteps = ["Detecting objects", "Understanding style", "Analyzing the space", "Searching matching products"];
+const MAX_CAMERA_CAPTURE_WIDTH = 3840;
+const MAX_CAMERA_CAPTURE_HEIGHT = 2160;
+const MAX_SOURCE_FILE_MULTIPLIER = 3;
 
-export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 2048, quality = 0.9, onAnalysisComplete }: Props) {
+export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 2048, quality = 0.92, onAnalysisComplete }: Props) {
   const [stage, setStage] = useState<"mode_select" | "camera" | "preview" | "processing" | "result" | null>(null);
   const [selectedMode, setSelectedMode] = useState<VisionMode | null>(mode ?? null);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
@@ -87,8 +90,12 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
         audio: false,
         video: {
           facingMode: { ideal: front ? "user" : "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          // "ideal" lets each laptop or phone select its best supported camera
+          // mode without failing on hardware that cannot provide 4K.
+          width: { ideal: MAX_CAMERA_CAPTURE_WIDTH },
+          height: { ideal: MAX_CAMERA_CAPTURE_HEIGHT },
+          aspectRatio: { ideal: 16 / 9 },
+          frameRate: { ideal: 30, max: 30 },
         },
       });
       streamRef.current = stream;
@@ -122,7 +129,9 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
 
   const prepareImage = async (source: Blob) => {
     if (!source.type.startsWith("image/")) throw new Error("Please choose an image file.");
-    if (source.size > maxFileSizeMb * 1024 * 1024) throw new Error(`Choose an image smaller than ${maxFileSizeMb} MB.`);
+    if (source.size > maxFileSizeMb * MAX_SOURCE_FILE_MULTIPLIER * 1024 * 1024) {
+      throw new Error(`Choose an image smaller than ${maxFileSizeMb * MAX_SOURCE_FILE_MULTIPLIER} MB.`);
+    }
 
     const sourceUrl = URL.createObjectURL(source);
     try {
@@ -137,6 +146,9 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       if (!context) throw new Error("Unable to prepare this image.");
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
       const compressed = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Unable to compress this image.")), "image/jpeg", quality));
+      if (compressed.size > maxFileSizeMb * 1024 * 1024) {
+        throw new Error("This image is still too large after preparation. Please choose a different photo.");
+      }
       releasePreview();
       setPhoto(compressed);
       setPreviewUrl(URL.createObjectURL(compressed));

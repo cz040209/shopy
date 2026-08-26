@@ -9,9 +9,16 @@ class ShoppingAgentState(TypedDict):
     user_request: str
     mission_type: str | None
     goal: str | None
+    requires_planning: bool
+    requires_catalog: bool
     catalog_query: str | None
     catalog_queries: list[str]
     requested_actions: list[str]
+    execution_plan: dict[str, Any]
+    fulfillment_requirements: list[dict[str, Any]]
+    fulfillment_gaps: list[str]
+    unfulfilled_requirements: list[str]
+    planning_context: dict[str, Any] | None
     bundle_items: list[dict[str, Any]]
     budget: float | None
     preferences: list[str]
@@ -40,6 +47,8 @@ class ShoppingAgentState(TypedDict):
     attachments: list[dict[str, Any]]
     next_stage: str | None
     errors: list[str]
+    repair_feedback: list[dict[str, Any]]
+    excluded_product_ids: list[str]
     graph_iterations: int
     run_id: str
     mission: NotRequired[dict[str, Any]]
@@ -51,9 +60,16 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "user_request": user_request.strip(),
         "mission_type": None,
         "goal": None,
+        "requires_planning": False,
+        "requires_catalog": False,
         "catalog_query": None,
         "catalog_queries": [],
         "requested_actions": [],
+        "execution_plan": {},
+        "fulfillment_requirements": [],
+        "fulfillment_gaps": [],
+        "unfulfilled_requirements": [],
+        "planning_context": None,
         "bundle_items": [],
         "budget": None,
         "preferences": [],
@@ -81,6 +97,8 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "attachments": [],
         "next_stage": None,
         "errors": [],
+        "repair_feedback": [],
+        "excluded_product_ids": [],
         "graph_iterations": 0,
         "run_id": "",
     }

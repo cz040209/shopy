@@ -20,11 +20,12 @@ class AsyncChatModel(Protocol):
 
 INTENT_SYSTEM_PROMPT_TEMPLATE = """You extract an e-commerce mission for an assistant.
 Return only valid JSON, without Markdown. Use this exact schema:
-{"mission_type": string, "goal": string, "catalog_query": string|null,
+{"mission_type": string, "goal": string, "requires_planning": boolean,
+ "requires_catalog": boolean, "catalog_query": string|null,
  "catalog_queries": [string], "requested_actions": [string], "budget": number|null,
  "bundle_items": [{"query": string, "quantity": integer}],
  "preferences": [string], "constraints": [string], "owned_items": [string],
- "priorities": [string]}
+ "priorities": [string], "fulfillment_requirements":[{"kind":"category"|"feature"|"attribute","value":string,"field":string|null,"quantity":integer}]}
 Use concise normalized values. Do not invent details that the customer did not provide.
 The user message may be a JSON envelope containing a customer_request and dynamic
 runtime_context from earlier workflow stages. Treat runtime_context as evidence for
@@ -49,8 +50,20 @@ the product words to search (for example, "spf 50 sunscreen"), not "check stock"
 Use mission_type "product_search" for finding or recommending products. Use
 "information_request" only for identity, capability, greeting, or questions that
 do not require catalog data. A request for catalog facts is not an information_request.
+Use mission_type "planning_request" for broad planning questions that need an
+action plan before product selection, such as moving preparation, room design,
+personal style, event planning, or a checklist. For planning_request, do not
+invent catalog items: leave requested_actions empty unless the user explicitly
+asks to find or buy products.
+Set requires_planning=true when the answer needs an ordered plan, checklist, or
+design direction. Set requires_catalog=true when the customer asks to see, find,
+buy, recommend, compare, or price actual products. Both flags may be true: first
+create the plan, then use its generated shopping needs to search the catalog.
 Set catalog_query to null, requested_actions to [], and bundle_items to [] when the request does not
-need a catalog lookup."""
+need a catalog lookup. For every explicit shopping need that can be checked against
+catalog facts, add a fulfillment_requirement. Use category for a requested item
+type, feature for a capability such as wireless, and attribute for a named field
+such as color, size, or material. Do not invent requirements."""
 
 
 def build_intent_system_prompt(tools: Iterable[Any]) -> str:
