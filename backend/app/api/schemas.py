@@ -202,6 +202,7 @@ class ShippingAddressInput(BaseModel):
 class CheckoutRequest(BaseModel):
     shipping_address: ShippingAddressInput
     payment_method: PaymentMethod = PaymentMethod.CARD
+    shipping_fee: Decimal = Field(default=Decimal("24.00"), ge=Decimal("3.00"), le=Decimal("30.00"))
     notes: str | None = Field(default=None, max_length=1000)
 
 
@@ -252,6 +253,11 @@ class WalletResponse(BaseModel):
     monthly_limit: Decimal
     is_verified: bool
     transactions: list[WalletTransactionResponse]
+
+
+class WalletTopUpRequest(BaseModel):
+    amount: Decimal = Field(gt=Decimal("0"), max_digits=12, decimal_places=2)
+    payment_source: str = Field(min_length=2, max_length=80)
 
 
 class ReviewRequest(BaseModel):

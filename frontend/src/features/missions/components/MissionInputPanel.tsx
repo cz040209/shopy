@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowUpRight, Plus } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import { MissionData } from "./types";
 import ExtractedChips from "./ExtractedChips";
 import styles from "./mission-studio.module.css";
@@ -36,7 +36,7 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
           whileHover={busy ? undefined : { y: -2, scale: 1.015 }}
           whileTap={busy ? undefined : { scale: 0.98 }}
         >
-          {busy ? "Working…" : "Run mission"}<ArrowUpRight size={17} />
+          {busy ? "Working…" : "Submit"}<ArrowRight size={17} />
         </motion.button>
       </div>
       <ExtractedChips mission={mission} onRemoveOwned={onRemoveOwned} />

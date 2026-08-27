@@ -9,14 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Order, OrderItem, Review, User, Wallet, WalletTransaction
+from app.models import Order, OrderItem, PaymentMethod, Review, User, Wallet, WalletTransaction
 from app.services.cart import add_cart_item, cart_subtotal, get_active_cart, remove_cart_item, update_cart_item
 from app.services.orders import create_order_from_cart
+from app.services.wallets import get_wallet, pay_order_with_wallet, top_up_wallet
 
 from ..schemas import (
     AddCartItemRequest, CartItemResponse, CartResponse, CheckoutRequest, OrderItemResponse,
     OrderResponse, ReviewRequest, ReviewResponse, UpdateCartItemRequest, WalletResponse,
-    WalletTransactionResponse,
+    WalletTopUpRequest, WalletTransactionResponse,
 )
 from .auth import get_current_user
 from .catalog import product_response
@@ -70,8 +71,12 @@ def delete_item(item_id: UUID, user: User = Depends(get_current_user), db: Sessi
 def checkout(payload: CheckoutRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrderResponse:
     order = create_order_from_cart(
         db, user, shipping_address=payload.shipping_address.model_dump(), notes=payload.notes,
-        payment_method=payload.payment_method,
+        payment_method=payload.payment_method, shipping_fee=payload.shipping_fee,
     )
+    if payload.payment_method == PaymentMethod.SHOPY_PAY:
+        pay_order_with_wallet(db, user, order)
+    db.commit()
+    db.refresh(order)
     return order_response(order)
 
 
@@ -91,9 +96,22 @@ def order(order_id: UUID, user: User = Depends(get_current_user), db: Session = 
 
 @router.get("/wallet", response_model=WalletResponse)
 def wallet(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> WalletResponse:
-    record = db.scalar(select(Wallet).where(Wallet.user_id == user.id).options(selectinload(Wallet.transactions)))
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found.")
+    record = get_wallet(db, user)
+    db.commit()
+    db.refresh(record, attribute_names=["transactions"])
+    transactions = sorted(record.transactions, key=lambda item: item.created_at, reverse=True)
+    return WalletResponse(
+        id=record.id, currency=record.currency, balance=record.balance, daily_limit=record.daily_limit,
+        monthly_limit=record.monthly_limit, is_verified=record.is_verified,
+        transactions=[WalletTransactionResponse(id=item.id, reference=item.reference, type=item.type.value, status=item.status.value, amount=item.amount, currency=item.currency, description=item.description, created_at=item.created_at) for item in transactions],
+    )
+
+
+@router.post("/wallet/top-ups", response_model=WalletResponse, status_code=status.HTTP_201_CREATED)
+def wallet_top_up(payload: WalletTopUpRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> WalletResponse:
+    record = top_up_wallet(db, user, amount=payload.amount, payment_source=payload.payment_source)
+    db.commit()
+    db.refresh(record, attribute_names=["transactions"])
     transactions = sorted(record.transactions, key=lambda item: item.created_at, reverse=True)
     return WalletResponse(
         id=record.id, currency=record.currency, balance=record.balance, daily_limit=record.daily_limit,

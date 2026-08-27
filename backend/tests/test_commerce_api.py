@@ -46,11 +46,31 @@ def test_catalog_cart_and_checkout_lifecycle(db_session):
             "payment_method": "card",
         })
         assert checkout.status_code == 201
-        assert checkout.json()["total_amount"] == "914.40"
+        assert checkout.json()["total_amount"] == "865.45"
         history = client.get("/api/v1/orders")
         assert history.status_code == 200
         assert history.json()[0]["order_number"] == checkout.json()["order_number"]
         assert client.get("/api/v1/cart").json()["items"] == []
         assert db_session.scalar(select(Product).where(Product.id == product.id)).inventory_quantity == 6
+
+        top_up = client.post("/api/v1/wallet/top-ups", json={"amount": "1000.00", "payment_source": "FPX Online Banking"})
+        assert top_up.status_code == 201
+        assert top_up.json()["balance"] == "1000.00"
+        assert top_up.json()["transactions"][0]["type"] == "top_up"
+
+        added_again = client.post("/api/v1/cart/items", json={"product_id": product_id, "quantity": 1})
+        assert added_again.status_code == 201
+        wallet_checkout = client.post("/api/v1/orders/checkout", json={
+            "shipping_address": {"recipient_name": "Jeffrey Tan", "phone": "+60123456789", "line1": "KLCC", "city": "Kuala Lumpur", "state": "Kuala Lumpur", "postal_code": "50088", "country_code": "MY"},
+            "payment_method": "shopy_pay",
+            "shipping_fee": "3.00",
+        })
+        assert wallet_checkout.status_code == 201
+        assert wallet_checkout.json()["payment_status"] == "paid"
+        assert wallet_checkout.json()["total_amount"] == "423.20"
+        wallet = client.get("/api/v1/wallet")
+        assert wallet.status_code == 200
+        assert wallet.json()["balance"] == "576.80"
+        assert {item["type"] for item in wallet.json()["transactions"][:2]} == {"purchase", "top_up"}
     finally:
         app.dependency_overrides.clear()

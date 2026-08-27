@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -19,6 +19,7 @@ def create_order_from_cart(
     shipping_address: dict[str, str],
     notes: str | None,
     payment_method: PaymentMethod,
+    shipping_fee: Decimal,
 ) -> Order:
     cart = get_active_cart(db, user)
     if not cart.items:
@@ -29,8 +30,8 @@ def create_order_from_cart(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"{item.product.name} no longer has enough stock.")
 
     subtotal = cart_subtotal(cart)
-    tax_amount = (subtotal * Decimal("0.06")).quantize(Decimal("0.01"))
-    handling_amount = Decimal("24.00")
+    tax_amount = ((shipping_fee * Decimal("0.06") * Decimal("20")).to_integral_value(rounding=ROUND_CEILING) / Decimal("20")).quantize(Decimal("0.01"))
+    handling_amount = shipping_fee
     total = subtotal + tax_amount + handling_amount
     order = Order(
         user=user,
@@ -69,6 +70,4 @@ def create_order_from_cart(
     # PostgreSQL partial unique index exactly.
     db.flush()
     db.add(Cart(user=user, currency=cart.currency))
-    db.commit()
-    db.refresh(order)
     return order

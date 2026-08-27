@@ -13,6 +13,7 @@ poetry run alembic upgrade head
 poetry run python -m app.scripts.seed_catalog
 poetry run python -m app.scripts.seed_apparel_catalog
 poetry run python -m app.scripts.seed_furniture_catalog
+poetry run python -m app.scripts.seed_travel_catalog
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -47,6 +48,15 @@ poetry run python -m app.scripts.seed_furniture_catalog
 
 It upserts 20 `FURNITURE-*` products with dimensions, materials, colors, best
 rooms, and placement guidance for room-planning and future image-based agents.
+
+To add the travel collection, run:
+
+```bash
+poetry run python -m app.scripts.seed_travel_catalog
+```
+
+It upserts 30 `TRAVEL-*` products with varied prices, ratings, stock, colours,
+capacity or dimensions, and use-case-oriented specifications for comparisons.
 
 Authenticated commerce endpoints are available under `/api/v1`: `cart`,
 `orders/checkout`, `orders`, `wallet`, and product review creation. Checkout

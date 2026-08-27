@@ -136,6 +136,9 @@
 
 .totals > div { display: flex; justify-content: space-between; color: #9aabc4; font-size: 14px; }
 .totals > div > span:last-child { color: #d9e3ef; font-weight: 650; }
+.shippingSubtotal { margin-top: 4px; padding-top: 14px; border-top: 1px solid rgba(148, 166, 207, 0.12); color: #d3ddea !important; font-weight: 700; }
+.shippingBreakdown { padding-left: 12px; color: #8392a9 !important; font-size: 12px !important; }
+.shippingBreakdown span:first-child::before { margin-right: 7px; color: #53647d; content: "↳"; }
 
 .grandTotal {
   align-items: center;

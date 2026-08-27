@@ -1,65 +1,76 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
-import { MapPin, ArrowRight, WalletCards } from "lucide-react";
+import { CheckCircle2, LoaderCircle, MapPin, ArrowRight, WalletCards } from "lucide-react";
 import Button from "@/components/ui/Button";
 import RequireAuth from "@/components/auth/RequireAuth";
 import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
 import { apiFetch } from "@/lib/api";
-import { getCurrentUser } from "@/lib/auth";
+import { getSessionShippingFee } from "@/lib/checkout";
 import styles from "./checkout.module.css";
 import summaryStyles from "./checkout-summary.module.css";
 
 const currency = new Intl.NumberFormat("en-MY", {
   currency: "MYR",
   style: "currency",
-  maximumFractionDigits: 0,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
-const DEFAULT_SHOPY_PAY_BALANCE = 420;
-type StoredWallet = {
-  balance?: unknown;
-  transactions?: unknown;
+const SST_RATE = 0.06;
+
+function roundUpToFiveSen(value: number) {
+  return Math.ceil((value - Number.EPSILON) * 20) / 20;
+}
+type WalletApiResponse = {
+  balance: string;
 };
 
 function CheckoutContent() {
+  const router = useRouter();
   const invoiceRef = useRef<HTMLDivElement | null>(null);
+  const successRedirectTimer = useRef<number | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState("Pending");
   const [invoiceDate, setInvoiceDate] = useState("Pending");
   const [isExporting, setIsExporting] = useState(false);
   const { cartItems, subtotal, refreshCart } = useCart();
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
-  const [shopyPayBalance, setShopyPayBalance] = useState(DEFAULT_SHOPY_PAY_BALANCE);
-  const [walletStorageKey, setWalletStorageKey] = useState<string | null>(null);
-  const tax = Math.round(subtotal * 0.06);
-  const handling = cartItems.length > 0 ? 24 : 0;
-  const total = subtotal + tax + handling;
+  const [paymentStage, setPaymentStage] = useState<"idle" | "processing" | "success">("idle");
+  const [shopyPayBalance, setShopyPayBalance] = useState(0);
+  const [walletIsReady, setWalletIsReady] = useState(false);
+  const cartSignature = cartItems
+    .map((item) => `${item.id}:${item.quantity}`)
+    .sort()
+    .join("|");
+  const shippingFee = useMemo(() => getSessionShippingFee(cartSignature), [cartSignature]);
+  const merchandiseSubtotal = subtotal;
+  const shippingSst = roundUpToFiveSen(shippingFee * SST_RATE);
+  const shippingSubtotal = shippingFee + shippingSst;
+  const total = merchandiseSubtotal + shippingSubtotal;
   const balanceAfterOrder = shopyPayBalance - total;
   const requiredTopUp = Math.max(total - shopyPayBalance, 0);
   const hasSufficientBalance = shopyPayBalance >= total;
-  const walletIsReady = walletStorageKey !== null;
-
   useEffect(() => {
     let active = true;
-    void getCurrentUser().then((user) => {
-      if (!active || !user) return;
-      try {
-        const storageKey = `shopy-pay-wallet:${user.id}`;
-        const stored = window.localStorage.getItem(storageKey);
-        if (stored) {
-          const parsed = JSON.parse(stored) as StoredWallet;
-          if (typeof parsed.balance === "number" && Number.isFinite(parsed.balance)) {
-            setShopyPayBalance(parsed.balance);
-          }
-        }
-        setWalletStorageKey(storageKey);
-      } catch {
-        // Keep the default wallet balance when local storage is unavailable.
-      }
-    });
+    void apiFetch("/api/v1/wallet")
+      .then((wallet) => {
+        if (!active) return;
+        setShopyPayBalance(Number((wallet as WalletApiResponse).balance));
+        setWalletIsReady(true);
+      })
+      .catch(() => {
+        if (active) setWalletIsReady(true);
+      });
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => () => {
+    if (successRedirectTimer.current !== null) {
+      window.clearTimeout(successRedirectTimer.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -211,7 +222,7 @@ function CheckoutContent() {
         y += rowHeight + 4;
       }
 
-      const totalsHeight = 50;
+      const totalsHeight = 60;
       if (y + totalsHeight > footerY) {
         startNewPage();
       }
@@ -226,9 +237,10 @@ function CheckoutContent() {
       pdf.text("PAYMENT SUMMARY", totalsX + 6, y + 8);
 
       const totals = [
-        ["Subtotal", currency.format(subtotal)],
-        ["SST estimate", currency.format(tax)],
-        ["Handling", currency.format(handling)],
+        ["Merchandise subtotal", currency.format(merchandiseSubtotal)],
+        ["Shipping subtotal", currency.format(shippingSubtotal)],
+        ["  Shipping fee", currency.format(shippingFee)],
+        [`  SST (${SST_RATE * 100}%)`, currency.format(shippingSst)],
       ];
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(8.5);
@@ -240,13 +252,13 @@ function CheckoutContent() {
         pdf.text(value, totalsX + totalsWidth - 6, lineY, { align: "right" });
       }
       pdf.setDrawColor(74, 88, 128);
-      pdf.line(totalsX + 6, y + 35, totalsX + totalsWidth - 6, y + 35);
+      pdf.line(totalsX + 6, y + 42, totalsX + totalsWidth - 6, y + 42);
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(11);
       pdf.setTextColor(255, 255, 255);
-      pdf.text("TOTAL", totalsX + 6, y + 44);
+      pdf.text("TOTAL", totalsX + 6, y + 52);
       pdf.setTextColor(111, 235, 255);
-      pdf.text(currency.format(total), totalsX + totalsWidth - 6, y + 44, { align: "right" });
+      pdf.text(currency.format(total), totalsX + totalsWidth - 6, y + 52, { align: "right" });
 
       pdf.setDrawColor(39, 53, 87);
       pdf.line(margin, footerY - 5, pageWidth - margin, footerY - 5);
@@ -265,46 +277,12 @@ function CheckoutContent() {
   };
 
   const completeCheckout = async () => {
-    if (!walletStorageKey || !hasSufficientBalance || cartItems.length === 0) return;
+    if (!walletIsReady || !hasSufficientBalance || cartItems.length === 0) return;
 
-    let previousWallet: string | null = null;
-    let previousBalance = shopyPayBalance;
+    const paymentStartedAt = performance.now();
     try {
       setIsPlacingOrder(true);
-      previousWallet = window.localStorage.getItem(walletStorageKey);
-      const storedWallet = previousWallet
-        ? (JSON.parse(previousWallet) as StoredWallet)
-        : {};
-      const currentBalance = typeof storedWallet.balance === "number"
-        ? storedWallet.balance
-        : shopyPayBalance;
-
-      if (currentBalance < total) {
-        setShopyPayBalance(currentBalance);
-        return;
-      }
-
-      previousBalance = currentBalance;
-      const transactions = Array.isArray(storedWallet.transactions)
-        ? storedWallet.transactions
-        : [];
-      const nextBalance = currentBalance - total;
-      window.localStorage.setItem(walletStorageKey, JSON.stringify({
-        balance: nextBalance,
-        transactions: [
-          {
-            id: `SP-${Date.now().toString().slice(-6)}`,
-            title: "ShopyPay purchase",
-            description: `Checkout payment · ${cartItems.length} item${cartItems.length === 1 ? "" : "s"}`,
-            amount: total,
-            type: "debit",
-            status: "Completed",
-            date: new Date().toLocaleString("en-MY", { day: "2-digit", hour: "numeric", minute: "2-digit", month: "short" }),
-          },
-          ...transactions,
-        ].slice(0, 8),
-      }));
-      setShopyPayBalance(nextBalance);
+      setPaymentStage("processing");
 
       const order = await apiFetch("/api/v1/orders/checkout", {
         method: "POST",
@@ -315,21 +293,23 @@ function CheckoutContent() {
             postal_code: "50088", country_code: "MY",
           },
           payment_method: "shopy_pay",
+          shipping_fee: shippingFee.toFixed(2),
         }),
       }) as { order_number: string; placed_at: string };
       setInvoiceNumber(order.order_number);
       setInvoiceDate(new Date(order.placed_at).toLocaleDateString());
       await refreshCart();
+      const wallet = await apiFetch("/api/v1/wallet") as WalletApiResponse;
+      setShopyPayBalance(Number(wallet.balance));
+      const remainingProcessingTime = Math.max(0, 3000 - (performance.now() - paymentStartedAt));
+      if (remainingProcessingTime > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, remainingProcessingTime));
+      }
+      setPaymentStage("success");
+      successRedirectTimer.current = window.setTimeout(() => router.replace("/"), 2400);
     } catch (error) {
       console.error("Checkout failed", error);
-      if (walletStorageKey) {
-        if (previousWallet === null) {
-          window.localStorage.removeItem(walletStorageKey);
-        } else {
-          window.localStorage.setItem(walletStorageKey, previousWallet);
-        }
-        setShopyPayBalance(previousBalance);
-      }
+      setPaymentStage("idle");
     } finally {
       setIsPlacingOrder(false);
     }
@@ -337,6 +317,29 @@ function CheckoutContent() {
 
   return (
     <div className={styles.checkout}>
+      {paymentStage !== "idle" && (
+        <div className={styles.paymentOverlay} role="status" aria-live="assertive" aria-label={paymentStage === "success" ? "Payment successful" : "Processing payment"}>
+          <div className={styles.paymentDialog}>
+            {paymentStage === "processing" ? (
+              <>
+                <span className={styles.paymentIcon}><LoaderCircle size={31} /></span>
+                <p className={styles.paymentEyebrow}>ShopyPay secure checkout</p>
+                <h2>Processing your payment</h2>
+                <p>We’re confirming your order and updating your wallet. This will only take a moment.</p>
+                <span className={styles.paymentProgress}><i /> Please keep this page open</span>
+              </>
+            ) : (
+              <>
+                <span className={`${styles.paymentIcon} ${styles.paymentSuccessIcon}`}><CheckCircle2 size={34} /></span>
+                <p className={styles.paymentEyebrow}>Payment confirmed</p>
+                <h2>Thank you for shopping with Shopy.</h2>
+                <p>Your order <strong>#{invoiceNumber}</strong> is confirmed and we’re getting it ready for you.</p>
+                <span className={styles.redirectNote}>Taking you back to Shopy…</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className={summaryStyles.checkoutIntro}>
         <div>
           <h1>Order Summary</h1>
@@ -395,7 +398,7 @@ function CheckoutContent() {
         <aside className={styles.invoiceSidebar}>
           <div className={styles.invoiceHeader}>
             <div>
-              <h3 className="text-lg font-semibold text-white">Shopy Invoice</h3>
+              <h3 className="text-lg font-semibold text-white">Payment Details</h3>
               <p className="text-xs text-[#93a6bd]">Order summary & receipt</p>
             </div>
             <div>
@@ -451,9 +454,10 @@ function CheckoutContent() {
                 </div>
 
                 <div className={summaryStyles.totals}>
-                  <div><span>Subtotal</span><span>{currency.format(subtotal)}</span></div>
-                  <div><span>SST estimate</span><span>{currency.format(tax)}</span></div>
-                  <div><span>Handling</span><span>{currency.format(handling)}</span></div>
+                  <div><span>Merchandise Subtotal</span><span>{currency.format(merchandiseSubtotal)}</span></div>
+                  <div className={summaryStyles.shippingSubtotal}><span>Shipping Subtotal</span><span>{currency.format(shippingSubtotal)}</span></div>
+                  <div className={summaryStyles.shippingBreakdown}><span>Shipping fee</span><span>{currency.format(shippingFee)}</span></div>
+                  <div className={summaryStyles.shippingBreakdown}><span>SST ({SST_RATE * 100}%)</span><span>{currency.format(shippingSst)}</span></div>
                   <div className={summaryStyles.grandTotal}>
                     <span>Total</span>
                     <strong>{currency.format(total)}</strong>
@@ -468,9 +472,9 @@ function CheckoutContent() {
               fullWidth
               className={summaryStyles.createOrderAction}
               onClick={completeCheckout}
-              disabled={cartItems.length === 0 || isPlacingOrder || !walletIsReady}
+              disabled={cartItems.length === 0 || isPlacingOrder || !walletIsReady || paymentStage !== "idle"}
             >
-              {isPlacingOrder ? "Processing payment…" : walletIsReady ? "Pay with ShopyPay" : "Checking ShopyPay…"}<ArrowRight size={17} />
+              {isPlacingOrder ? "Processing payment…" : walletIsReady ? "Pay with ShopyPay" : "Checking ShopyPay…"}{isPlacingOrder ? <LoaderCircle className={styles.buttonSpinner} size={17} /> : <ArrowRight size={17} />}
             </Button>
           ) : (
             <Link href={`/shopy-pay?top_up=${requiredTopUp}`} className={summaryStyles.topUpAction}>
