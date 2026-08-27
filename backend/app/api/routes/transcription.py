@@ -1,13 +1,12 @@
-import os
-import tempfile
+import base64
+import json
 import time
-from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.concurrency import run_in_threadpool
 
+from app.ai.gemini import GeminiClient, GeminiConnectionError, GeminiResponseError
 from app.ai_logging import customer_input_for_log, log_ai_event
 from app.config import settings
 
@@ -15,7 +14,9 @@ from ..schemas import TranscriptionResponse
 
 
 router = APIRouter(tags=["transcription"])
-MAX_AUDIO_BYTES = 25 * 1024 * 1024
+# Gemini inline media requests allow 20 MB in total. Base64 expands audio by
+# roughly one third, so this leaves room for the prompt and request metadata.
+MAX_AUDIO_BYTES = 14 * 1024 * 1024
 ALLOWED_AUDIO_TYPES = {
     "audio/webm",
     "video/webm",
@@ -30,31 +31,41 @@ ALLOWED_AUDIO_TYPES = {
 ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".m4a", ".mp4"}
 
 
-@lru_cache(maxsize=1)
-def get_whisper_model():
-    """Load the local Whisper model only when speech-to-text is first requested."""
-    try:
-        from faster_whisper import WhisperModel
-
-        return WhisperModel(
-            settings.whisper_model,
-            device=settings.whisper_device,
-            compute_type=settings.whisper_compute_type,
-        )
-    except Exception as error:
-        raise RuntimeError("Local Whisper could not be initialized.") from error
-
-
-def transcribe_local_audio(audio_path: str, language: str | None) -> TranscriptionResponse:
-    model = get_whisper_model()
-    segments, info = model.transcribe(audio_path, language=language, vad_filter=True, beam_size=5)
-    transcript = " ".join(segment.text.strip() for segment in segments).strip()
-    duration = getattr(info, "duration", None)
-    return TranscriptionResponse(
-        transcript=transcript,
-        language=getattr(info, "language", None),
-        duration_seconds=round(duration, 2) if duration is not None else None,
+async def transcribe_with_gemini(
+    *, audio_bytes: bytes, mime_type: str, requested_language: str
+) -> TranscriptionResponse:
+    """Transcribe a short recording through the configured Gemini model."""
+    language_instruction = (
+        f"The caller requested {requested_language}."
+        if requested_language != "auto"
+        else "Identify the spoken language."
     )
+    prompt = (
+        "Transcribe this audio exactly. Do not summarize, translate, add speaker labels, "
+        "or include commentary. Return valid JSON only with this shape: "
+        '{"transcript":"...","language":"ISO 639-1 code or null"}. '
+        f"{language_instruction}"
+    )
+    response = await GeminiClient(timeout_seconds=settings.transcription_timeout_seconds).generate(
+        system_instruction="You are a precise speech-to-text service.",
+        contents=[{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(audio_bytes).decode("ascii")}},
+                {"text": prompt},
+            ],
+        }],
+        max_output_tokens=2048,
+        response_mime_type="application/json",
+    )
+    try:
+        data = json.loads(response)
+        transcript = str(data.get("transcript", "")).strip()
+        language = data.get("language")
+        language = str(language).strip().lower() if language else None
+    except (TypeError, ValueError) as error:
+        raise GeminiResponseError("Gemini returned an invalid transcription response.") from error
+    return TranscriptionResponse(transcript=transcript, language=language, duration_seconds=None)
 
 
 @router.post("/api/v1/transcribe", response_model=TranscriptionResponse)
@@ -62,10 +73,10 @@ async def transcribe_audio(
     audio: UploadFile = File(...),
     language: str | None = Form(default=None, max_length=12),
 ) -> TranscriptionResponse:
-    """Transcribe confirmed audio locally and remove its temporary file."""
+    """Transcribe confirmed audio with Gemini without persisting it locally."""
     request_id = uuid4().hex[:12]
     started_at = time.perf_counter()
-    requested_language = (language or settings.whisper_default_language).strip().lower()
+    requested_language = (language or settings.transcription_default_language).strip().lower()
     if requested_language in {"", "auto", "detect"}:
         requested_language = "auto"
     elif not requested_language.isalpha() or len(requested_language) not in {2, 3}:
@@ -90,50 +101,42 @@ async def transcribe_audio(
         raise HTTPException(status_code=400, detail="The audio recording is empty. Please record your question again.")
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         log_ai_event("voice.rejected", request_id=request_id, reason="audio_too_large", bytes=len(audio_bytes))
-        raise HTTPException(status_code=413, detail="Use an audio recording smaller than 25 MB.")
+        raise HTTPException(status_code=413, detail="Use an audio recording smaller than 14 MB.")
 
-    temp_path = ""
     try:
         log_ai_event(
             "voice.processing",
             request_id=request_id,
-            stage="validating_and_decoding_audio",
+            stage="sending_audio_to_gemini",
             bytes=len(audio_bytes),
-            whisper_model=settings.whisper_model,
-            device=settings.whisper_device,
+            gemini_model=settings.gemini_model,
             requested_language=requested_language,
-            reasoning_trace="Audio is validated, decoded, and passed to local Whisper with voice-activity detection.",
+            reasoning_trace="Audio is validated and sent inline to the configured Gemini model for transcription.",
         )
-        with tempfile.NamedTemporaryFile(suffix=suffix or ".webm", delete=False) as temporary_audio:
-            temporary_audio.write(audio_bytes)
-            temp_path = temporary_audio.name
-
-        result = await run_in_threadpool(transcribe_local_audio, temp_path, None if requested_language == "auto" else requested_language)
-    except RuntimeError as error:
+        result = await transcribe_with_gemini(
+            audio_bytes=audio_bytes,
+            mime_type=audio.content_type or "audio/webm",
+            requested_language=requested_language,
+        )
+    except GeminiConnectionError as error:
         log_ai_event(
             "voice.failed",
             request_id=request_id,
-            reason="whisper_initialization_failed",
+            reason="gemini_unavailable",
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(
             status_code=503,
-            detail="Local Whisper is unavailable. Install Faster-Whisper and check the configured model.",
+            detail="Gemini is unavailable. Check the API key and try again.",
         ) from error
-    except Exception as error:
+    except GeminiResponseError as error:
         log_ai_event(
             "voice.failed",
             request_id=request_id,
-            reason="transcription_failed",
+            reason="gemini_transcription_failed",
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=422, detail="We could not transcribe that recording. Please try again.") from error
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
 
     if not result.transcript:
         log_ai_event(

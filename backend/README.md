@@ -1,6 +1,6 @@
 # Shopy AI backend
 
-The FastAPI server keeps `GEMINI_API_KEY` on the server, provides chat and vision endpoints, and transcribes user-confirmed voice recordings locally with Faster-Whisper.
+The FastAPI server keeps `GEMINI_API_KEY` on the server, provides chat and vision endpoints, and transcribes user-confirmed voice recordings with Gemini.
 
 ```bash
 cp backend/.env.example backend/.env
@@ -100,19 +100,18 @@ poetry run pytest
 
 Copy `.env.example` to `.env` and set the required values before running in a new environment. The local `.env` is ignored by Git.
 
-## Local Whisper speech-to-text
+## Gemini speech-to-text
 
-`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. The recording is held only in a temporary file during decoding and is deleted immediately afterward.
+`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. Recordings up to 14 MB are sent inline to the configured Gemini model and are not persisted by this application.
 
-Configure Whisper in `.env`:
+Configure transcription in `.env`:
 
 ```env
-WHISPER_MODEL=small
-WHISPER_DEVICE=cpu
-WHISPER_COMPUTE_TYPE=int8
+TRANSCRIPTION_DEFAULT_LANGUAGE=en
+TRANSCRIPTION_TIMEOUT_SECONDS=60
 ```
 
-The first transcription downloads the selected open-source model into the local Hugging Face cache. Use `small` for a balanced local CPU setup, or `medium` when you have more memory and can accept slower transcription. For a CUDA deployment, set a compatible `WHISPER_DEVICE` and compute type.
+Gemini is selected through the existing `GEMINI_MODEL` setting, which defaults to `gemini-2.5-flash-lite`.
 
 To test once the server is running:
 

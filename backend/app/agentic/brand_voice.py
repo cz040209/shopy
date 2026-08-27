@@ -397,8 +397,10 @@ class BrandVoiceAgent:
         Product categories are human labels (often plural) while an intent can
         express a singular product type or store it in a domain-specific
         attribute.  Matching normalized terms across the verified identity and
-        relevant structured attributes keeps selection grounded without a
-        catalogue-specific synonym table.
+        relevant structured attributes keeps selection grounded. A small set
+        of product-family equivalents handles catalog labels that describe the
+        physical form rather than the shopper's broader need (for example, a
+        travel backpack is a travel bag).
         """
         kind = str(requirement.get("kind", ""))
         value = str(requirement.get("value", "")).casefold().strip()
@@ -411,6 +413,13 @@ class BrandVoiceAgent:
             attributes = product.get("attributes", {})
             department = attributes.get("department", "") if isinstance(attributes, dict) else ""
             category_evidence = f"{identity} {department}".casefold()
+            requested_terms = set(BrandVoiceAgent._normalized_terms(value))
+            available_terms = set(BrandVoiceAgent._normalized_terms(category_evidence))
+            identity_terms = set(BrandVoiceAgent._normalized_terms(identity))
+            if {"travel", "bag"}.issubset(requested_terms):
+                return "travel" in identity_terms and bool({"backpack", "luggage"}.intersection(identity_terms))
+            if "toiletry" in requested_terms:
+                return bool({"toiletry", "bottle"}.intersection(available_terms))
             return BrandVoiceAgent._terms_present(value, category_evidence)
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})

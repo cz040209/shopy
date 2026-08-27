@@ -20,10 +20,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash-lite"
     frontend_origin: str = "http://localhost:3002"
-    whisper_model: str = "small"
-    whisper_device: str = "cpu"
-    whisper_compute_type: str = "int8"
-    whisper_default_language: str = "en"
+    transcription_default_language: str = "en"
+    transcription_timeout_seconds: float = 60
     ai_log_customer_input: bool = True
     auth_cookie_secure: bool = False
     auth_session_days: int = 7

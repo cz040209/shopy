@@ -8,6 +8,7 @@ from app.agentic.intent import IntentMissionAgent, StructuredOutputError, build_
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
 from app.agentic.brand_voice import BrandVoiceAgent
+from app.agentic.auditor import ShoppingAuditor
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.state import initial_shopping_state
 
@@ -163,6 +164,46 @@ def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_prod
     assert BrandVoiceAgent.select_catalog_products(state) == [
         {"id": "shirt", "quantity": 1}, {"id": "pants", "quantity": 1},
     ]
+
+
+def test_catalog_selection_recognizes_travel_product_family_labels():
+    state = initial_shopping_state("Build a weekend travel kit")
+    state.update({
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "Travel Bag", "field": None, "quantity": 1},
+            {"kind": "category", "value": "Toiletries", "field": None, "quantity": 1},
+        ],
+        "candidate_products": [
+            {"id": "pack", "name": "Thule Aion 28L", "brand": "Thule", "category": "Travel Backpack", "price": "699", "inventory_quantity": 4, "specs": [], "attributes": {"department": "travel"}},
+            {"id": "toiletry", "name": "BAGSMART Hanging Toiletry Bag", "brand": "BAGSMART", "category": "Toiletry Organiser", "price": "89", "inventory_quantity": 4, "specs": [], "attributes": {"department": "travel"}},
+        ],
+    })
+
+    assert BrandVoiceAgent.select_catalog_products(state) == [
+        {"id": "pack", "quantity": 1}, {"id": "toiletry", "quantity": 1},
+    ]
+
+
+def test_auditor_allows_a_declared_gap_in_a_partially_fulfilled_bundle():
+    travel_bag = {
+        "id": "pack", "name": "Thule Aion 28L", "brand": "Thule", "category": "Travel Backpack",
+        "price": "699", "inventory_quantity": 4, "specs": [], "attributes": {"department": "travel"},
+    }
+    state = initial_shopping_state("Build a weekend travel kit")
+    state.update({
+        "candidate_products": [travel_bag],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "Travel Bag", "field": None, "quantity": 1},
+            {"kind": "category", "value": "Clothing", "field": None, "quantity": 1},
+        ],
+        "fulfillment_gaps": ["No verified catalog match for: Clothing"],
+        "unfulfilled_requirements": ["clothing"],
+    })
+    errors: list[dict[str, str]] = []
+
+    ShoppingAuditor._validate_fulfillment(state, {"pack": travel_bag}, errors)
+
+    assert errors == []
 
 
 def test_catalog_selection_normalizes_product_type_across_category_fields():

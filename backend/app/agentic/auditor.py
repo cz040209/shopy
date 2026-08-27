@@ -281,7 +281,10 @@ class ShoppingAuditor:
                     continue
                 # The writer must declare the exact unmet typed requirement.
                 # This avoids fragile language-specific matching in free prose.
-                if not verified_products and value in declared_unfulfilled and value in allowed_unfulfilled:
+                # A bundle may be partly fulfilled.  A verified item for one
+                # requirement must not prevent the writer from explicitly
+                # disclosing another requirement that has no catalog match.
+                if not eligible_candidates and value in declared_unfulfilled and value in allowed_unfulfilled:
                     continue
                 errors.append({
                     "code": "fulfillment_requirement_unmet",

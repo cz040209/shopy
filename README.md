@@ -25,7 +25,7 @@ FastAPI API :8000
   ├── PostgreSQL :5433  — catalog, users, commerce, conversations, run logs
   ├── Redis :6380       — expiring short-term shopping memory
   ├── Gemini            — intent, planning, vision, writing, semantic audit
-  └── Faster-Whisper    — local speech-to-text
+  └── Gemini            — speech-to-text
 ```
 
 ### Agent workflow
@@ -146,7 +146,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `REDIS_PORT` | Host Redis port | `6380` |
 | `SHOPPING_MEMORY_TTL_SECONDS` | Memory inactivity expiry | `1800` |
 | `SHOPPING_MEMORY_RECENT_TURNS` | Recent turns retained | `8` |
-| `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE` | Voice settings | `small`, `cpu`, `int8` |
+| `TRANSCRIPTION_DEFAULT_LANGUAGE`, `TRANSCRIPTION_TIMEOUT_SECONDS` | Voice settings | `en`, `60` |
 | `AI_LOG_CUSTOMER_INPUT` | Log customer text locally | `true` |
 
 Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`.
@@ -188,7 +188,7 @@ The browser frontend manages cookies automatically. Preserve login cookies when 
 
 ## Voice and vision
 
-`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG. Audio exists in a temporary file only during Faster-Whisper decoding.
+`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG up to 14 MB. The recording is sent inline to the configured Gemini model and is not stored by this application.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/transcribe \
