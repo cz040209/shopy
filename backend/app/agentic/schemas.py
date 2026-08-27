@@ -33,6 +33,7 @@ class SelectionCriterion(BaseModel):
 
 class MissionInterpretation(BaseModel):
     mission_type: str = Field(min_length=1, max_length=80)
+    recommendation_mode: Literal["single", "bundle"] = "single"
     goal: str = Field(min_length=1, max_length=300)
     requires_planning: bool = False
     requires_catalog: bool = False

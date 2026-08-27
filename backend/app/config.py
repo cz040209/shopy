@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # shopper intent or catalog taxonomy. Only high-confidence findings block
     # a response; deterministic catalog facts remain strict.
     agent_audit_block_confidence: float = 0.75
+    # Near-budget alternatives can be shown when they are explicitly disclosed
+    # to the shopper; the customer budget remains the primary target.
+    agent_recommendation_budget_tolerance_percent: float = 20
     agent_model_timeout_seconds: float = 30
     agent_tool_timeout_seconds: float = 5
     database_url: str = "postgresql+psycopg://shopy@localhost:5433/shopy"

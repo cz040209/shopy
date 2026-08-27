@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { API_URL, apiFetch } from "@/lib/api";
+import { useCart } from "@/features/cart/cart-context";
 import AIProgressPanel from "./AIProgressPanel";
 import AlternativeBundles from "./AlternativeBundles";
 import BundleBoard from "./BundleBoard";
@@ -17,20 +18,37 @@ import styles from "./mission-studio.module.css";
 
 const emptyMission: MissionData = { preferences: [], owned_items: [], priorities: [] };
 const progressStepCount = 6;
-const stageDurationMs = 1100;
+const stageDurationMs = 1800;
 
 function draftMission(text: string): MissionData {
   const budget = text.match(/(?:under|below|budget(?:\s+of)?|within)\s*(?:rm)?\s*([\d,]+)/i)?.[1];
+  const budgetValue = budget ? Number(budget.replaceAll(",", "")) : null;
+  const normalized = text.toLowerCase();
   const owned = text.match(/(?:already own|i have|with my)\s+([^.,]+)/i)?.[1]
     ?.split(/,| and /i)
     .map((item) => item.trim())
     .filter(Boolean) ?? [];
-  const preferenceTerms = ["minimal", "comfortable", "wireless", "warm", "ergonomic", "best value", "smart casual"]
-    .filter((term) => text.toLowerCase().includes(term));
+  const preferenceTerms = ["minimal", "comfortable", "wireless", "warm", "ergonomic", "best value", "smart casual", "premium", "budget-friendly", "portable", "quiet", "durable"]
+    .filter((term) => normalized.includes(term));
+  const categoryMatchers: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /\b(clothes?|outfit|shirt|dress|jacket|fashion)\b/, label: "Clothes" },
+    { pattern: /\b(shoes?|sneakers?|boots?)\b/, label: "Shoes" },
+    { pattern: /\b(gaming|game|pc|computer)\b/, label: "Gaming setup" },
+    { pattern: /\b(work|wfh|desk|office)\b/, label: "Workspace" },
+    { pattern: /\b(phone|laptop|tablet|headphones?|keyboard|mouse)\b/, label: "Tech" },
+    { pattern: /\b(room|bedroom|living room|furniture|sofa)\b/, label: "Home" },
+    { pattern: /\b(car|vehicle|wash)\b/, label: "Car care" },
+    { pattern: /\b(travel|trip|holiday|pack)\b/, label: "Travel" },
+  ];
+  const categories = categoryMatchers.flatMap(({ pattern, label }) => pattern.test(normalized) ? [label] : []);
+  const keyRequirements = [...new Set(categories)].map((category) => (
+    budgetValue ? `${category} under RM ${budgetValue.toLocaleString("en-MY")}` : category
+  ));
 
   return {
-    budget: budget ? Number(budget.replaceAll(",", "")) : null,
+    budget: budgetValue,
     preferences: preferenceTerms,
+    key_requirements: keyRequirements,
     owned_items: owned,
   };
 }
@@ -49,6 +67,7 @@ export default function MissionWorkspace() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
+  const { refreshCart } = useCart();
   const complete = Boolean(analysis);
   const total = useMemo(() => items.reduce((sum, item) => sum + Number(item.price), 0), [items]);
 
@@ -135,9 +154,14 @@ export default function MissionWorkspace() {
         method: "POST",
         body: JSON.stringify({ product_id: item.product_id, quantity: 1 }),
       })));
+      await refreshCart();
     } finally {
       setAdding(false);
     }
+  };
+
+  const removeBundleItem = (productId: string) => {
+    setItems((current) => current.filter((item) => item.product_id !== productId));
   };
 
   const enter = reduceMotion ? {} : { opacity: 0, y: 22 };
@@ -206,6 +230,30 @@ export default function MissionWorkspace() {
         <AIProgressPanel busy={busy} complete={complete} activeStep={progressStep} />
       </motion.section>
 
+      <AnimatePresence>
+        {busy && (
+          <motion.div
+            className={styles.workspaceFocusBackdrop}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.32, ease: "easeOut" }}
+            role="status"
+            aria-label="AI workspace is building your mission"
+          >
+            <motion.div
+              className={styles.workspaceFocusSurface}
+              initial={{ opacity: 0, y: 34, scale: 0.94 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -16, scale: 0.98 }}
+              transition={{ duration: 0.56, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <AIProgressPanel busy={busy} complete={complete} activeStep={progressStep} focus />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="wait">
         {error && (
           <motion.section className={styles.error} key="error" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
@@ -229,7 +277,7 @@ export default function MissionWorkspace() {
             </div>
             <OptimizationActions disabled={busy} onPick={refine} />
             {items.length ? (
-              <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} onAdd={() => void addBundle()} />
+              <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} onAdd={() => void addBundle()} onRemove={removeBundleItem} />
             ) : (
               <section className={styles.insight}><span>MISSION INSIGHT</span><p>{analysis}</p></section>
             )}

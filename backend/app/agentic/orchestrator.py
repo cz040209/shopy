@@ -258,7 +258,7 @@ class ShoppingOrchestrator:
         inherited_mission = previous_mission if mission.continues_context and isinstance(previous_mission, dict) else {}
         output = {
             **self._event(state, "intent_agent"),
-            "mission_type": mission.mission_type, "goal": mission.goal,
+            "mission_type": mission.mission_type, "recommendation_mode": mission.recommendation_mode, "goal": mission.goal,
             "requires_planning": mission.requires_planning, "requires_catalog": mission.requires_catalog,
             "continues_context": mission.continues_context,
             "optimization_mode": mission.optimization_mode or (

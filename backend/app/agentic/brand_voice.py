@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.ai_logging import log_ai_event
 from app.config import settings
 
+from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, StructuredOutputError, _json_object
 
 
@@ -42,6 +43,9 @@ Rules:
 - For product recommendations, include every listed product ID exactly once in
   product_ids and use only its supplied facts in the response.
 - Write catalog prices only as "RM <amount>" (for example, "RM 3999.00").
+- When a recommended product price or verified bundle total is above the
+  customer's stated budget, state that it is above the target and give the
+  exact difference. Never describe it as within or under budget.
 - Except for a stock-check response, do not say that a product is available,
   in stock, out of stock, purchasable, or has a quantity. Product discovery is
   not a live stock confirmation.
@@ -113,6 +117,34 @@ class BrandVoiceAgent:
     def is_shopping_mission(mission_type: str | None) -> bool:
         return (mission_type or "").strip().lower() not in BrandVoiceAgent._NON_SHOPPING_MISSIONS
 
+    @staticmethod
+    def _budget_guidance(state: dict[str, Any], products: list[dict[str, Any]]) -> dict[str, Any]:
+        """Provide verified disclosure data for recommendations above target."""
+        budget = state.get("budget")
+        if budget is None:
+            return {"target": None, "over_target_products": []}
+        try:
+            target = Decimal(str(budget))
+        except (InvalidOperation, ValueError, TypeError):
+            return {"target": None, "over_target_products": []}
+        over_target_products = []
+        for product in products:
+            try:
+                price = Decimal(str(product["price"]))
+            except (InvalidOperation, KeyError, ValueError, TypeError):
+                continue
+            if price > target:
+                over_target_products.append({
+                    "product_id": str(product["id"]),
+                    "price": str(price),
+                    "over_target_by": str(price - target),
+                })
+        return {
+            "target": str(target),
+            "tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+            "over_target_products": over_target_products,
+        }
+
     async def compose(self, state: dict[str, Any]) -> dict[str, Any]:
         stock_results = state.get("stock_results", [])
         if stock_results:
@@ -125,12 +157,14 @@ class BrandVoiceAgent:
                 "mission_type": state.get("mission_type"),
                 "goal": state.get("goal"),
                 "budget": state.get("budget"),
+                "recommendation_budget_tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
                 "preferences": state.get("preferences", []),
                 "constraints": state.get("constraints", []),
             },
             "required_categories": state.get("required_categories", []),
             "optional_categories": state.get("optional_categories", []),
             "verified_catalog_products": products,
+            "budget_guidance": self._budget_guidance(state, products),
             "verified_tool_results": state.get("tool_context", []),
             "verified_review_insights": state.get("review_insights", {}),
             "verified_compatibility": state.get("compatibility_results", []),
@@ -320,7 +354,8 @@ class BrandVoiceAgent:
         selected: list[dict[str, Any]] = []
         excluded = {str(product_id) for product_id in state.get("excluded_product_ids", [])}
         requirements = [item for item in state.get("fulfillment_requirements", []) if isinstance(item, dict)]
-        selection_limit = max(1, min(12, limit if limit is not None else (len(requirements) or 3)))
+        single_recommendation = state.get("recommendation_mode", "single") == "single"
+        selection_limit = max(1, min(12, limit if limit is not None else max(2 if single_recommendation else 1, len(requirements) or 3)))
         uncovered = set(range(len(requirements)))
         candidates = list(state.get("candidate_products", []))
         while candidates and len(selected) < selection_limit:
@@ -332,27 +367,37 @@ class BrandVoiceAgent:
                     price = Decimal(str(product["price"]))
                 except (InvalidOperation, KeyError, TypeError):
                     continue
-                if remaining is not None and price > remaining:
+                # A single-mode shortlist contains alternatives, not items the
+                # customer will buy together. Each option is therefore checked
+                # against the full stated budget. Bundle mode alone consumes a
+                # shared budget as products are added.
+                price_limit = recommendation_budget_limit(budget) if single_recommendation else remaining
+                if price_limit is not None and price > price_limit:
                     continue
+                coverage_requirements = requirements if single_recommendation else [
+                    requirements[requirement_index] for requirement_index in uncovered
+                ]
                 coverage = sum(
-                    1 for requirement_index in uncovered
-                    if BrandVoiceAgent._matches_requirement(product, requirements[requirement_index])
+                    1 for requirement in coverage_requirements
+                    if BrandVoiceAgent._matches_requirement(product, requirement)
                 )
                 if requirements and coverage == 0:
+                    continue
+                if single_recommendation and requirements and coverage != len(requirements):
                     continue
                 eligible.append((coverage, -index, product, price))
             if not eligible:
                 break
             _, _, product, price = max(eligible, key=lambda item: (item[0], item[1]))
             selected.append({"id": str(product["id"]), "quantity": 1})
-            if remaining is not None:
+            if remaining is not None and not single_recommendation:
                 remaining -= price
             uncovered = {
                 requirement_index for requirement_index in uncovered
                 if not BrandVoiceAgent._matches_requirement(product, requirements[requirement_index])
             }
             candidates = [candidate for candidate in candidates if str(candidate.get("id")) != str(product.get("id"))]
-            if requirements and not uncovered:
+            if requirements and not uncovered and not single_recommendation:
                 break
         if requirements:
             return selected
@@ -367,10 +412,11 @@ class BrandVoiceAgent:
                 price = Decimal(str(product["price"]))
             except (InvalidOperation, KeyError, TypeError):
                 continue
-            if remaining is not None and price > remaining:
+            price_limit = recommendation_budget_limit(budget) if single_recommendation else remaining
+            if price_limit is not None and price > price_limit:
                 continue
             selected.append({"id": str(product["id"]), "quantity": 1})
-            if remaining is not None:
+            if remaining is not None and not single_recommendation:
                 remaining -= price
         return selected
 

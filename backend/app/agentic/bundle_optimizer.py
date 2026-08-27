@@ -74,12 +74,7 @@ class BundleOptimizerAgent:
         return base + Decimal(str(llm_score)) - price / Decimal("100000")
 
     async def run(self, state: ShoppingAgentState) -> dict[str, Any]:
-        mission_type = str(state.get("mission_type", "")).casefold()
-        is_bundle_mission = (
-            len(state.get("required_categories", [])) > 1
-            or mission_type in {"build_setup", "bundle"}
-            or "bundle" in str(state.get("user_request", "")).casefold()
-        )
+        is_bundle_mission = state.get("recommendation_mode") == "bundle"
         if not is_bundle_mission:
             return {"bundle": None, "selected_products": state.get("selected_products", [])}
         products = [product for product in state.get("candidate_products", []) if int(product.get("inventory_quantity", 0)) > 0]

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import settings
 
+from .budgeting import recommendation_budget_limit
 from .brand_voice import BrandVoiceAgent
 from .intent import StructuredOutputError, _json_object
 
@@ -100,6 +101,7 @@ class ShoppingAuditor:
             return AuditResult(status="fail", errors=errors, total=None)
 
         total = Decimal("0")
+        item_totals: list[Decimal] = []
         verified_products: dict[str, dict[str, Any]] = {}
         selected_ids: list[str] = []
         for selection in selected:
@@ -132,12 +134,23 @@ class ShoppingAuditor:
             if stock < quantity:
                 errors.append({"code": "insufficient_stock", "message": "A selected product does not have enough available stock.", "product_id": str(product_id)})
                 continue
-            total += Decimal(str(product["price"])) * quantity
+            item_total = Decimal(str(product["price"])) * quantity
+            total += item_total
+            item_totals.append(item_total)
             self._validate_constraints(product, state, errors)
 
         budget = state.get("budget")
-        if budget is not None and total > Decimal(str(budget)):
-            errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the mission budget."})
+        if budget is not None:
+            recommendation_mode = state.get("recommendation_mode", "single")
+            budget_amount = (
+                recommendation_budget_limit(budget)
+                if recommendation_mode == "single"
+                else Decimal(str(budget))
+            )
+            if recommendation_mode == "bundle" and total > budget_amount:
+                errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the mission budget."})
+            elif recommendation_mode == "single" and any(item_total > budget_amount for item_total in item_totals):
+                errors.append({"code": "budget_exceeded", "message": "A recommended option exceeds the mission budget."})
         self._validate_response_coverage(state, selected_ids, errors)
         self._validate_fulfillment(state, verified_products, errors)
         self._validate_response_claims(state, verified_products, errors)
@@ -236,7 +249,8 @@ class ShoppingAuditor:
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    within_budget = budget is None or Decimal(str(candidate["price"])) <= Decimal(str(budget))
+                    budget_limit = recommendation_budget_limit(budget) if state.get("recommendation_mode", "single") == "single" else (Decimal(str(budget)) if budget is not None else None)
+                    within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False
                 if within_budget and BrandVoiceAgent._matches_requirement(candidate, requirement):
@@ -258,7 +272,8 @@ class ShoppingAuditor:
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    within_budget = budget is None or Decimal(str(candidate["price"])) <= Decimal(str(budget))
+                    budget_limit = recommendation_budget_limit(budget) if state.get("recommendation_mode", "single") == "single" else (Decimal(str(budget)) if budget is not None else None)
+                    within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False
                 if within_budget and BrandVoiceAgent._matches_requirement(candidate, requirement):
@@ -414,7 +429,14 @@ class ShoppingAuditor:
         budget = state.get("budget")
         if budget is not None:
             try:
-                expected_amounts.add(Decimal(str(budget)).quantize(Decimal("0.01")))
+                budget_amount = Decimal(str(budget)).quantize(Decimal("0.01"))
+                expected_amounts.add(budget_amount)
+                for claim in claims:
+                    if not isinstance(claim, dict) or "price" not in claim:
+                        continue
+                    price = Decimal(str(claim["price"])).quantize(Decimal("0.01"))
+                    if price > budget_amount:
+                        expected_amounts.add(price - budget_amount)
             except Exception:
                 errors.append({"code": "invalid_mission_budget", "message": "The mission budget is invalid."})
         for item in state.get("tool_context", []):

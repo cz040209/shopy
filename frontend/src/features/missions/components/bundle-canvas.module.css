@@ -35,6 +35,7 @@
   pointer-events: none;
 }
 
+.nodeShell { position: relative; min-width: 0; }
 .node {
   position: relative;
   z-index: 1;
@@ -60,8 +61,11 @@
 .node b { color: #a9f2de; font-size: 13px; }
 .top { grid-area: top; justify-self: center; width: min(290px, 84%); }
 .left { grid-area: left; }
-.center { grid-area: center; border-color: rgba(155, 130, 255, 0.5); box-shadow: 0 0 0 5px rgba(121, 91, 235, 0.08), 0 18px 38px rgba(0, 0, 0, 0.28); }
+.center .node { border-color: rgba(155, 130, 255, 0.5); box-shadow: 0 0 0 5px rgba(121, 91, 235, 0.08), 0 18px 38px rgba(0, 0, 0, 0.28); }
 .right { grid-area: right; }
+.remove { position: absolute; z-index: 2; top: 8px; right: 8px; display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 50%; padding: 0; background: rgba(8, 15, 32, 0.86); color: #d9e5f4; cursor: pointer; opacity: 0; transform: translateY(-3px) scale(0.9); transition: opacity 180ms ease, transform 180ms ease, background 180ms ease, color 180ms ease; }
+.nodeShell:hover .remove, .nodeShell:focus-within .remove { opacity: 1; transform: translateY(0) scale(1); }
+.remove:hover { background: #ef5b78; color: #fff; }
 
 .compatible {
   position: absolute;

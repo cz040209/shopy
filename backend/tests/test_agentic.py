@@ -9,6 +9,7 @@ from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
 from app.agentic.brand_voice import BrandVoiceAgent
 from app.agentic.auditor import ShoppingAuditor
+from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.state import initial_shopping_state
 
@@ -150,6 +151,7 @@ async def test_brand_voice_retries_a_valid_draft_that_omits_a_verified_product_i
 def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_product():
     state = initial_shopping_state("Build a work outfit")
     state.update({
+        "recommendation_mode": "bundle",
         "fulfillment_requirements": [
             {"kind": "category", "value": "shirt", "field": None, "quantity": 1},
             {"kind": "category", "value": "pants", "field": None, "quantity": 1},
@@ -169,6 +171,7 @@ def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_prod
 def test_catalog_selection_recognizes_travel_product_family_labels():
     state = initial_shopping_state("Build a weekend travel kit")
     state.update({
+        "recommendation_mode": "bundle",
         "fulfillment_requirements": [
             {"kind": "category", "value": "Travel Bag", "field": None, "quantity": 1},
             {"kind": "category", "value": "Toiletries", "field": None, "quantity": 1},
@@ -182,6 +185,79 @@ def test_catalog_selection_recognizes_travel_product_family_labels():
     assert BrandVoiceAgent.select_catalog_products(state) == [
         {"id": "pack", "quantity": 1}, {"id": "toiletry", "quantity": 1},
     ]
+
+
+def test_single_recommendation_mode_returns_two_comparable_choices_when_available():
+    state = initial_shopping_state("Recommend a dining chair")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [{"kind": "category", "value": "chair", "field": None, "quantity": 1}],
+        "candidate_products": [
+            {"id": "cane", "name": "Cane Dining Chair", "brand": "Shopy", "category": "Dining Chairs", "price": "249", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "oak", "name": "Oak Dining Chair", "brand": "Shopy", "category": "Dining Chairs", "price": "299", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "lamp", "name": "Dining Lamp", "brand": "Shopy", "category": "Lighting", "price": "159", "inventory_quantity": 4, "specs": [], "attributes": {}},
+        ],
+    })
+
+    assert BrandVoiceAgent.select_catalog_products(state) == [
+        {"id": "cane", "quantity": 1}, {"id": "oak", "quantity": 1},
+    ]
+
+
+def test_single_phone_request_keeps_multiple_llm_resolved_comparables():
+    state = initial_shopping_state("I want to buy a phone under RM 5,000")
+    state.update({
+        "recommendation_mode": "single",
+        "budget": 5_000,
+        "fulfillment_requirements": [{"kind": "category", "value": "phone", "field": None, "quantity": 1}],
+        # These are the same kind of post-resolution candidates shown in the
+        # supplied log: all are verified phones within the stated budget.
+        "candidate_products": [
+            {"id": "iphone-16", "name": "Apple iPhone 16", "brand": "Apple", "category": "Phones", "price": "3999", "inventory_quantity": 42, "specs": [], "attributes": {}},
+            {"id": "iphone-16-pro", "name": "Apple iPhone 16 Pro", "brand": "Apple", "category": "Phones", "price": "4999", "inventory_quantity": 24, "specs": [], "attributes": {}},
+            {"id": "galaxy-s25", "name": "Samsung Galaxy S25", "brand": "Samsung", "category": "Phones", "price": "3999", "inventory_quantity": 38, "specs": [], "attributes": {}},
+        ],
+    })
+
+    assert BrandVoiceAgent.select_catalog_products(state) == [
+        {"id": "iphone-16", "quantity": 1}, {"id": "iphone-16-pro", "quantity": 1},
+    ]
+
+
+def test_single_recommendation_allows_a_configured_near_budget_option_but_not_a_larger_overrun():
+    state = initial_shopping_state("Recommend a phone under RM 5,000")
+    state.update({
+        "recommendation_mode": "single",
+        "budget": 5_000,
+        "fulfillment_requirements": [{"kind": "category", "value": "phone", "field": None, "quantity": 1}],
+        "candidate_products": [
+            {"id": "near-budget", "name": "Near Budget Phone", "category": "Phones", "price": "6000", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "too-far", "name": "Too Far Phone", "category": "Phones", "price": "6000.01", "inventory_quantity": 4, "specs": [], "attributes": {}},
+        ],
+    })
+
+    assert BrandVoiceAgent.select_catalog_products(state) == [{"id": "near-budget", "quantity": 1}]
+
+
+@pytest.mark.anyio
+async def test_llm_selected_bundle_mode_receives_a_multi_product_bundle():
+    state = initial_shopping_state("Build me a dining furniture collection")
+    state.update({
+        "mission_type": "product_search",
+        "recommendation_mode": "bundle",
+        "budget": 1_000,
+        "required_categories": ["chair", "table", "lamp"],
+        "candidate_products": [
+            {"id": "chair", "name": "Cane Dining Chair", "category": "Dining Furniture", "price": "249", "inventory_quantity": 4},
+            {"id": "table", "name": "Round Dining Table", "category": "Dining Tables", "price": "499", "inventory_quantity": 3},
+            {"id": "lamp", "name": "Warm Dining Lamp", "category": "Lighting", "price": "159", "inventory_quantity": 7},
+        ],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["bundle"]["product_count"] == 3
+    assert {item["id"] for item in result["selected_products"]} == {"chair", "table", "lamp"}
 
 
 def test_auditor_allows_a_declared_gap_in_a_partially_fulfilled_bundle():

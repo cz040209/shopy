@@ -240,6 +240,46 @@ async def test_auditor_rejects_invalid_ids_stock_budget_and_unsupported_claims(d
 
 
 @pytest.mark.anyio
+async def test_auditor_treats_single_recommendations_as_budgeted_alternatives(db_session):
+    first = catalog_product(db_session, name="Phone One", price=Decimal("3999.00"))
+    second = Product(
+        seller=first.seller,
+        category=first.category,
+        sku="PHONE-TWO",
+        slug="phone-two",
+        name="Phone Two",
+        brand="Tool Brand",
+        description="Another catalog phone.",
+        price=Decimal("6000.00"),
+        status=ProductStatus.ACTIVE,
+        inventory_quantity=5,
+    )
+    db_session.add(second)
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "single-alternatives-budget", max_calls=20)
+    selections = [{"id": str(first.id), "quantity": 1}, {"id": str(second.id), "quantity": 1}]
+
+    alternatives = await ShoppingAuditor().audit({
+        "selected_products": selections,
+        "recommendation_mode": "single",
+        "budget": 5000,
+        "preferences": [],
+        "constraints": [],
+    }, registry)
+    bundle = await ShoppingAuditor().audit({
+        "selected_products": selections,
+        "recommendation_mode": "bundle",
+        "budget": 5000,
+        "preferences": [],
+        "constraints": [],
+    }, registry)
+
+    assert alternatives["status"] == "pass"
+    assert alternatives["total"] == "9999.00"
+    assert any(error["code"] == "budget_exceeded" for error in bundle["errors"])
+
+
+@pytest.mark.anyio
 async def test_auditor_rejects_an_unsupported_prose_claim_reported_by_llm(db_session):
     product = catalog_product(db_session)
     registry = CommerceToolRegistry(db_session, "semantic-audit", max_calls=20)

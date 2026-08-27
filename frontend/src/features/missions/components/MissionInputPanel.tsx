@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
-import { ArrowRight, Plus } from "lucide-react";
+import { LoaderCircle, Plus, Send } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { MissionData } from "./types";
 import ExtractedChips from "./ExtractedChips";
 import styles from "./mission-studio.module.css";
@@ -14,6 +15,17 @@ type Props = {
 };
 
 export default function MissionInputPanel({ request, mission, busy, onRequestChange, onLaunch, onRemoveOwned }: Props) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const resizeTextarea = (element: HTMLTextAreaElement) => {
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 132)}px`;
+  };
+
+  useEffect(() => {
+    if (textareaRef.current) resizeTextarea(textareaRef.current);
+  }, [request]);
+
   return (
     <section className={styles.inputPanel} aria-labelledby="mission-input-title">
       <div className={styles.sectionIntro}>
@@ -23,20 +35,26 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
       </div>
       <div className={styles.inputSurface}>
         <textarea
+          ref={textareaRef}
           value={request}
-          onChange={(event) => onRequestChange(event.target.value)}
+          onChange={(event) => {
+            resizeTextarea(event.currentTarget);
+            onRequestChange(event.target.value);
+          }}
           placeholder="Build me a calm WFH setup under RM2,000. I already own a laptop and prefer warm wood."
-          rows={2}
+          rows={1}
         />
         <motion.button
           type="button"
           className={styles.launchButton}
           disabled={busy || !request.trim()}
           onClick={onLaunch}
+          aria-label={busy ? "Shopy is building your mission" : "Submit mission"}
+          title={busy ? "Shopy is building your mission" : "Submit mission"}
           whileHover={busy ? undefined : { y: -2, scale: 1.015 }}
           whileTap={busy ? undefined : { scale: 0.98 }}
         >
-          {busy ? "Working…" : "Submit"}<ArrowRight size={17} />
+          {busy ? <LoaderCircle size={19} /> : <Send size={19} />}
         </motion.button>
       </div>
       <ExtractedChips mission={mission} onRemoveOwned={onRemoveOwned} />

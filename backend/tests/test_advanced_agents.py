@@ -122,6 +122,7 @@ async def test_bundle_optimizer_enforces_budget_and_reports_coverage():
     state = initial_shopping_state("Build a gaming setup under RM 3000")
     state.update({
         "budget": 3000, "required_categories": ["laptop", "keyboard"], "optional_categories": ["mouse"],
+        "recommendation_mode": "bundle",
         "candidate_products": [
             {"id": "laptop", "name": "Gaming Laptop", "category": "laptop", "price": "2500", "currency": "MYR", "inventory_quantity": 1, "specs": [], "attributes": {}},
             {"id": "keyboard", "name": "Gaming Keyboard", "category": "keyboard", "price": "400", "currency": "MYR", "inventory_quantity": 1, "specs": [], "attributes": {}},
@@ -141,6 +142,7 @@ async def test_bundle_optimizer_does_not_use_mousepad_as_mouse_or_gaming_product
     state = initial_shopping_state("Build a gaming setup under RM 1000")
     state.update({
         "budget": 1000, "required_categories": ["gaming laptop or desktop", "mouse"],
+        "recommendation_mode": "bundle",
         "candidate_products": [
             {"id": "pad", "name": "Gaming Mousepad", "category": "Gaming", "price": "40", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
             {"id": "desk", "name": "Gaming Desk", "category": "Gaming", "price": "400", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},

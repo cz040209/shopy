@@ -8,6 +8,7 @@ class ShoppingAgentState(TypedDict):
 
     user_request: str
     mission_type: str | None
+    recommendation_mode: str
     goal: str | None
     requires_planning: bool
     requires_catalog: bool
@@ -67,6 +68,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
     return {
         "user_request": user_request.strip(),
         "mission_type": None,
+        "recommendation_mode": "single",
         "goal": None,
         "requires_planning": False,
         "requires_catalog": False,
