@@ -67,6 +67,7 @@ export default function MissionWorkspace() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
+  const [feedback, setFeedback] = useState("");
   const { refreshCart } = useCart();
   const complete = Boolean(analysis);
   const total = useMemo(() => items.reduce((sum, item) => sum + Number(item.price), 0), [items]);
@@ -141,8 +142,11 @@ export default function MissionWorkspace() {
   };
 
   const refine = (instruction: string) => {
-    const next = `${request.trim()}. ${instruction}.`;
-    setRequest(next);
+    const next = instruction.trim();
+    if (!next) return;
+    setFeedback("");
+    // Send feedback as a new turn. The server keeps the active brief, prior
+    // selections, and earlier feedback in expiring shopping-session memory.
     void runMission(next);
   };
 
@@ -276,6 +280,20 @@ export default function MissionWorkspace() {
               {items.length > 0 && <strong>RM {total.toLocaleString("en-MY", { maximumFractionDigits: 0 })}</strong>}
             </div>
             <OptimizationActions disabled={busy} onPick={refine} />
+            <form className={styles.feedbackForm} onSubmit={(event) => { event.preventDefault(); refine(feedback); }}>
+              <label htmlFor="bundle-feedback">Not quite right?</label>
+              <div>
+                <input
+                  id="bundle-feedback"
+                  value={feedback}
+                  disabled={busy}
+                  onChange={(event) => setFeedback(event.target.value)}
+                  placeholder="Tell AI what to change — for example, fewer items, warmer style, or a lower total."
+                />
+                <button type="submit" disabled={busy || !feedback.trim()}>Improve bundle</button>
+              </div>
+              <p>Shopy keeps this mission in short-term memory so each revision starts from your last brief.</p>
+            </form>
             {items.length ? (
               <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} onAdd={() => void addBundle()} onRemove={removeBundleItem} />
             ) : (

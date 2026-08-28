@@ -13,6 +13,7 @@ export type Attachment = {
 export type MissionData = {
   goal?: string | null;
   mission_type?: string | null;
+  recommendation_mode?: "single" | "bundle" | null;
   budget?: number | null;
   preferences?: string[];
   key_requirements?: string[];

@@ -65,8 +65,9 @@ Return only valid JSON, without Markdown.
 
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
-* Return `"single"` when the customer is choosing one product type and should compare alternatives within that same type.
-* Return `"bundle"` only when the customer needs different, complementary product types to work together toward one outcome.
+* Be bundle-minded for commerce missions: when complementary product types would materially improve the customer’s stated outcome, return `"bundle"` and plan a practical kit. Consider the goal, use case, budget, owned items, and constraints; do not rely on a fixed list of add-ons or product categories.
+* Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–4 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
+* A bundle must contain only complementary items that help achieve the requested outcome. Do not pad a basket with unrelated products, duplicate alternatives, or items the customer already owns.
 * This decision must come from the customer’s intent and requested outcome, not from matching a fixed list of words.
 
 ### Customer Requirements for the Mission UI (`key_requirements`)
@@ -86,8 +87,8 @@ Available runtime tools (the source of truth for requested_actions):
 ### Mission Classification (`mission_type`)
 * **stock_check**: Classify requests that ask whether a product is available, in stock, sold out, or has inventory as mission_type "stock_check". For stock_check, set catalog_query to the product words to search (for example, "spf 50 sunscreen"), not "check stock".
 * **product_search**: Use mission_type "product_search" for finding or recommending products.
-* Set `recommendation_mode` to **"bundle"** when the customer wants different, complementary product types that work together to achieve an outcome. Expand that goal into 2–6 complementary product needs in `bundle_items`, matching category `fulfillment_requirement` entries, and multiple focused `catalog_queries`. A bundle is a coordinated set of different items, not a list of alternatives for one product.
-* Set `recommendation_mode` to **"single"** when the customer wants one product type. For a single-product recommendation, the storefront will show at least two comparable catalog choices when available, so do not create artificial complementary needs.
+* For an actionable shopping outcome, first decide whether a compact kit of different, complementary product types would make the answer more useful. If so, set `recommendation_mode` to **"bundle"** and expand the goal into 2–6 customer-relevant needs in `bundle_items`, matching category `fulfillment_requirement` entries and focused `catalog_queries`. A bundle is a coordinated set of different items, not a list of alternatives for one product.
+* Set `recommendation_mode` to **"single"** only when a kit is not justified by the customer’s outcome. For a single-product recommendation, provide a comparable shortlist from the available catalog; do not create artificial complementary needs just to increase item count.
 * **information_request**: Use "information_request" only for identity, capability, greeting, or questions that do not require catalog data. A request for catalog facts is not an information_request.
 * **planning_request**: Use mission_type "planning_request" for broad planning questions that need an action plan before product selection, such as moving preparation, room design, personal style, event planning, or a checklist. For planning_request, do not invent catalog items: leave requested_actions empty unless the user explicitly asks to find or buy products.
 

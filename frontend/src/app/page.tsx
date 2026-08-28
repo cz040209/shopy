@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, Wrench, BriefcaseBusiness, House, Plane } from "lucide-react";
+import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, BriefcaseBusiness, House, Plane } from "lucide-react";
 import styles from "./home.module.css";
 import AIShoppingCamera from "@/features/vision/components/AIShoppingCamera";
 import { API_URL } from "@/lib/api";
@@ -126,6 +126,5 @@ export default function Home() {
       <div className={styles.featureCopy}><span className={styles.kicker}><Paintbrush size={14} /> Your goal, not a keyword</span><h2>From “I need a desk” to a workspace that works.</h2><p>Set a budget, say what matters, add what you already own, or show us the space. Shopy checks the details and builds a recommendation you can understand.</p><Link href="/build?mission=Build%20me%20a%20comfortable%20WFH%20setup%20under%20RM2%2C000" className={styles.featureLink}>Try Build it for me <ArrowRight size={17} /></Link></div>
       <div className={styles.preview} aria-label="Example agent activity"><div className={styles.previewTop}><span>BUILDING YOUR WORKSPACE</span><span>LIVE PLAN</span></div>{["Understood your requirements", "Found products that fit your budget", "Checked compatibility and practical details", "Optimizing your bundle"].map((step, index) => <div className={styles.progressStep} key={step}><span className={index < 3 ? styles.done : styles.active}>{index < 3 ? "✓" : ""}</span>{step}</div>)}<div className={styles.previewTotal}><span>Estimated bundle</span><strong>RM 1,846</strong><small>RM 154 under budget</small></div></div>
     </section>
-    <section className={styles.bottomCta}><Wrench size={23} /><div><h2>Got a problem to solve?</h2><p>Describe the situation and we will turn it into a practical next step.</p></div><Link href="/build?mission=Help%20me%20solve%20a%20shopping%20problem">Fix my problem <ArrowRight size={17} /></Link></section>
   </main>;
 }

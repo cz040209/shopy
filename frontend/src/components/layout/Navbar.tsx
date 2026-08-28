@@ -186,6 +186,7 @@ export default function Navbar() {
                 height={96}
                 priority
                 className={`h-14 w-auto object-contain ${fixStyles.logoImage} ${logoStyles.image}`}
+                style={{ width: "auto" }}
               />
             </Link>
 

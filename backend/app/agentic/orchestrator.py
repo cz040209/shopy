@@ -346,10 +346,16 @@ class ShoppingOrchestrator:
             # not spend the request budget fetching the same reviews twice.
             immediate_actions = [action for action in immediate_actions if action != "get_product_reviews"]
         tool_context = [*resolution_context, *(await self._execute_requested_actions(immediate_actions, action_candidates, state))]
-        # Resolution is required for a named product/detail request, but a
-        # generic browse request is expected to have several valid matches.
-        # An empty/ambiguous resolver result must not discard those matches.
-        response_candidates = action_candidates or candidates
+        # Resolution is required for a named product/detail request, but it
+        # must not collapse a recommendation into the model's first match.
+        # Product discovery deliberately retains the verified shortlist so the
+        # selection stage can present comparable options or build a complete,
+        # outcome-driven kit.
+        response_candidates = (
+            candidates
+            if self._should_recommend_products(actions)
+            else action_candidates or candidates
+        )
         no_eligible_alternative = bool(selection_context.get("no_eligible_alternative"))
         fulfillment_gaps = [] if no_eligible_alternative else self.brand_voice.fulfillment_gaps(response_candidates, state)
         output = {
@@ -511,7 +517,7 @@ class ShoppingOrchestrator:
             or state.get("catalog_queries")
             or state.get("fulfillment_requirements")
             or self._is_stock_check(state)
-            or self.brand_voice.is_shopping_mission(state.get("mission_type"))
+            or str(state.get("mission_type", "")).casefold() == "product_search"
         ):
             planned.append("search_products")
         if state.get("requires_catalog"):

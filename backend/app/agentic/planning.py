@@ -75,10 +75,29 @@ class PlanningAgent:
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
         plan: PlanningOutput | None = None
+        expected_catalog_plan = bool(state.get("requires_catalog"))
         for attempt in range(self.max_format_attempts):
             try:
                 response = await self.model.ainvoke(messages)
-                plan = PlanningOutput.model_validate(_json_object(response.content))
+                candidate = PlanningOutput.model_validate(_json_object(response.content))
+                # A catalog-bound planning request needs retrieval terms that
+                # express the model's actual understanding of the outcome.
+                # Searching the customer's broad sentence is not a meaningful
+                # substitute and can surface unrelated catalog departments.
+                if expected_catalog_plan and not candidate.catalog_queries:
+                    messages = [
+                        SystemMessage(content=PLANNING_SYSTEM_PROMPT),
+                        HumanMessage(
+                            "The mission has already been identified as needing catalog recommendations, "
+                            "but your plan did not provide catalog_queries. Re-evaluate the customer's "
+                            "goal and return a complete JSON plan with two to six concrete, outcome-relevant "
+                            "queries and any matching fulfillment requirements. Do not use the customer's full "
+                            "sentence as a query and do not use a fixed category template.\n\n"
+                            + json.dumps(payload, ensure_ascii=False, default=str)
+                        ),
+                    ]
+                    continue
+                plan = candidate
                 break
             except (StructuredOutputError, ValidationError, ValueError):
                 messages = [
@@ -97,10 +116,10 @@ class PlanningAgent:
                 steps=["List the spaces, tasks, and deadlines that matter most.", "Prioritize essentials before optional upgrades."],
                 follow_up_questions=["What is your budget and top priority?"],
             )
-        # Planning is a second, independent semantic decision point. This lets
-        # a broad request proceed to catalog search when the initial intent
-        # extraction omitted that requirement, without relying on keywords.
-        requires_catalog = bool(state.get("requires_catalog")) or plan.requires_catalog or bool(plan.catalog_queries)
+        # Planning is a second, independent semantic decision point. A vague
+        # fallback deliberately asks a follow-up instead of searching an
+        # unstructured sentence and recommending unrelated products.
+        requires_catalog = bool(plan.catalog_queries)
         output: dict[str, Any] = {
             "planning_context": plan.model_dump(),
             "requires_catalog": requires_catalog,
@@ -113,4 +132,17 @@ class PlanningAgent:
             output["fulfillment_requirements"] = list({
                 json.dumps(item, sort_keys=True): item for item in [*existing, *derived]
             }.values())
+        if plan.catalog_queries or plan.fulfillment_requirements:
+            # The bundle optimizer consumes normalized needs created by the
+            # LLM planner. This keeps room, outfit, setup, and future domains
+            # dynamic while ensuring the selected kit reflects the plan rather
+            # than the original broad wording.
+            requirement_needs = [
+                item.value.strip()
+                for item in plan.fulfillment_requirements
+                if item.kind.casefold().strip() == "category" and item.value.strip()
+            ]
+            output["required_categories"] = list(dict.fromkeys(
+                requirement_needs or [query.strip() for query in plan.catalog_queries if query.strip()]
+            ))
         return output

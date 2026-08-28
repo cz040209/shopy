@@ -47,6 +47,7 @@ export default function Footer() {
               width={150}
               height={60}
               className="mb-3 h-12 w-auto object-contain"
+              style={{ width: "auto" }}
             />
             <p className="text-[0.82rem] text-[#8892a4] leading-relaxed max-w-[220px]">
               AI-powered commerce. Smarter recommendations, faster delivery, better prices.
