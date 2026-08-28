@@ -68,5 +68,7 @@ async def test_catalog_tool_returns_full_verified_snapshot_without_query_terms(d
 
     products = {item["id"]: item for item in result["products"]}
     assert set(products) == {str(skincare.id), str(makeup.id)}
+    assert products[str(skincare.id)]["search_terms"] == ["daily", "cleanser"]
+    assert products[str(makeup.id)]["search_terms"] == ["blendable", "cheek", "colour"]
     assert products[str(skincare.id)]["specs"] == []
     assert products[str(makeup.id)]["attributes"] == {}

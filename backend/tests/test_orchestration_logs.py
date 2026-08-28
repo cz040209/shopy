@@ -20,7 +20,13 @@ class FakeChatModel:
                 f"{product['name']} — RM {product['price']}" for product in products
             )
             return AIMessage(content=json.dumps({"response": response, "product_ids": [product["id"] for product in products]}))
-        return AIMessage(content='{"mission_type":"build_setup","goal":"gaming setup","budget":4000,"preferences":[],"constraints":[],"owned_items":[],"priorities":["value"]}')
+        return AIMessage(content=(
+            '{"mission_type":"product_search","recommendation_mode":"single",'
+            '"goal":"gaming setup","requires_catalog":true,"catalog_query":"gaming setup",'
+            '"catalog_queries":["gaming setup"],"requested_actions":["search_products"],'
+            '"budget":4000,"preferences":[],"constraints":[],"owned_items":[],"priorities":["value"],'
+            '"fulfillment_requirements":[{"kind":"category","value":"gaming setup","quantity":1}]}'
+        ))
 
 
 @pytest.mark.anyio

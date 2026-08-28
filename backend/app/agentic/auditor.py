@@ -217,6 +217,13 @@ class ShoppingAuditor:
         state: dict[str, Any], verified_products: dict[str, dict[str, Any]], errors: list[dict[str, str]]
     ) -> None:
         """Require explicit user requirements to be covered by verified products."""
+        bundle = state.get("bundle") if isinstance(state.get("bundle"), dict) else {}
+        coverage = bundle.get("required_category_coverage", {}) if isinstance(bundle, dict) else {}
+        covered_bundle_categories = {
+            str(value).casefold().strip()
+            for value in coverage.get("covered", [])
+            if isinstance(value, str) and value.strip()
+        } if isinstance(coverage, dict) else set()
         declared_unfulfilled = {
             str(value).casefold().strip()
             for value in state.get("unfulfilled_requirements", [])
@@ -269,6 +276,12 @@ class ShoppingAuditor:
             kind, value = str(requirement.get("kind", "")), str(requirement.get("value", "")).casefold().strip()
             quantity = int(requirement.get("quantity", 1) or 1)
             if not value:
+                continue
+            # Bundle coverage is produced from model-mapped candidate IDs and
+            # then budget/stock checked deterministically by the optimizer.
+            # Preserve that verified semantic mapping instead of reinterpreting
+            # it later with stricter token equality.
+            if kind == "category" and quantity == 1 and value in covered_bundle_categories:
                 continue
             eligible_candidates = []
             for candidate in state.get("candidate_products", []):

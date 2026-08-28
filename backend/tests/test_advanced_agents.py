@@ -44,11 +44,59 @@ async def test_product_search_filters_stock_budget_and_never_invents_ids(db_sess
     assert result["product_rankings"][0]["product_id"] == str(affordable.id)
 
 
+def test_product_ranking_uses_whole_terms_not_substrings():
+    state = initial_shopping_state("car cleaner")
+    products = [
+        {"id": "skin", "name": "Skincare Cleanser", "brand": "Test", "category": "Beauty", "price": "20", "inventory_quantity": 1},
+        {"id": "car", "name": "Car Cleaner", "brand": "Test", "category": "Car Care", "price": "20", "inventory_quantity": 1},
+    ]
+
+    ranked = ProductSearchAgent._rank(products, state, include_out_of_stock=False)
+
+    assert ranked[0]["product"]["id"] == "car"
+    assert ranked[1]["reasons"] == ["in stock"]
+
+
 class ReviewModel:
     def __init__(self) -> None: self.payload = None
     async def ainvoke(self, messages, **kwargs):
         self.payload = json.loads(str(messages[1].content))
         return AIMessage(content='{"strengths":["clear call quality"],"complaints":["microphone drops on windy calls"],"mission_relevance":["microphone reliability matters for meetings"],"general_sentiment":"mixed-positive"}')
+
+
+class CatalogBatchModel:
+    def __init__(self) -> None:
+        self.seen_ids: list[str] = []
+
+    async def ainvoke(self, messages, **kwargs):
+        payload = json.loads(str(messages[1].content))
+        self.seen_ids.extend(product["id"] for product in payload["catalog_index"])
+        matches = [
+            product["id"] for product in payload["catalog_index"]
+            if product["attributes"].get("department") == "requested-department"
+        ]
+        return AIMessage(content=json.dumps({"product_ids": matches}))
+
+
+@pytest.mark.anyio
+async def test_catalog_shortlisting_considers_products_beyond_first_batch():
+    model = CatalogBatchModel()
+    agent = ProductSearchAgent(None, model)
+    products = [
+        {
+            "id": f"product-{index}", "name": f"Product {index:03}", "brand": "Test",
+            "category": "General", "price": "10", "inventory_quantity": 1,
+            "rating_average": "0", "review_count": 0, "specs": [], "attributes": {},
+        }
+        for index in range(81)
+    ]
+    products[-1]["attributes"] = {"department": "requested-department"}
+    ranked = [{"product": product, "score": 20, "reasons": ["in stock"]} for product in products]
+
+    result = await agent._shortlist_catalog(ranked, initial_shopping_state("show products"))
+
+    assert len(model.seen_ids) == 81
+    assert [item["product"]["id"] for item in result] == ["product-80"]
 
 
 @pytest.mark.anyio

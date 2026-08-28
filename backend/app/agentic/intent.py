@@ -7,6 +7,8 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
+from app.config import settings
+
 from .schemas import MissionInterpretation
 
 
@@ -157,15 +159,26 @@ class IntentMissionAgent:
         request_payload = user_request if not runtime_context else json.dumps(
             {"customer_request": user_request, "runtime_context": runtime_context}, ensure_ascii=False
         )
-        response = await self.model.ainvoke([
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=request_payload),
-        ])
-        try:
-            mission = MissionInterpretation.model_validate(_json_object(response.content))
-        except ValidationError as error:
-            raise StructuredOutputError("Intent model response does not match the mission schema.") from error
-        unknown_actions = set(mission.requested_actions) - self.tool_names
-        if unknown_actions:
-            raise StructuredOutputError("Intent model requested a tool that is not available.")
-        return mission
+        last_error: StructuredOutputError | None = None
+        for attempt in range(max(1, settings.agent_response_format_attempts)):
+            correction = "" if attempt == 0 else (
+                "\nYour previous answer was invalid. Return one JSON object that exactly follows "
+                "the output schema and uses only the listed runtime tool names."
+            )
+            response = await self.model.ainvoke([
+                SystemMessage(content=self.system_prompt + correction),
+                HumanMessage(content=request_payload),
+            ])
+            try:
+                mission = MissionInterpretation.model_validate(_json_object(response.content))
+                unknown_actions = set(mission.requested_actions) - self.tool_names
+                if unknown_actions:
+                    raise StructuredOutputError("Intent model requested a tool that is not available.")
+                return mission
+            except ValidationError as error:
+                last_error = StructuredOutputError("Intent model response does not match the mission schema.")
+                last_error.__cause__ = error
+            except StructuredOutputError as error:
+                last_error = error
+        assert last_error is not None
+        raise last_error

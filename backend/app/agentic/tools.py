@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -55,6 +56,7 @@ class ProductToolOutput(BaseModel):
     slug: str
     name: str
     brand: str
+    search_terms: list[str]
     category: str
     seller_id: UUID
     seller_name: str
@@ -93,8 +95,13 @@ class BundleTotalOutput(BaseModel):
 
 def _product_output(product) -> ProductToolOutput:
     primary_image = min(product.images, key=lambda image: image.sort_order) if product.images else None
+    description_terms = list(dict.fromkeys(
+        term for term in re.findall(r"[\w-]+", (product.description or "").casefold())
+        if len(term) > 2 and term not in catalog.SEARCH_STOP_WORDS
+    ))[:80]
     return ProductToolOutput(
-        id=product.id, slug=product.slug, name=product.name, brand=product.brand, category=product.category.name,
+        id=product.id, slug=product.slug, name=product.name, brand=product.brand,
+        search_terms=description_terms, category=product.category.name,
         seller_id=product.seller.id, seller_name=product.seller.name, price=product.price,
         currency=product.currency, inventory_quantity=max(0, product.inventory_quantity - product.reserved_quantity),
         rating_average=product.rating_average, review_count=product.review_count,

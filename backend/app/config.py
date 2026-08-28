@@ -29,10 +29,12 @@ class Settings(BaseSettings):
     # targeted repair cycles instead of failing with a graph recursion error.
     agent_max_graph_iterations: int = 24
     agent_max_tool_calls: int = 8
-    # A catalog snapshot gives the recommendation model the full verified
-    # product context for the current small-to-medium storefront. Raise this
-    # only alongside prompt-size monitoring as the catalog grows.
+    # Retrieval reads the catalog snapshot in compact batches, then sends only
+    # a verified semantic shortlist to downstream response agents.
     agent_catalog_context_limit: int = 500
+    agent_catalog_batch_size: int = 80
+    agent_catalog_batch_shortlist_limit: int = 12
+    agent_catalog_shortlist_limit: int = 48
     agent_max_repair_attempts: int = 2
     agent_response_format_attempts: int = 2
     # Semantic audit findings can be uncertain when the LLM is interpreting

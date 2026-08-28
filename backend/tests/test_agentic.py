@@ -96,6 +96,23 @@ async def test_invalid_intent_model_output_is_rejected():
 
 
 @pytest.mark.anyio
+async def test_intent_agent_retries_a_schema_failure():
+    class RetryIntentModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            return AIMessage(content="not JSON" if self.calls == 1 else MISSION_JSON)
+
+    model = RetryIntentModel()
+    result = await IntentMissionAgent(model).interpret("Build a setup")
+
+    assert model.calls == 2
+    assert result.goal == "gaming setup"
+
+
+@pytest.mark.anyio
 async def test_brand_voice_retries_invalid_structured_output():
     class RetryModel:
         def __init__(self) -> None:
@@ -168,7 +185,7 @@ def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_prod
     ]
 
 
-def test_catalog_selection_recognizes_travel_product_family_labels():
+def test_catalog_selection_does_not_invent_product_family_aliases():
     state = initial_shopping_state("Build a weekend travel kit")
     state.update({
         "recommendation_mode": "bundle",
@@ -182,8 +199,10 @@ def test_catalog_selection_recognizes_travel_product_family_labels():
         ],
     })
 
+    # The deterministic fallback uses only catalog text. Semantic family
+    # mapping belongs to the bundle model and its verified coverage record.
     assert BrandVoiceAgent.select_catalog_products(state) == [
-        {"id": "pack", "quantity": 1}, {"id": "toiletry", "quantity": 1},
+        {"id": "toiletry", "quantity": 1},
     ]
 
 
@@ -274,6 +293,12 @@ def test_auditor_allows_a_declared_gap_in_a_partially_fulfilled_bundle():
         ],
         "fulfillment_gaps": ["No verified catalog match for: Clothing"],
         "unfulfilled_requirements": ["clothing"],
+        "bundle": {
+            "required_category_coverage": {
+                "covered": ["Travel Bag"],
+                "missing": ["Clothing"],
+            },
+        },
     })
     errors: list[dict[str, str]] = []
 

@@ -45,7 +45,8 @@ Rules:
 - When catalog_selection_required is true, choose 1–4 product_ids from the
   supplied verified_catalog_products that best fit the customer request,
   preferences, constraints, and budget. Never return an ID outside that list.
-  Explain the choice using only supplied product facts.
+  Explain the choice using only supplied product facts. Write the exact supplied
+  catalog name for every selected product; do not abbreviate or rename it.
 - Write catalog prices only as "RM <amount>" (for example, "RM 3999.00").
 - When a recommended product price or verified bundle total is above the
   customer's stated budget, state that it is above the target and give the
@@ -107,6 +108,7 @@ class BrandVoiceAgent:
     _NON_SHOPPING_MISSIONS = {"information_request", "greeting", "smalltalk"}
     stock_source = "structured_llm_brand_voice_stock_v1"
     _VOICE_STYLES = ("warm and clear", "direct and helpful", "upbeat and concise", "calm and reassuring")
+    _GENERIC_REQUIREMENT_TERMS = {"item", "items", "option", "options", "product", "products"}
 
     def __init__(
         self,
@@ -205,6 +207,9 @@ class BrandVoiceAgent:
             raise ResponseDraftError("Response model must reference exactly the verified selected products.")
 
         products_by_id = {str(product["id"]): product for product in products}
+        draft = await self._ensure_exact_product_names(
+            draft, payload, state, products_by_id, drafted_ids
+        )
         claims = [self._claim(products_by_id[product_id]) for product_id in drafted_ids]
         return {
             "final_response": draft.response.strip(),
@@ -320,13 +325,11 @@ class BrandVoiceAgent:
                 max_attempts=self.max_format_attempts,
             )
             corrected = await self._draft([
-                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT),
-                HumanMessage(content=(
-                    "The prior draft used the wrong product_ids. Regenerate the entire response from the verified "
-                    "payload. Include each ID in required_response_product_ids exactly once, and mention every "
-                    "corresponding product in the response. Return JSON only.\n\n"
-                    + json.dumps(correction_payload, ensure_ascii=False, default=str)
+                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT + (
+                    "\nRegenerate the prior draft. Include each ID in required_response_product_ids "
+                    "exactly once and use every corresponding exact catalog product name."
                 )),
+                HumanMessage(content=json.dumps(correction_payload, ensure_ascii=False, default=str)),
             ], correction_payload, state)
             corrected_ids = [str(product_id) for product_id in corrected.product_ids]
             if self._has_exact_product_coverage(corrected_ids, expected_ids):
@@ -351,15 +354,48 @@ class BrandVoiceAgent:
         correction_payload = {**payload, "invalid_product_ids": drafted_ids, "allowed_product_ids": sorted(candidate_ids)}
         for _ in range(self.max_format_attempts):
             corrected = await self._draft([
-                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT),
-                HumanMessage(content=(
-                    "Choose one to four IDs only from allowed_product_ids and regenerate the response using the same verified facts. "
-                    "Return JSON only.\n\n" + json.dumps(correction_payload, ensure_ascii=False, default=str)
+                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT + (
+                    "\nChoose one to four IDs only from allowed_product_ids and regenerate the response "
+                    "using the same verified facts and exact catalog product names."
                 )),
+                HumanMessage(content=json.dumps(correction_payload, ensure_ascii=False, default=str)),
             ], correction_payload, state)
             if self._is_valid_catalog_selection([str(product_id) for product_id in corrected.product_ids], candidate_ids):
                 return corrected
         raise ResponseDraftError("Response model could not select valid verified catalog products.")
+
+    async def _ensure_exact_product_names(
+        self,
+        draft: ResponseDraft,
+        payload: dict[str, Any],
+        state: dict[str, Any],
+        products_by_id: dict[str, dict[str, Any]],
+        drafted_ids: list[str],
+    ) -> ResponseDraft:
+        """Make the writer use verified names so deterministic audit agrees."""
+        required_names = [str(products_by_id[product_id]["name"]) for product_id in drafted_ids]
+        if all(name.casefold() in draft.response.casefold() for name in required_names):
+            return draft
+        correction_payload = {
+            **payload,
+            "required_exact_product_names": required_names,
+            "required_response_product_ids": drafted_ids,
+            "previous_draft": draft.model_dump(mode="json"),
+        }
+        for _ in range(self.max_format_attempts):
+            corrected = await self._draft([
+                SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT + (
+                    "\nRegenerate the response and include every string in required_exact_product_names "
+                    "verbatim. Preserve the required IDs and return JSON only."
+                )),
+                HumanMessage(content=json.dumps(correction_payload, ensure_ascii=False, default=str)),
+            ], correction_payload, state)
+            corrected_ids = [str(product_id) for product_id in corrected.product_ids]
+            valid_ids = self._has_exact_product_coverage(corrected_ids, set(drafted_ids))
+            corrected_names = [str(products_by_id[product_id]["name"]) for product_id in corrected_ids if product_id in products_by_id]
+            if valid_ids and all(name.casefold() in corrected.response.casefold() for name in corrected_names):
+                return corrected
+        raise ResponseDraftError("Response model could not preserve exact verified product names.")
 
     @classmethod
     def _voice_guidance(cls, state: dict[str, Any]) -> dict[str, str]:
@@ -478,12 +514,9 @@ class BrandVoiceAgent:
         """Compare typed needs against catalog evidence without exact-label coupling.
 
         Product categories are human labels (often plural) while an intent can
-        express a singular product type or store it in a domain-specific
-        attribute.  Matching normalized terms across the verified identity and
-        relevant structured attributes keeps selection grounded. A small set
-        of product-family equivalents handles catalog labels that describe the
-        physical form rather than the shopper's broader need (for example, a
-        travel backpack is a travel bag).
+        express a singular product type or store it in a structured attribute.
+        Matching normalized terms across verified fields keeps selection
+        grounded without maintaining domain-specific aliases.
         """
         kind = str(requirement.get("kind", ""))
         value = str(requirement.get("value", "")).casefold().strip()
@@ -496,13 +529,6 @@ class BrandVoiceAgent:
             attributes = product.get("attributes", {})
             department = attributes.get("department", "") if isinstance(attributes, dict) else ""
             category_evidence = f"{identity} {department}".casefold()
-            requested_terms = set(BrandVoiceAgent._normalized_terms(value))
-            available_terms = set(BrandVoiceAgent._normalized_terms(category_evidence))
-            identity_terms = set(BrandVoiceAgent._normalized_terms(identity))
-            if {"travel", "bag"}.issubset(requested_terms):
-                return "travel" in identity_terms and bool({"backpack", "luggage"}.intersection(identity_terms))
-            if "toiletry" in requested_terms:
-                return bool({"toiletry", "bottle"}.intersection(available_terms))
             return BrandVoiceAgent._terms_present(value, category_evidence)
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})
@@ -536,6 +562,8 @@ class BrandVoiceAgent:
                 token = f"{token[:-3]}y"
             elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
                 token = token[:-1]
+            if token in BrandVoiceAgent._GENERIC_REQUIREMENT_TERMS:
+                continue
             terms.append(token)
         return terms
 
@@ -548,8 +576,11 @@ class BrandVoiceAgent:
                 "slug": str(product["slug"]),
                 "name": str(product["name"]),
                 "brand": str(product["brand"]),
+                "seller_name": str(product.get("seller_name", "")),
                 "price": str(product["price"]),
                 "currency": str(product["currency"]),
+                "rating_average": str(product.get("rating_average", "")),
+                "review_count": int(product.get("review_count", 0)),
                 "in_stock": int(product["inventory_quantity"]) > 0,
                 "category": str(product["category"]),
                 "specs": product.get("specs", []),

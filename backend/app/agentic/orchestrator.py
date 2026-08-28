@@ -56,7 +56,7 @@ class ShoppingOrchestrator:
         self.planning_agent = PlanningAgent(shared_model)
         self.manager = WorkflowManager()
         self.product_resolver = ProductResolutionAgent(shared_model)
-        self.product_search_agent = ProductSearchAgent(tool_registry)
+        self.product_search_agent = ProductSearchAgent(tool_registry, shared_model)
         self.review_agent = ReviewIntelligenceAgent(shared_model, tool_registry)
         self.compatibility_agent = CompatibilityAgent(shared_model)
         self.bundle_optimizer = BundleOptimizerAgent(shared_model)
@@ -303,11 +303,17 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
-        search_output = await self.product_search_agent.run_catalog(
-            state,
-            limit=self._stock_search_limit() if "check_stock" in actions else settings.agent_catalog_context_limit,
-            include_out_of_stock="check_stock" in actions,
-        )
+        if "check_stock" in actions:
+            search_output = await self.product_search_agent.run_many(
+                state,
+                queries=self._catalog_queries(state),
+                limit=self._stock_search_limit(),
+                include_out_of_stock=True,
+            )
+        else:
+            search_output = await self.product_search_agent.run_catalog(
+                state, limit=settings.agent_catalog_context_limit
+            )
         if search_output["errors"]:
             output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
