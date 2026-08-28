@@ -43,11 +43,13 @@ CAR_CARE_PRODUCTS = [
     ("CAR-018", "Leather Care", "Chemical Guys", "Leather Cleaner & Conditioner Kit", "95.00", "2 × 473 ml", "Coated automotive leather and vinyl", "Paired cleaner and conditioner", "Leather seats and interior trim", "Clean with a soft brush or cloth, wipe dry, then apply conditioner sparingly", "Every 1-3 months", "Test first; not for suede, nubuck or perforated leather without checking label.", "https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=900&q=85", "hot"),
     ("CAR-019", "Car Vacuum", "Baseus", "A2 Pro Cordless Car Vacuum", "159.00", "70 ml bin", "Carpet, seats, mats and crevices", "Cordless compact vacuum; USB-C charging; multi-nozzle", "Interior cleaning", "Select the suitable nozzle and empty bin after use", "Up to 25 minutes per charge", "Keep dry; do not vacuum liquids, hot ash or sharp debris.", "https://images.unsplash.com/photo-1609521263047-f8f205293f24?auto=format&fit=crop&w=900&q=85", "hot"),
     ("CAR-020", "Tire Inflator", "Xiaomi", "Portable Electric Air Compressor 2", "189.00", "2,000 mAh battery", "Car, motorcycle, bicycle and ball valves with supplied adaptors", "Digital PSI display, auto-stop and rechargeable battery", "Emergency tyre inflation", "Set target pressure, attach securely and start; check vehicle placard for correct PSI", "Recharge as required", "Allow the unit to cool after extended use; do not exceed recommended tyre pressure.", "https://images.unsplash.com/photo-1551830820-330a71b99659?auto=format&fit=crop&w=900&q=85", "new"),
+    ("CAR-021", "Wash Mitt", "Chemical Guys", "Chenille Premium Car Wash Mitt", "29.00", "One mitt", "Clear-coated paint, glass and exterior trim", "Soft chenille microfibre traps dirt away from paint", "Scratch-conscious hand washing", "Rinse frequently in a two-bucket wash and air dry after use", "Replace when fibres mat or wear", "Do not use after dropping on the ground; wash separately from dirty towels.", "https://images.unsplash.com/photo-1607860108855-64acf2078ed9?auto=format&fit=crop&w=900&q=85", None),
+    ("CAR-022", "Drying Towels", "The Rag Company", "Gauntlet Microfibre Drying Towel Set", "45.00", "2 towels, 50 × 80 cm", "Clear-coated paint, glass and exterior trim", "High-pile microfibre towels absorb water without harsh rubbing", "Streak-free post-wash drying", "Pat or glide over rinsed panels; wash without fabric softener after use", "Wash after every use", "Keep separate from wheel and engine-bay towels to avoid transferring grit.", "https://images.unsplash.com/photo-1607860108855-64acf2078ed9?auto=format&fit=crop&w=900&q=85", "new"),
 ]
 
-RATINGS = [4.6, 4.5, 4.3, 4.6, 4.5, 4.7, 4.4, 4.1, 4.5, 4.2, 4.5, 4.4, 4.3, 4.2, 4.4, 4.1, 4.3, 4.6, 4.4, 4.7]
-REVIEWS = [324, 271, 142, 298, 205, 179, 187, 116, 132, 243, 219, 164, 355, 126, 279, 188, 153, 196, 141, 237]
-INVENTORY = [83, 64, 51, 57, 43, 29, 48, 72, 31, 96, 68, 45, 89, 53, 102, 77, 59, 36, 25, 41]
+RATINGS = [4.6, 4.5, 4.3, 4.6, 4.5, 4.7, 4.4, 4.1, 4.5, 4.2, 4.5, 4.4, 4.3, 4.2, 4.4, 4.1, 4.3, 4.6, 4.4, 4.7, 4.5, 4.7]
+REVIEWS = [324, 271, 142, 298, 205, 179, 187, 116, 132, 243, 219, 164, 355, 126, 279, 188, 153, 196, 141, 237, 214, 186]
+INVENTORY = [83, 64, 51, 57, 43, 29, 48, 72, 31, 96, 68, 45, 89, 53, 102, 77, 59, 36, 25, 41, 74, 68]
 
 
 def run() -> int:

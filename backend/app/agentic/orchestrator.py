@@ -303,10 +303,9 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
-        search_output = await self.product_search_agent.run_many(
+        search_output = await self.product_search_agent.run_catalog(
             state,
-            queries=self._catalog_queries(state),
-            limit=self._stock_search_limit() if "check_stock" in actions else 8,
+            limit=self._stock_search_limit() if "check_stock" in actions else settings.agent_catalog_context_limit,
             include_out_of_stock="check_stock" in actions,
         )
         if search_output["errors"]:
@@ -356,16 +355,27 @@ class ShoppingOrchestrator:
             if self._should_recommend_products(actions)
             else action_candidates or candidates
         )
+        selection_candidates = (
+            response_candidates
+            if self.brand_voice.is_shopping_mission(state.get("mission_type"))
+            else action_candidates or response_candidates
+        )
         no_eligible_alternative = bool(selection_context.get("no_eligible_alternative"))
         fulfillment_gaps = [] if no_eligible_alternative else self.brand_voice.fulfillment_gaps(response_candidates, state)
         output = {
             **result,
             "candidate_products": candidates,
             "selection_context": selection_context,
+            # Bundle selection is resolved by the bundle optimiser. For a
+            # single-product mission, the response model receives the full
+            # verified candidate set and chooses its own recommendation IDs.
             "selected_products": (
-                self.brand_voice.select_catalog_products({**state, "candidate_products": response_candidates})
-                if self._should_recommend_products(actions) else []
-            ),
+                [] if (
+                    state.get("recommendation_mode", "single") == "single"
+                    and self.brand_voice.is_shopping_mission(state.get("mission_type"))
+                )
+                else self.brand_voice.select_catalog_products({**state, "candidate_products": selection_candidates})
+            ) if self._should_recommend_products(actions) else [],
             "tool_results": [*state["tool_results"], *search_output["tool_results"]],
             "tool_context": tool_context,
             "fulfillment_gaps": fulfillment_gaps,

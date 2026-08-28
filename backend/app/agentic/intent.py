@@ -112,6 +112,9 @@ Available runtime tools (the source of truth for requested_actions):
   - Use **category** for a requested item type. A category value must contain only the normalized product-type phrase: keep quality, price, budget, and preference words in their dedicated fields. Do not use field "category" for an item-type requirement.
   - Use **feature** for a capability such as wireless.
   - Use **attribute** for a named field such as color, size, or material.
+  - A statement about the shopper (for example their age, gender, profession,
+    or experience) is preference/context, not a product attribute requirement,
+    unless they explicitly ask for a product with that attribute.
 * Do not invent requirements."""
 
 

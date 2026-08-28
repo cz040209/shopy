@@ -22,6 +22,9 @@ export const metadata = {
   title: "Shopy | AI Commerce",
   description:
     "A modern AI-commerce storefront with curated products, secure checkout, and intelligent recommendations.",
+  icons: {
+    icon: "/images/brand/shopy-logo.png",
+  },
 };
 
 export default function RootLayout({

@@ -4,6 +4,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from app.config import settings
+
 from .state import ShoppingAgentState
 from .tools import CommerceToolRegistry, ToolExecutionError
 
@@ -52,6 +54,29 @@ class ProductSearchAgent:
             key=lambda product: (-float(rankings.get(str(product["id"]), {}).get("score", 0)), str(product["name"])),
         )
         return {"candidate_products": ordered, "product_rankings": list(rankings.values()), "tool_results": tool_results, "errors": errors}
+
+    async def run_catalog(
+        self, state: ShoppingAgentState, *, limit: int = settings.agent_catalog_context_limit,
+        include_out_of_stock: bool = False,
+    ) -> dict[str, Any]:
+        """Load verified catalog facts before the model chooses recommendations.
+
+        The query intent remains available as ranking context, but it never
+        decides which catalog rows the model is allowed to consider.
+        """
+        if self.tools is None:
+            return {"candidate_products": [], "product_rankings": [], "tool_results": [], "errors": ["Catalog tools are unavailable."]}
+        try:
+            result = await self.tools.execute("search_products", {"limit": limit})
+        except ToolExecutionError as error:
+            return {"candidate_products": [], "product_rankings": [], "tool_results": [], "errors": [str(error)]}
+        ranked = self._rank(result["products"], state, include_out_of_stock=include_out_of_stock)
+        return {
+            "candidate_products": [item["product"] for item in ranked],
+            "product_rankings": [{"product_id": item["product"]["id"], "score": item["score"], "reasons": item["reasons"]} for item in ranked],
+            "tool_results": [{"tool": "search_products", "result_count": len(ranked)}],
+            "errors": [],
+        }
 
     @staticmethod
     def _rank(products: list[dict[str, Any]], state: ShoppingAgentState, *, include_out_of_stock: bool) -> list[dict[str, Any]]:

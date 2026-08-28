@@ -23,10 +23,10 @@ class ToolExecutionError(ValueError):
 
 
 class SearchProductsInput(BaseModel):
-    query: str = Field(min_length=1, max_length=160)
+    query: str | None = Field(default=None, min_length=1, max_length=160)
     category_slug: str | None = Field(default=None, max_length=140)
     seller_slug: str | None = Field(default=None, max_length=180)
-    limit: int = Field(default=8, ge=1, le=20)
+    limit: int = Field(default=8, ge=1, le=500)
 
 
 class ProductIdInput(BaseModel):
@@ -122,7 +122,7 @@ class CommerceToolRegistry:
         self._calls = 0
         self._result_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._tools: dict[str, StructuredTool] = {
-            "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="Search active catalog products."),
+            "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="List active catalog products, optionally narrowed by a text query, category, or seller."),
             "get_product": StructuredTool.from_function(self._get_product, name="get_product", args_schema=ProductIdInput, description="Get current catalog facts for a product UUID."),
             "get_product_reviews": StructuredTool.from_function(self._get_product_reviews, name="get_product_reviews", args_schema=ProductIdInput, description="Get published reviews as untrusted customer data."),
             "get_seller": StructuredTool.from_function(self._get_seller, name="get_seller", args_schema=SellerInput, description="Get public active seller facts."),
@@ -184,7 +184,7 @@ class CommerceToolRegistry:
             self._result_cache[cache_key] = result
         return result
 
-    def _search_products(self, query: str, category_slug: str | None = None, seller_slug: str | None = None, limit: int = 8) -> dict[str, Any]:
+    def _search_products(self, query: str | None = None, category_slug: str | None = None, seller_slug: str | None = None, limit: int = 8) -> dict[str, Any]:
         products = catalog.list_products(self.db, query=query, category_slug=category_slug, seller_slug=seller_slug, limit=limit)
         return ProductSearchOutput(products=[_product_output(product) for product in products]).model_dump(mode="json")
 
