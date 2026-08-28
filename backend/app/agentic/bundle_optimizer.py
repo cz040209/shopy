@@ -9,6 +9,9 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from app.config import settings
+
+from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, _json_object
 from .state import ShoppingAgentState
 
@@ -96,13 +99,20 @@ class BundleOptimizerAgent:
 
     @staticmethod
     def _matches(product: dict[str, Any], category: str) -> bool:
-        # Required categories are semantic slots, not broad search keywords.
-        # Match whole words in product identity fields so a mousepad cannot fill
-        # a mouse slot and a generic gaming product cannot fill a laptop slot.
-        identity = " ".join(map(str, [product.get("name", ""), product.get("category", ""), product.get("brand", "")])).casefold()
-        words = set(re.findall(r"[a-z0-9]+", identity))
-        targets = [token for token in re.findall(r"[a-z0-9]+", category.casefold()) if token not in {"gaming", "or", "and", "primary", "device"}]
-        return bool(targets) and any(target in words for target in targets)
+        # This is only the grounded fallback when semantic model mapping is
+        # unavailable. Require whole role phrases; never maintain product- or
+        # department-specific aliases here.
+        evidence = " ".join(map(str, [
+            product.get("name", ""), product.get("category", ""), product.get("brand", ""),
+            product.get("specs", []), product.get("attributes", {}), product.get("search_terms", []),
+        ])).casefold()
+        words = set(re.findall(r"[a-z0-9]+", evidence))
+        raw_roles = re.split(r"\bor\b", category.casefold())
+        roles = [
+            [token for token in re.findall(r"[a-z0-9]+", role) if token not in {"a", "an", "and", "the"}]
+            for role in raw_roles
+        ]
+        return any(role and set(role).issubset(words) for role in roles)
 
     @staticmethod
     def _price(product: dict[str, Any]) -> Decimal | None:
@@ -122,36 +132,78 @@ class BundleOptimizerAgent:
         is_bundle_mission = state.get("recommendation_mode") == "bundle"
         if not is_bundle_mission:
             return {"bundle": None, "selected_products": state.get("selected_products", [])}
-        products = [product for product in state.get("candidate_products", []) if int(product.get("inventory_quantity", 0)) > 0]
+        excluded = {str(product_id) for product_id in state.get("excluded_product_ids", [])}
+        products = [
+            product for product in state.get("candidate_products", [])
+            if int(product.get("inventory_quantity", 0)) > 0 and str(product.get("id")) not in excluded
+        ]
         incompatible = {product_id for result in state.get("compatibility_results", []) if result.get("status") == "incompatible" for product_id in result.get("affected_product_ids", [])}
         products = [product for product in products if str(product["id"]) not in incompatible]
         plan = await self._plan(products, state)
         planned_matches = {match.need: set(match.product_ids) for match in plan.need_matches}
         budget = Decimal(str(state["budget"])) if state.get("budget") is not None else None
+        budget_limit = recommendation_budget_limit(budget)
         selected: list[dict[str, Any]] = []
         covered: list[str] = []
+        coverage_matches: list[dict[str, str]] = []
         total = Decimal("0")
+        # Search combinations instead of greedily consuming the budget with
+        # the first expensive role. Objective order is: cover the most required
+        # roles, maximize grounded relevance, then prefer higher basket value.
+        beam: list[tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]] = [
+            ([], Decimal("0"), Decimal("0"), [])
+        ]
         for category in state.get("required_categories", []):
             matched_ids = planned_matches.get(str(category))
-            options = [
-                product for product in products
-                if str(product["id"]) not in {str(item["id"]) for item in selected}
-                and (str(product["id"]) in matched_ids if matched_ids is not None else self._matches(product, category))
+            exact_options = [product for product in products if self._matches(product, category)]
+            # Structured catalog evidence takes precedence over a semantic
+            # mapping. The model is used only for genuine taxonomy/synonym
+            # gaps, never to replace a clear product role with another item.
+            options = exact_options or [
+                product for product in products if str(product["id"]) in (matched_ids or set())
             ]
             options.sort(key=lambda item: (-self._score(item, state, plan), str(item["name"])))
-            choice = next((item for item in options if (price := self._price(item)) is not None and (budget is None or total + price <= budget)), None)
-            if choice is not None:
-                selected.append(choice); total += self._price(choice) or Decimal("0"); covered.append(category)
+            options = options[:max(1, settings.agent_bundle_options_per_need)]
+            expanded = list(beam)
+            for current_products, current_total, current_score, assignments in beam:
+                current_ids = {str(item["id"]) for item in current_products}
+                for choice in options:
+                    product_id = str(choice["id"])
+                    price = Decimal("0") if product_id in current_ids else self._price(choice)
+                    if price is None or (budget_limit is not None and current_total + price > budget_limit):
+                        continue
+                    expanded.append((
+                        current_products if product_id in current_ids else [*current_products, choice],
+                        current_total + price,
+                        current_score + self._score(choice, state, plan),
+                        [*assignments, {"requirement": str(category), "product_id": product_id}],
+                    ))
+            deduped: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]] = {}
+            for candidate in expanded:
+                signature = (
+                    tuple(sorted(str(item["id"]) for item in candidate[0])),
+                    tuple(item["requirement"] for item in candidate[3]),
+                )
+                previous = deduped.get(signature)
+                if previous is None or (candidate[2], candidate[1]) > (previous[2], previous[1]):
+                    deduped[signature] = candidate
+            beam = sorted(
+                deduped.values(), key=lambda item: (len(item[3]), item[2], item[1]), reverse=True
+            )[:max(1, settings.agent_bundle_beam_width)]
+        selected, total, _, coverage_matches = max(
+            beam, key=lambda item: (len(item[3]), item[2], item[1])
+        )
+        covered = [item["requirement"] for item in coverage_matches]
         for category in state.get("optional_categories", []):
             options = [product for product in products if str(product["id"]) not in {str(item["id"]) for item in selected} and self._matches(product, category)]
             options.sort(key=lambda item: (-self._score(item, state, plan), str(item["name"])))
-            choice = next((item for item in options if (price := self._price(item)) is not None and (budget is None or total + price <= budget)), None)
+            choice = next((item for item in options if (price := self._price(item)) is not None and (budget_limit is None or total + price <= budget_limit)), None)
             if choice is not None:
                 selected.append(choice); total += self._price(choice) or Decimal("0"); covered.append(category)
         if not selected and products:
             for product in sorted(products, key=lambda item: (-self._score(item, state, plan), str(item["name"]))):
                 price = self._price(product)
-                if price is not None and (budget is None or total + price <= budget):
+                if price is not None and (budget_limit is None or total + price <= budget_limit):
                     selected.append(product); total += price
                     break
         missing = [category for category in state.get("required_categories", []) if category not in covered]
@@ -160,7 +212,7 @@ class BundleOptimizerAgent:
             "total": str(total), "currency": str(selected[0].get("currency", "MYR")) if selected else "MYR",
             "budget_remaining": str(budget - total) if budget is not None else None,
             "product_count": len(selected), "categories_covered": covered,
-            "required_category_coverage": {"covered": covered, "missing": missing},
+            "required_category_coverage": {"covered": covered, "missing": missing, "matches": coverage_matches},
             "rationale": [f"Optimized deterministically for {plan.mode}.", "Excluded out-of-stock and deterministically incompatible products."],
             "trade_offs": ([f"No verified candidate covered: {', '.join(missing)}."] if missing else []),
         }

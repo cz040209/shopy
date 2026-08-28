@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     agent_catalog_batch_size: int = 80
     agent_catalog_batch_shortlist_limit: int = 12
     agent_catalog_shortlist_limit: int = 48
+    agent_catalog_role_matches_per_need: int = 6
+    agent_bundle_options_per_need: int = 12
+    agent_bundle_beam_width: int = 800
     agent_max_repair_attempts: int = 2
     agent_response_format_attempts: int = 2
     # Semantic audit findings can be uncertain when the LLM is interpreting
@@ -43,7 +46,7 @@ class Settings(BaseSettings):
     agent_audit_block_confidence: float = 0.75
     # Near-budget alternatives can be shown when they are explicitly disclosed
     # to the shopper; the customer budget remains the primary target.
-    agent_recommendation_budget_tolerance_percent: float = 20
+    agent_recommendation_budget_tolerance_percent: float = 30
     agent_model_timeout_seconds: float = 30
     agent_tool_timeout_seconds: float = 5
     database_url: str = "postgresql+psycopg://shopy@localhost:5433/shopy"

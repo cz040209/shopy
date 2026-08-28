@@ -151,6 +151,24 @@ class BrandVoiceAgent:
             "over_target_products": over_target_products,
         }
 
+    @staticmethod
+    def _bundle_budget_guidance(state: dict[str, Any]) -> dict[str, Any]:
+        bundle = state.get("bundle")
+        if state.get("budget") is None or not isinstance(bundle, dict):
+            return {"target": None, "total": None, "over_target_by": None}
+        try:
+            target = Decimal(str(state["budget"]))
+            total = Decimal(str(bundle["total"]))
+        except (InvalidOperation, KeyError, ValueError, TypeError):
+            return {"target": None, "total": None, "over_target_by": None}
+        return {
+            "target": str(target),
+            "total": str(total),
+            "over_target_by": str(total - target) if total > target else None,
+            "remaining": str(target - total),
+            "tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+        }
+
     async def compose(self, state: dict[str, Any]) -> dict[str, Any]:
         stock_results = state.get("stock_results", [])
         if stock_results:
@@ -173,6 +191,7 @@ class BrandVoiceAgent:
             "verified_catalog_products": products,
             "catalog_selection_required": catalog_selection_required,
             "budget_guidance": self._budget_guidance(state, products),
+            "bundle_budget_guidance": self._bundle_budget_guidance(state),
             "verified_tool_results": state.get("tool_context", []),
             "verified_review_insights": state.get("review_insights", {}),
             "verified_compatibility": state.get("compatibility_results", []),
@@ -540,6 +559,16 @@ class BrandVoiceAgent:
             if field in {"category", "type", "product_type"}:
                 return BrandVoiceAgent._terms_present(value, f"{attribute_value} {identity}")
             return BrandVoiceAgent._terms_present(value, attribute_value)
+        if kind == "feature":
+            feature_evidence = f"{identity} {facts}"
+            if not BrandVoiceAgent._terms_present(value, feature_evidence):
+                return False
+            # When intent supplies a role in `field` (for example keyboard or
+            # mouse), require the same product to match that role. If `field`
+            # is a real attribute key, its presence in structured facts also
+            # provides grounded role evidence.
+            role_field = "" if field == kind else field
+            return not role_field or BrandVoiceAgent._terms_present(role_field, feature_evidence)
         return value in facts or value in identity
 
     @staticmethod

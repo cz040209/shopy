@@ -119,6 +119,8 @@ class ProductSearchAgent:
                     "constraints": state.get("constraints", []),
                     "budget": state.get("budget"),
                     "fulfillment_requirements": state.get("fulfillment_requirements", []),
+                    "required_product_roles": state.get("required_categories", []),
+                    "bundle_items": state.get("bundle_items", []),
                 },
                 "max_products": per_batch,
                 "catalog_index": [self._compact_product(item["product"]) for item in batch],
@@ -138,10 +140,52 @@ class ProductSearchAgent:
                 if product_id not in chosen_ids:
                     chosen_ids.append(product_id)
 
+        grounded_ids = self._grounded_role_ids(ranked, state)
+        chosen_ids = list(dict.fromkeys([*grounded_ids, *chosen_ids]))
         if not chosen_ids:
             chosen_ids = [str(item["product"]["id"]) for item in ranked[:shortlist_limit]]
         by_id = {str(item["product"]["id"]): item for item in ranked}
         return [by_id[product_id] for product_id in chosen_ids[:shortlist_limit] if product_id in by_id]
+
+    @classmethod
+    def _grounded_role_ids(
+        cls, ranked: list[dict[str, Any]], state: ShoppingAgentState
+    ) -> list[str]:
+        """Guarantee exact structured matches for every dynamic product role."""
+        roles = [str(role).strip() for role in state.get("required_categories", []) if str(role).strip()]
+        roles.extend(
+            str(item.get("query", "")).strip()
+            for item in state.get("bundle_items", [])
+            if isinstance(item, dict) and str(item.get("query", "")).strip()
+        )
+        selected: list[str] = []
+        per_role = max(1, settings.agent_catalog_role_matches_per_need)
+        for role in dict.fromkeys(roles):
+            role_terms = {
+                cls._normalize_token(token)
+                for token in re.findall(r"[\w]+", role.casefold())
+                if len(token) > 1 and token not in cls._GENERIC_QUERY_TERMS
+            }
+            if not role_terms:
+                continue
+            matches = 0
+            for item in ranked:
+                product = item["product"]
+                evidence = " ".join(map(str, [
+                    product.get("name", ""), product.get("brand", ""), product.get("category", ""),
+                    product.get("search_terms", []), product.get("specs", []), product.get("attributes", {}),
+                ])).casefold()
+                evidence_terms = {
+                    cls._normalize_token(token) for token in re.findall(r"[\w]+", evidence)
+                }
+                if role_terms.issubset(evidence_terms):
+                    product_id = str(product["id"])
+                    if product_id not in selected:
+                        selected.append(product_id)
+                    matches += 1
+                    if matches >= per_role:
+                        break
+        return selected
 
     @staticmethod
     def _compact_product(product: dict[str, Any]) -> dict[str, Any]:

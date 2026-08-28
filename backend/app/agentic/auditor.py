@@ -65,6 +65,13 @@ Rules:
   excerpt in every finding.
 - Do not fail subjective advice, tone, or cautious language (for example,
   "I would choose" or "may suit") unless it asserts an unsupported fact.
+- A recommendation being described as a good, suitable, or strong option is
+  subjective advice, not a factual claim, when its supporting product facts are verified.
+- Do not fail an over-target recommendation when verified_arithmetic says it is
+  within_tolerance and the response states the exact over_target_by amount.
+- Do not fail a requirement listed in verified_unfulfilled_requirements when it
+  is also supported by a verified fulfillment gap; transparent partial coverage
+  is safer than inventing a catalog match.
 - Do not approve a claim merely because it sounds plausible. If there is no
   evidence for it, report unsupported_prose_claim.
 - Return pass with an empty findings list when there are no concrete issues.
@@ -145,15 +152,13 @@ class ShoppingAuditor:
         budget = state.get("budget")
         if budget is not None:
             recommendation_mode = state.get("recommendation_mode", "single")
-            budget_amount = (
-                recommendation_budget_limit(budget)
-                if recommendation_mode == "single"
-                else Decimal(str(budget))
-            )
+            budget_amount = recommendation_budget_limit(budget)
             if recommendation_mode == "bundle" and total > budget_amount:
-                errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the mission budget."})
+                errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the permitted budget tolerance."})
             elif recommendation_mode == "single" and any(item_total > budget_amount for item_total in item_totals):
-                errors.append({"code": "budget_exceeded", "message": "A recommended option exceeds the mission budget."})
+                errors.append({"code": "budget_exceeded", "message": "A recommended option exceeds the permitted budget tolerance."})
+        self._validate_bundle_consistency(state, selected_ids, total, errors)
+        self._validate_budget_disclosure(state, total, errors)
         self._validate_response_coverage(state, selected_ids, errors)
         self._validate_fulfillment(state, verified_products, errors)
         self._validate_response_claims(state, verified_products, errors)
@@ -219,22 +224,56 @@ class ShoppingAuditor:
         """Require explicit user requirements to be covered by verified products."""
         bundle = state.get("bundle") if isinstance(state.get("bundle"), dict) else {}
         coverage = bundle.get("required_category_coverage", {}) if isinstance(bundle, dict) else {}
-        covered_bundle_categories = {
-            str(value).casefold().strip()
-            for value in coverage.get("covered", [])
-            if isinstance(value, str) and value.strip()
+        verified_ids = set(verified_products)
+        covered_bundle_roles = {
+            str(match.get("requirement", "")).casefold().strip()
+            for match in coverage.get("matches", [])
+            if isinstance(match, dict)
+            and str(match.get("requirement", "")).strip()
+            and str(match.get("product_id", "")) in verified_ids
         } if isinstance(coverage, dict) else set()
         declared_unfulfilled = {
             str(value).casefold().strip()
             for value in state.get("unfulfilled_requirements", [])
             if isinstance(value, str) and value.strip()
         }
+        bundle_missing_roles = {
+            str(value).casefold().strip()
+            for value in coverage.get("missing", [])
+            if isinstance(value, str) and value.strip()
+        } if isinstance(coverage, dict) else set()
         allowed_unfulfilled = {
             str(requirement.get("value", "")).casefold().strip()
             for requirement in state.get("fulfillment_requirements", [])
             if isinstance(requirement, dict)
             and any(str(requirement.get("value", "")).casefold().strip() in str(gap).casefold() for gap in state.get("fulfillment_gaps", []))
         }
+        allowed_unfulfilled.update(bundle_missing_roles)
+
+        def role_matches_requirement(role: str, requirement_value: str) -> bool:
+            return (
+                BrandVoiceAgent._terms_present(requirement_value, role)
+                or BrandVoiceAgent._terms_present(role, requirement_value)
+            )
+
+        def missing_from_bundle(requirement_value: str) -> bool:
+            return any(role_matches_requirement(role, requirement_value) for role in bundle_missing_roles)
+
+        def covered_by_current_bundle(requirement_value: str) -> bool:
+            return any(role_matches_requirement(role, requirement_value) for role in covered_bundle_roles)
+
+        def declared_for_requirement(requirement_value: str) -> bool:
+            return any(
+                role_matches_requirement(declared, requirement_value)
+                for declared in declared_unfulfilled
+            )
+
+        allowed_unfulfilled.update(
+            str(requirement.get("value", "")).casefold().strip()
+            for requirement in state.get("fulfillment_requirements", [])
+            if isinstance(requirement, dict)
+            and missing_from_bundle(str(requirement.get("value", "")).casefold().strip())
+        )
         if not declared_unfulfilled.issubset(allowed_unfulfilled):
             errors.append({
                 "code": "invalid_unfulfilled_requirement",
@@ -255,11 +294,13 @@ class ShoppingAuditor:
             value = str(requirement.get("value", "")).casefold().strip()
             if value not in declared_unfulfilled:
                 continue
+            if missing_from_bundle(value):
+                continue
             for candidate in state.get("candidate_products", []):
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    budget_limit = recommendation_budget_limit(budget) if state.get("recommendation_mode", "single") == "single" else (Decimal(str(budget)) if budget is not None else None)
+                    budget_limit = recommendation_budget_limit(budget)
                     within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False
@@ -281,14 +322,14 @@ class ShoppingAuditor:
             # then budget/stock checked deterministically by the optimizer.
             # Preserve that verified semantic mapping instead of reinterpreting
             # it later with stricter token equality.
-            if kind == "category" and quantity == 1 and value in covered_bundle_categories:
+            if kind == "category" and quantity == 1 and covered_by_current_bundle(value):
                 continue
             eligible_candidates = []
             for candidate in state.get("candidate_products", []):
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    budget_limit = recommendation_budget_limit(budget) if state.get("recommendation_mode", "single") == "single" else (Decimal(str(budget)) if budget is not None else None)
+                    budget_limit = recommendation_budget_limit(budget)
                     within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False
@@ -297,7 +338,12 @@ class ShoppingAuditor:
             matches = 0
             for product in verified_products.values():
                 matches += int(BrandVoiceAgent._matches_requirement(product, requirement))
-            if len(eligible_candidates) >= quantity and matches < quantity:
+            acknowledged_bundle_gap = (
+                missing_from_bundle(value)
+                and declared_for_requirement(value)
+                and declared_unfulfilled.issubset(allowed_unfulfilled)
+            )
+            if len(eligible_candidates) >= quantity and matches < quantity and not acknowledged_bundle_gap:
                 errors.append({
                     "code": "catalog_match_not_selected",
                     "message": "Verified catalog matches were retrieved but not carried into the customer response.",
@@ -315,7 +361,9 @@ class ShoppingAuditor:
                 # A bundle may be partly fulfilled.  A verified item for one
                 # requirement must not prevent the writer from explicitly
                 # disclosing another requirement that has no catalog match.
-                if not eligible_candidates and value in declared_unfulfilled and value in allowed_unfulfilled:
+                if acknowledged_bundle_gap or (
+                    value in declared_unfulfilled and value in allowed_unfulfilled and not eligible_candidates
+                ):
                     continue
                 errors.append({
                     "code": "fulfillment_requirement_unmet",
@@ -326,6 +374,79 @@ class ShoppingAuditor:
         # become hard failures only when represented by an explicit typed user
         # requirement above; a broad search query alone is not reliable enough
         # to claim that no matching product exists.
+
+    @staticmethod
+    def _validate_bundle_consistency(
+        state: dict[str, Any], selected_ids: list[str], verified_total: Decimal,
+        errors: list[dict[str, str]],
+    ) -> None:
+        """Reject stale bundle metadata after selections are repaired."""
+        if state.get("recommendation_mode") != "bundle":
+            return
+        bundle = state.get("bundle")
+        if not isinstance(bundle, dict):
+            errors.append({
+                "code": "missing_bundle_state",
+                "message": "A bundle response has no verified bundle state.",
+            })
+            return
+        bundle_ids = [
+            str(item.get("product_id"))
+            for item in bundle.get("selected_products", [])
+            if isinstance(item, dict) and item.get("product_id")
+        ]
+        if len(bundle_ids) != len(set(bundle_ids)) or set(bundle_ids) != set(selected_ids):
+            errors.append({
+                "code": "stale_bundle_selection",
+                "message": "Bundle coverage does not describe the current selected products.",
+            })
+        try:
+            bundle_total = Decimal(str(bundle.get("total")))
+        except Exception:
+            bundle_total = None
+        if bundle_total is None or bundle_total != verified_total:
+            errors.append({
+                "code": "stale_bundle_total",
+                "message": "The stored bundle total does not match current verified selections.",
+            })
+
+    @classmethod
+    def _validate_budget_disclosure(
+        cls, state: dict[str, Any], verified_total: Decimal,
+        errors: list[dict[str, str]],
+    ) -> None:
+        """Allow the configured tolerance only with an explicit exact warning."""
+        if state.get("recommendation_mode") != "bundle" or state.get("budget") is None:
+            return
+        try:
+            target = Decimal(str(state["budget"])).quantize(Decimal("0.01"))
+            total = verified_total.quantize(Decimal("0.01"))
+        except Exception:
+            return
+        if total <= target:
+            return
+        response = str(state.get("final_response", ""))
+        amounts = {
+            Decimal(value.replace(",", "")).quantize(Decimal("0.01"))
+            for value in cls._money_pattern.findall(response)
+        }
+        if total - target not in amounts:
+            errors.append({
+                "code": "missing_over_budget_disclosure",
+                "message": "An over-target bundle must state the exact amount above the customer's budget.",
+            })
+        total_mentions = [
+            sentence for sentence in re.split(r"(?<=[.!?])\s+", response)
+            if any(
+                Decimal(value.replace(",", "")).quantize(Decimal("0.01")) == total
+                for value in cls._money_pattern.findall(sentence)
+            )
+        ]
+        if any(re.search(r"\b(?:within|under)\s+(?:the\s+|your\s+)?budget\b", sentence, re.IGNORECASE) for sentence in total_mentions):
+            errors.append({
+                "code": "incorrect_budget_disclosure",
+                "message": "An over-target bundle must not be described as within or under budget.",
+            })
 
     @staticmethod
     def _validate_response_coverage(state: dict[str, Any], selected_ids: list[str], errors: list[dict[str, str]]) -> None:
@@ -354,9 +475,16 @@ class ShoppingAuditor:
         if self.model is None or not isinstance(state.get("final_response"), str):
             return None
         budget_remaining = None
+        permitted_max = None
+        over_target_by = None
+        within_tolerance = None
         if verified_total is not None and state.get("budget") is not None:
             try:
-                budget_remaining = str(Decimal(str(state["budget"])) - verified_total)
+                target = Decimal(str(state["budget"]))
+                budget_remaining = str(target - verified_total)
+                permitted_max = recommendation_budget_limit(target)
+                over_target_by = str(verified_total - target) if verified_total > target else None
+                within_tolerance = permitted_max is not None and verified_total <= permitted_max
             except Exception:
                 pass
         evidence = {
@@ -367,13 +495,19 @@ class ShoppingAuditor:
             },
             "verified_products": list(verified_products.values()),
             "verified_tool_results": state.get("tool_context", []),
+            "verified_catalog_search": state.get("tool_results", []),
+            "verified_bundle": state.get("bundle"),
             "response_claims": state.get("response_claims", []),
             "fulfillment_requirements": state.get("fulfillment_requirements", []),
             "fulfillment_gaps": state.get("fulfillment_gaps", []),
+            "verified_unfulfilled_requirements": state.get("unfulfilled_requirements", []),
             "vision_context": state.get("vision_context"),
             "verified_arithmetic": {
                 "selected_total": str(verified_total) if verified_total is not None else None,
                 "budget_remaining": budget_remaining,
+                "permitted_max": str(permitted_max) if permitted_max is not None else None,
+                "over_target_by": over_target_by,
+                "within_tolerance": within_tolerance,
             },
         }
         try:
@@ -482,7 +616,9 @@ class ShoppingAuditor:
                 )
                 expected_amounts.add(bundle_total)
                 if budget is not None:
-                    expected_amounts.add((Decimal(str(budget)).quantize(Decimal("0.01")) - bundle_total).quantize(Decimal("0.01")))
+                    target = Decimal(str(budget)).quantize(Decimal("0.01"))
+                    expected_amounts.add((target - bundle_total).quantize(Decimal("0.01")))
+                    expected_amounts.add((bundle_total - target).quantize(Decimal("0.01")))
             except Exception:
                 errors.append({"code": "invalid_bundle_arithmetic", "message": "The bundle arithmetic could not be verified."})
         for item in state.get("tool_context", []):

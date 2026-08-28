@@ -1,5 +1,6 @@
 import pytest
 import json
+from decimal import Decimal
 
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
@@ -89,10 +90,13 @@ def test_intent_prompt_uses_the_runtime_tool_registry():
 
 
 @pytest.mark.anyio
-async def test_invalid_intent_model_output_is_rejected():
+async def test_invalid_intent_model_output_uses_a_safe_fallback():
     agent = IntentMissionAgent(FakeChatModel("not JSON"))
-    with pytest.raises(StructuredOutputError, match="invalid JSON"):
-        await agent.interpret("Build a setup")
+    result = await agent.interpret("Build a setup")
+
+    assert result.mission_type == "information_request"
+    assert result.goal == "Build a setup"
+    assert result.requested_actions == []
 
 
 @pytest.mark.anyio
@@ -206,6 +210,62 @@ def test_catalog_selection_does_not_invent_product_family_aliases():
     ]
 
 
+def test_feature_requirement_requires_value_and_product_role():
+    mouse = {
+        "name": "Glide Wireless Mouse", "brand": "Glide", "category": "Mice",
+        "specs": [], "attributes": {"connectivity": "wireless"},
+    }
+
+    assert BrandVoiceAgent._matches_requirement(
+        mouse, {"kind": "feature", "field": "mouse", "value": "wireless"}
+    )
+    assert not BrandVoiceAgent._matches_requirement(
+        mouse, {"kind": "feature", "field": "keyboard", "value": "wireless"}
+    )
+
+
+def test_auditor_rejects_bundle_metadata_for_a_previous_selection():
+    errors: list[dict[str, str]] = []
+    state = {
+        "recommendation_mode": "bundle",
+        "bundle": {
+            "selected_products": [{"product_id": "old-product", "quantity": 1}],
+            "total": "100",
+        },
+    }
+
+    ShoppingAuditor._validate_bundle_consistency(state, ["new-product"], Decimal("120"), errors)
+
+    assert {error["code"] for error in errors} == {"stale_bundle_selection", "stale_bundle_total"}
+
+
+def test_auditor_accepts_a_transparent_bundle_gap_with_a_more_specific_role_name():
+    headphone = {
+        "id": "headphones", "name": "Quiet Headphones", "brand": "Test",
+        "category": "Headphones", "price": "500", "inventory_quantity": 1,
+        "specs": [{"label": "Feature", "value": "Noise cancelling"}], "attributes": {},
+    }
+    state = initial_shopping_state("Build a setup")
+    state.update({
+        "recommendation_mode": "bundle",
+        "budget": 1000,
+        "candidate_products": [headphone],
+        "fulfillment_requirements": [
+            {"kind": "feature", "field": "feature", "value": "noise cancelling", "quantity": 1},
+        ],
+        "fulfillment_gaps": ["No verified candidate covered: noise cancelling headphones"],
+        "unfulfilled_requirements": ["noise cancelling headphones"],
+        "bundle": {"required_category_coverage": {
+            "covered": [], "missing": ["noise cancelling headphones"], "matches": [],
+        }},
+    })
+    errors: list[dict[str, str]] = []
+
+    ShoppingAuditor._validate_fulfillment(state, {}, errors)
+
+    assert errors == []
+
+
 def test_single_recommendation_mode_returns_two_comparable_choices_when_available():
     state = initial_shopping_state("Recommend a dining chair")
     state.update({
@@ -250,8 +310,8 @@ def test_single_recommendation_allows_a_configured_near_budget_option_but_not_a_
         "budget": 5_000,
         "fulfillment_requirements": [{"kind": "category", "value": "phone", "field": None, "quantity": 1}],
         "candidate_products": [
-            {"id": "near-budget", "name": "Near Budget Phone", "category": "Phones", "price": "6000", "inventory_quantity": 4, "specs": [], "attributes": {}},
-            {"id": "too-far", "name": "Too Far Phone", "category": "Phones", "price": "6000.01", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "near-budget", "name": "Near Budget Phone", "category": "Phones", "price": "6500", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "too-far", "name": "Too Far Phone", "category": "Phones", "price": "6500.01", "inventory_quantity": 4, "specs": [], "attributes": {}},
         ],
     })
 
@@ -294,10 +354,11 @@ def test_auditor_allows_a_declared_gap_in_a_partially_fulfilled_bundle():
         "fulfillment_gaps": ["No verified catalog match for: Clothing"],
         "unfulfilled_requirements": ["clothing"],
         "bundle": {
-            "required_category_coverage": {
-                "covered": ["Travel Bag"],
-                "missing": ["Clothing"],
-            },
+                "required_category_coverage": {
+                    "covered": ["Travel Bag"],
+                    "missing": ["Clothing"],
+                    "matches": [{"requirement": "Travel Bag", "product_id": "pack"}],
+                },
         },
     })
     errors: list[dict[str, str]] = []

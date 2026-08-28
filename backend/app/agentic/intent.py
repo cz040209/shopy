@@ -8,8 +8,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import ValidationError
 
 from app.config import settings
+from app.ai_logging import log_ai_event
 
-from .schemas import MissionInterpretation
+from .schemas import BundleItemPlan, FulfillmentRequirement, MissionInterpretation
 
 
 class StructuredOutputError(ValueError):
@@ -160,6 +161,7 @@ class IntentMissionAgent:
             {"customer_request": user_request, "runtime_context": runtime_context}, ensure_ascii=False
         )
         last_error: StructuredOutputError | None = None
+        last_data: dict[str, object] = {}
         for attempt in range(max(1, settings.agent_response_format_attempts)):
             correction = "" if attempt == 0 else (
                 "\nYour previous answer was invalid. Return one JSON object that exactly follows "
@@ -170,7 +172,8 @@ class IntentMissionAgent:
                 HumanMessage(content=request_payload),
             ])
             try:
-                mission = MissionInterpretation.model_validate(_json_object(response.content))
+                last_data = _json_object(response.content)
+                mission = MissionInterpretation.model_validate(last_data)
                 unknown_actions = set(mission.requested_actions) - self.tool_names
                 if unknown_actions:
                     raise StructuredOutputError("Intent model requested a tool that is not available.")
@@ -181,4 +184,53 @@ class IntentMissionAgent:
             except StructuredOutputError as error:
                 last_error = error
         assert last_error is not None
-        raise last_error
+        # A provider-formatting failure must not make the storefront unavailable.
+        # Salvage only schema-validated fields and otherwise use the customer's
+        # text as a broad, read-only catalog query. Product selection and every
+        # claim remain constrained by verified tools and the final auditor.
+        fallback = self._fallback_mission(user_request, last_data)
+        log_ai_event(
+            "agent.intent.fallback",
+            request_id="intent-fallback",
+            error_type=type(last_error).__name__,
+            requires_catalog=fallback.requires_catalog,
+        )
+        return fallback
+
+    def _fallback_mission(
+        self, user_request: str, partial: dict[str, object]
+    ) -> MissionInterpretation:
+        can_search = "search_products" in self.tool_names
+        goal_value = partial.get("goal")
+        goal = str(goal_value).strip()[:300] if isinstance(goal_value, str) and goal_value.strip() else user_request.strip()[:300]
+        budget_value = partial.get("budget")
+        budget = float(budget_value) if isinstance(budget_value, (int, float)) and budget_value >= 0 else None
+        bundle_items: list[BundleItemPlan] = []
+        for item in partial.get("bundle_items", []) if isinstance(partial.get("bundle_items"), list) else []:
+            try:
+                bundle_items.append(BundleItemPlan.model_validate(item))
+            except (ValidationError, TypeError, ValueError):
+                continue
+        requirements: list[FulfillmentRequirement] = []
+        raw_requirements = partial.get("fulfillment_requirements", [])
+        for item in raw_requirements if isinstance(raw_requirements, list) else []:
+            try:
+                requirements.append(FulfillmentRequirement.model_validate(item))
+            except (ValidationError, TypeError, ValueError):
+                continue
+        raw_mode = partial.get("recommendation_mode")
+        recommendation_mode = raw_mode if raw_mode in {"single", "bundle"} else ("bundle" if len(bundle_items) > 1 else "single")
+        catalog_query = user_request.strip()[:160] if can_search else None
+        return MissionInterpretation(
+            mission_type="product_search" if can_search else "information_request",
+            recommendation_mode=recommendation_mode,
+            goal=goal,
+            requires_planning=bool(partial.get("requires_planning", False)),
+            requires_catalog=can_search,
+            catalog_query=catalog_query,
+            catalog_queries=[catalog_query] if catalog_query else [],
+            requested_actions=["search_products"] if can_search else [],
+            budget=budget,
+            bundle_items=bundle_items[:20],
+            fulfillment_requirements=requirements[:30],
+        )

@@ -769,14 +769,36 @@ class ShoppingOrchestrator:
             isinstance(item, dict) and item.get("code") == "catalog_match_not_selected"
             for item in audit_errors
         )
-        if (excluded or selection_was_lost) and self._should_recommend_products(self._requested_actions(state)):
+        bundle_repair_codes = {
+            "catalog_match_not_selected", "fulfillment_requirement_unmet",
+            "missing_requirement_coverage", "requirement_not_met",
+            "stale_bundle_selection", "stale_bundle_total", "missing_bundle_state",
+            "product_not_found", "insufficient_stock",
+        }
+        bundle_needs_rebuild = (
+            state.get("recommendation_mode") == "bundle"
+            and any(
+                isinstance(item, dict) and item.get("code") in bundle_repair_codes
+                for item in audit_errors
+            )
+        )
+        rebuilt_bundle: dict[str, Any] = {}
+        repair_state = {
+            **state,
+            "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
+        }
+        if bundle_needs_rebuild:
+            rebuilt_bundle = await self.bundle_optimizer.run(repair_state)
+            selected = list(rebuilt_bundle.get("selected_products", []))
+        elif (excluded or selection_was_lost) and self._should_recommend_products(self._requested_actions(state)):
             selected = self.brand_voice.select_catalog_products({
-                **state, "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
+                **repair_state,
             })
         # Preserve verified selections and give the response writer exact repair
         # feedback. This avoids replacing a useful answer with an empty one.
         output = {
             **self._event(state, "repair"),
+            **rebuilt_bundle,
             "repair_count": attempt,
             "selected_products": selected,
             "excluded_product_ids": [*state.get("excluded_product_ids", []), *sorted(excluded)],

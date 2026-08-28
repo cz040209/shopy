@@ -137,12 +137,19 @@ class PlanningAgent:
             # LLM planner. This keeps room, outfit, setup, and future domains
             # dynamic while ensuring the selected kit reflects the plan rather
             # than the original broad wording.
+            mission_bundle_needs = [
+                str(item.get("query", "")).strip()
+                for item in state.get("bundle_items", [])
+                if isinstance(item, dict) and str(item.get("query", "")).strip()
+            ]
             requirement_needs = [
                 item.value.strip()
                 for item in plan.fulfillment_requirements
                 if item.kind.casefold().strip() == "category" and item.value.strip()
             ]
             output["required_categories"] = list(dict.fromkeys(
-                requirement_needs or [query.strip() for query in plan.catalog_queries if query.strip()]
+                mission_bundle_needs
+                if state.get("recommendation_mode") == "bundle" and mission_bundle_needs
+                else requirement_needs or [query.strip() for query in plan.catalog_queries if query.strip()]
             ))
         return output

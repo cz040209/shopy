@@ -100,6 +100,28 @@ async def test_catalog_shortlisting_considers_products_beyond_first_batch():
 
 
 @pytest.mark.anyio
+async def test_catalog_shortlist_preserves_exact_matches_for_each_planned_role():
+    model = CatalogBatchModel()
+    agent = ProductSearchAgent(None, model)
+    products = [
+        {
+            "id": f"generic-{index}", "name": f"Generic {index}", "brand": "Test",
+            "category": "General", "price": "10", "inventory_quantity": 1,
+            "rating_average": "0", "review_count": 0, "specs": [], "attributes": {},
+        }
+        for index in range(90)
+    ]
+    products[-1].update({"id": "mouse", "name": "Glide Wireless Mouse", "category": "Mice"})
+    ranked = [{"product": product, "score": 20, "reasons": ["in stock"]} for product in products]
+    state = initial_shopping_state("Build a setup")
+    state["required_categories"] = ["wireless mouse"]
+
+    result = await agent._shortlist_catalog(ranked, state)
+
+    assert "mouse" in [item["product"]["id"] for item in result]
+
+
+@pytest.mark.anyio
 async def test_review_intelligence_is_mission_aware_and_treats_text_as_data(db_session):
     product = add_product(db_session, sku="ADV-004", name="Meeting Headset", price="150", inventory=4)
     user = User(email="review-agent@example.com", full_name="Reviewer")
@@ -179,10 +201,10 @@ async def test_bundle_optimizer_enforces_budget_and_reports_coverage():
         "product_rankings": [{"product_id": "laptop", "score": 90}, {"product_id": "keyboard", "score": 60}, {"product_id": "mouse", "score": 50}],
     })
     result = await BundleOptimizerAgent().run(state)
-    assert result["bundle"]["total"] == "2900"
-    assert result["bundle"]["budget_remaining"] == "100"
+    assert result["bundle"]["total"] == "3100"
+    assert result["bundle"]["budget_remaining"] == "-100"
     assert result["bundle"]["required_category_coverage"]["missing"] == []
-    assert {item["id"] for item in result["selected_products"]} == {"laptop", "keyboard"}
+    assert {item["id"] for item in result["selected_products"]} == {"laptop", "keyboard", "mouse"}
 
 
 @pytest.mark.anyio
@@ -202,3 +224,26 @@ async def test_bundle_optimizer_does_not_use_mousepad_as_mouse_or_gaming_product
     assert result["bundle"]["required_category_coverage"]["covered"] == ["mouse"]
     assert result["bundle"]["required_category_coverage"]["missing"] == ["gaming laptop or desktop"]
     assert result["bundle"]["selected_products"] == [{"product_id": "mouse", "quantity": 1}]
+
+
+@pytest.mark.anyio
+async def test_exact_catalog_role_overrides_an_incorrect_semantic_mapping():
+    class WrongMappingModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "best_value", "rankings": [],
+                "need_matches": [{"need": "monitor arm", "product_ids": ["desk"]}],
+            }))
+
+    state = initial_shopping_state("Add a monitor arm")
+    state.update({
+        "recommendation_mode": "bundle", "required_categories": ["monitor arm"],
+        "candidate_products": [
+            {"id": "desk", "name": "Studio Work Desk", "brand": "Test", "category": "Desks", "price": "700", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "arm", "name": "Arc Monitor Arm", "brand": "Test", "category": "Monitor Arms", "price": "200", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+        ],
+    })
+
+    result = await BundleOptimizerAgent(WrongMappingModel()).run(state)
+
+    assert result["selected_products"] == [{"id": "arm", "quantity": 1}]

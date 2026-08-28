@@ -39,3 +39,20 @@ async def test_catalog_bound_planning_retries_for_llm_derived_retrieval_needs():
     assert result["requires_catalog"] is True
     assert result["required_categories"] == ["room seating", "room lighting"]
     assert result["catalog_queries"] == ["room seating", "room lighting"]
+
+
+@pytest.mark.anyio
+async def test_bundle_planning_preserves_every_intent_product_role():
+    model = RoomPlanningModel()
+    state = initial_shopping_state("Build a complete setup")
+    roles = ["office chair", "standing desk", "monitor", "wireless keyboard", "wireless mouse", "desk lamp"]
+    state.update({
+        "requires_catalog": True,
+        "recommendation_mode": "bundle",
+        "bundle_items": [{"query": role, "quantity": 1} for role in roles],
+        "mission": {"goal": "Build a complete setup"},
+    })
+
+    result = await PlanningAgent(model, max_format_attempts=2).run(state)
+
+    assert result["required_categories"] == roles
