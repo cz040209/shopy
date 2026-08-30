@@ -354,7 +354,7 @@ function CheckoutContent() {
         <div className="space-y-6">
           <div className={`${styles.detailCard} ${styles.deliveryCard}`}>
             <div className={styles.sectionHeading}>
-              <MapPin className="text-cyan-400" size={21} />
+              <MapPin className="text-indigo-400" size={21} />
               <div><span>01 · DELIVERY</span><h2>Where should we send it?</h2><p>Your saved details are ready. Make a quick edit if needed.</p></div>
             </div>
             <div className={styles.deliveryFields}>
@@ -379,7 +379,7 @@ function CheckoutContent() {
 
           <div className={`${styles.detailCard} ${styles.walletCard}`}>
             <div className={styles.sectionHeading}>
-              <WalletCards className="text-cyan-400" size={21} />
+              <WalletCards className="text-indigo-400" size={21} />
               <div><span>02 · PAYMENT</span><h2>Pay with ShopyPay</h2><p>Use your available wallet balance. No card details needed.</p></div>
             </div>
             <div className={styles.walletBalance}>

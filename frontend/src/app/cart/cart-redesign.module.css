@@ -3,9 +3,9 @@
 .productThumb { display:flex; width:104px; height:104px; align-items:center; justify-content:center; overflow:hidden; border:1px solid rgba(169,188,226,.24); border-radius:16px; background:linear-gradient(145deg,#f8fafc,#e3eaf4); }
 .productThumb img { width:100%; height:100%; object-fit:contain; padding:11px; }
 .itemInfo { display:grid; min-width:0; align-content:center; gap:7px; }
-.itemInfo > p:first-child { overflow:hidden; color:#83e0eb; font-size:10px; font-weight:800; letter-spacing:.13em; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
+.itemInfo > p:first-child { overflow:hidden; color:#9ca8ff; font-size:10px; font-weight:800; letter-spacing:.13em; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
 .itemInfo > a { color:#f7f9ff; font-family:var(--font-display),sans-serif; font-size:22px; font-weight:720; letter-spacing:-.03em; line-height:1.15; }
-.itemInfo > a:hover { color:#81e8ef; }
+.itemInfo > a:hover { color:#aab4ff; }
 .itemDescription { display:-webkit-box; max-width:620px; overflow:hidden; color:#aab7cc; font-size:13px; line-height:1.55; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .unitPrice { color:#7789a8; font-size:11px; }
 .itemControls { display:grid; justify-items:end; gap:18px; align-self:center; }

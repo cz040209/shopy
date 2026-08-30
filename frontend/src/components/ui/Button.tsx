@@ -18,7 +18,7 @@ export default function Button({
     "relative inline-flex items-center justify-center gap-2 overflow-hidden",
     "font-semibold tracking-[0.08em] uppercase text-[0.72rem]",
     "rounded-lg transition-all duration-300",
-    "focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50",
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50",
     "disabled:opacity-40 disabled:cursor-not-allowed",
     "before:absolute before:inset-0 before:origin-center before:scale-0 before:rounded-full",
     "before:bg-white/10 before:transition-transform before:duration-500",
@@ -34,15 +34,15 @@ export default function Button({
 
   const variants: Record<string, string> = {
     primary:
-      "bg-white text-black hover:bg-cyan-400 hover:shadow-[0_0_24px_rgba(0,212,255,0.35)]",
+      "bg-white text-black hover:bg-indigo-500 hover:shadow-[0_0_24px_rgba(99,102,241,0.35)]",
     outline:
-      "bg-transparent text-white hover:text-cyan-400 hover:shadow-[0_0_16px_rgba(0,212,255,0.15)]",
+      "bg-transparent text-white hover:text-indigo-400 hover:shadow-[0_0_16px_rgba(99,102,241,0.15)]",
     ghost:
-      "bg-transparent text-[#8892a4] border-transparent hover:text-cyan-400",
+      "bg-transparent text-[#8892a4] border-transparent hover:text-indigo-400",
     danger:
       "bg-transparent text-red-400 border-red-400/30 hover:bg-red-500/10 hover:border-red-400",
     cyan:
-      "bg-cyan-400/10 text-cyan-400 hover:bg-cyan-400/20",
+      "bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20",
   };
 
   return (

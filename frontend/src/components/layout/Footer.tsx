@@ -84,7 +84,7 @@ export default function Footer() {
               <a
                 key={s}
                 href="#"
-                className="transition-colors duration-200 hover:text-cyan-300"
+                className="transition-colors duration-200 hover:text-indigo-300"
               >
                 {s}
               </a>

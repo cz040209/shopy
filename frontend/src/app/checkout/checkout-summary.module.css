@@ -78,7 +78,7 @@
 }
 
 .itemLabel span:last-child {
-  color: #75dfea;
+  color: #9ca8ff;
   letter-spacing: 0.04em;
   text-transform: none;
 }
@@ -109,7 +109,7 @@
 .itemImage span { font-size: 24px; }
 
 .itemCopy { display: grid; min-width: 0; gap: 3px; }
-.itemCopy > span { overflow: hidden; color: #85dfe9; font-size: 10px; font-weight: 780; letter-spacing: 0.08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.itemCopy > span { overflow: hidden; color: #9ca8ff; font-size: 10px; font-weight: 780; letter-spacing: 0.08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .itemCopy strong { overflow: hidden; color: #f8fbff; font-size: 15px; font-weight: 740; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .itemCopy small { color: #91a2bc; font-size: 11px; line-height: 1.35; }
 

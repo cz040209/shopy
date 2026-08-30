@@ -136,8 +136,8 @@ export default function Navbar() {
       "inline-flex items-center justify-center rounded-full px-5 py-2.5 text-[0.8rem] font-semibold uppercase tracking-[0.12em]",
       "transition-all duration-300 ease-out", // Apply transition-all for transform and colors
       active
-        ? "bg-cyan-400/10 text-cyan-400"
-        : "bg-white/10 text-white hover:bg-white/15 hover:text-cyan-400",
+        ? "bg-indigo-500/10 text-indigo-400"
+        : "bg-white/10 text-white hover:bg-white/15 hover:text-indigo-400",
       // Add hover effects for transform (translate/scale)
       "hover:-translate-y-0.5 hover:scale-[1.03]",
     ].join(" ");
@@ -146,7 +146,7 @@ export default function Navbar() {
     [
       "inline-flex items-center gap-2 rounded-full px-4 py-2 text-[0.8rem] font-semibold uppercase tracking-[0.12em] no-underline",
       "transition-all duration-300 ease-out", // Apply transition-all for transform and colors
-      "bg-white/10 text-white hover:bg-white/15 hover:text-cyan-400",
+      "bg-white/10 text-white hover:bg-white/15 hover:text-indigo-400",
       // Add hover effects for transform (translate/scale)
       "hover:-translate-y-0.5 hover:scale-[1.03]",
     ].join(" ");
@@ -155,7 +155,7 @@ export default function Navbar() {
     [
       "rounded-xl px-3 py-2 text-left text-[0.72rem] font-semibold uppercase tracking-[0.12em]",
       "transition-colors duration-200 ease-out", // For color transitions
-      isButton ? "text-red-400 hover:bg-white/10 hover:text-red-300" : "text-[#dfe5f0] hover:bg-white/10 hover:text-cyan-400"
+      isButton ? "text-red-400 hover:bg-white/10 hover:text-red-300" : "text-[#dfe5f0] hover:bg-white/10 hover:text-indigo-400"
     ].join(" ");
 
   const topLinks = isLoggedIn ? MEMBER_TOP_LINKS : PUBLIC_TOP_LINKS;
@@ -209,12 +209,12 @@ export default function Navbar() {
             <div className="ml-auto flex flex-wrap items-center gap-3 sm:gap-5">
               <Link
                 href={isLoggedIn ? "/cart" : "/login?next=%2Fcart"}
-                className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-white transition duration-200 hover:-translate-y-0.5 hover:border-cyan-300/40 hover:bg-white/10 hover:text-cyan-300"
+                className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-white transition duration-200 hover:-translate-y-0.5 hover:border-indigo-300/40 hover:bg-white/10 hover:text-indigo-300"
                 aria-label="Cart"
               >
                 <ShoppingBag size={21} strokeWidth={2.1} />
                 {cartCount > 0 && (
-                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan-400 px-1 text-[0.68rem] font-extrabold leading-none text-[#000000] shadow-[0_0_12px_rgba(0,212,255,0.35)]">
+                  <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-500 px-1 text-[0.68rem] font-extrabold leading-none text-[#000000] shadow-[0_0_12px_rgba(99,102,241,0.35)]">
                     {cartCount > 99 ? "99+" : cartCount}
                   </span>
                 )}
@@ -224,7 +224,7 @@ export default function Navbar() {
                   href={isLoggedIn ? "/profile" : "/login"}
                   className={profileLinkClass()}
                 >
-                  <span className="relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-cyan-400/10 text-cyan-400">
+                  <span className="relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-500/10 text-indigo-400">
                     {avatarUrl ? (
                       <Image
                         src={avatarUrl}

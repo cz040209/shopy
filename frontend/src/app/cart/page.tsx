@@ -74,12 +74,12 @@ function CartContent() {
                 </Link>
 
                 <div className={redesignStyles.itemInfo}>
-                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-cyan-400">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-indigo-400">
                     {item.category} / {item.brand}
                   </p>
                   <Link
                     href={`/product/${item.id}`}
-                    className="mt-1 block text-lg font-semibold text-white transition hover:text-cyan-400"
+                    className="mt-1 block text-lg font-semibold text-white transition hover:text-indigo-400"
                   >
                     {item.name}
                   </Link>
@@ -125,7 +125,7 @@ function CartContent() {
           </div>
 
           <aside className={`${styles.summary} h-fit rounded-lg bg-white/[0.03] p-6 lg:p-7`}>
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-indigo-400">
               Order telemetry
             </p>
             <div className="mt-6 space-y-3 pb-5">

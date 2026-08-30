@@ -49,14 +49,14 @@ export default function Login() {
       </section>
 
       <section className={`${cardStyles.card} relative overflow-hidden rounded-lg bg-white/[0.04] shadow-[0_30px_80px_rgba(0,0,0,0.35)]`}>
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(0,212,255,0.18),transparent_32%),linear-gradient(145deg,rgba(255,255,255,0.07),transparent_38%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(99,102,241,0.18),transparent_32%),linear-gradient(145deg,rgba(255,255,255,0.07),transparent_38%)]" />
         <div className="relative">
           <div className="mb-8 flex items-center justify-between gap-4">
             <div>
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-400">Your Shopy account</p>
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-indigo-400">Your Shopy account</p>
               <h2 className="mt-2 text-white">Sign in to continue</h2>
             </div>
-            <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-400/10 text-cyan-400">
+            <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400">
               <Fingerprint size={25} />
             </span>
           </div>
@@ -117,13 +117,13 @@ export default function Login() {
           </form>
 
           <div className="security-note mt-5">
-            <Shield size={18} className="mt-0.5 shrink-0 text-cyan-400" />
+            <Shield size={18} className="mt-0.5 shrink-0 text-indigo-400" />
             Your account and payments are protected with secure checkout.
           </div>
 
           <p className="mt-6 text-center text-sm text-[#8892a4]">
             No account?{" "}
-            <Link href="/signup" className="text-cyan-400 hover:underline">
+            <Link href="/signup" className="text-indigo-400 hover:underline">
               Create an account
             </Link>
           </p>

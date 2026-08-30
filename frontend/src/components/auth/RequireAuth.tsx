@@ -45,7 +45,7 @@ export default function RequireAuth({ children }: RequireAuthProps) {
     return (
       <div className="flex min-h-[45vh] items-center justify-center" role="status" aria-live="polite">
         <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm text-[#aab5c8]">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
+          <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-500" />
           Securing your Shopy account…
         </div>
       </div>
