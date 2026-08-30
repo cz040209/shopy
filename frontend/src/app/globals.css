@@ -13,8 +13,8 @@
   --surface2: #161c35;
   --border:   rgba(255, 255, 255, 0.07);
   --border2:  rgba(255, 255, 255, 0.13);
-  --cyan:     #00d4ff;
-  --cyan2:    #00a8cc;
+  --cyan:     #7c89f4;
+  --cyan2:    #5b68d8;
   --white:    #ffffff;
   --gray:     #8892a4;
   --gray2:    #5a6478;
@@ -61,9 +61,9 @@ body {
   line-height: 1.75;
   letter-spacing: 0.01em;
   background:
-    radial-gradient(circle at top, rgba(0, 212, 255, 0.09), transparent 30%),
-    radial-gradient(circle at 85% 18%, rgba(123, 97, 255, 0.09), transparent 24%),
-    linear-gradient(180deg, #05070f 0%, #070a14 45%, #05070f 100%);
+    radial-gradient(circle at top, rgba(82, 96, 203, 0.08), transparent 30%),
+    radial-gradient(circle at 85% 18%, rgba(67, 76, 153, 0.06), transparent 24%),
+    linear-gradient(180deg, #05070d 0%, #080b14 45%, #05070d 100%);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -109,7 +109,7 @@ body[data-theme="light"] {
 }
 
 ::selection {
-  background: rgba(0, 212, 255, 0.2);
+  background: rgba(99, 102, 241, 0.28);
   color: #ffffff;
 }
 
@@ -167,14 +167,14 @@ body[data-theme="light"] {
 
 /* ─── GRADIENT TEXT ──────────────────────────────────────── */
 .gradient-text {
-  background: linear-gradient(135deg, var(--cyan) 0%, #7b61ff 100%);
+  background: linear-gradient(135deg, #b9c1ff 0%, #7180e8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .gradient-text-white {
-  background: linear-gradient(90deg, #ffffff 0%, var(--cyan) 100%);
+  background: linear-gradient(90deg, #ffffff 0%, #aeb8ff 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -182,10 +182,10 @@ body[data-theme="light"] {
 
 /* ─── AMBIENT GLOW ───────────────────────────────────────── */
 .glow-cyan {
-  box-shadow: 0 0 24px rgba(0, 212, 255, 0.25);
+  box-shadow: 0 12px 30px rgba(31, 40, 112, 0.24);
 }
 .glow-text-cyan {
-  text-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+  text-shadow: none;
 }
 
 /* ─── DIVIDER ────────────────────────────────────────────── */
@@ -237,9 +237,9 @@ p { color: var(--gray); }
 }
 
 .hover-lift:hover {
-  transform: translateY(-6px) scale(1.01);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
-  filter: brightness(1.03);
+  transform: translateY(-3px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.25);
+  filter: brightness(1.02);
 }
 
 .animate-fade-up {
@@ -280,10 +280,10 @@ p { color: var(--gray); }
 
 @keyframes glowText {
   from {
-    text-shadow: 0 0 0 rgba(0, 212, 255, 0);
+    text-shadow: 0 0 0 rgba(99, 102, 241, 0);
   }
   to {
-    text-shadow: 0 0 32px rgba(0, 212, 255, 0.18);
+    text-shadow: 0 0 32px rgba(99, 102, 241, 0.18);
   }
 }
 
@@ -299,7 +299,7 @@ p { color: var(--gray); }
 .title-fancy {
   display: inline-block;
   opacity: 1;
-  background: linear-gradient(120deg, rgba(255,255,255,0.98) 0%, rgba(0,212,255,0.95) 42%, rgba(255,255,255,0.96) 100%);
+  background: linear-gradient(120deg, rgba(255,255,255,0.98) 0%, rgba(151,163,255,0.95) 42%, rgba(255,255,255,0.96) 100%);
   background-size: 200% 100%;
   color: transparent;
   background-clip: text;
@@ -325,7 +325,7 @@ p { color: var(--gray); }
   content: "";
   position: absolute;
   inset: 100% 0 0 0;
-  background: linear-gradient(180deg, rgba(0,212,255,0.12), transparent 70%);
+  background: linear-gradient(180deg, rgba(99, 102, 241,0.12), transparent 70%);
   pointer-events: none;
 }
 
@@ -337,8 +337,8 @@ p { color: var(--gray); }
   transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
 }
 .card:hover {
-  border-color: rgba(0, 212, 255, 0.25);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 212, 255, 0.08);
+  border-color: rgba(99, 102, 241, 0.25);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(99, 102, 241, 0.08);
 }
 .card-lift:hover { transform: translateY(-4px); }
 
@@ -359,7 +359,7 @@ p { color: var(--gray); }
 }
 .input:focus {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08);
 }
 .input::placeholder { color: var(--gray2); }
 
@@ -385,14 +385,14 @@ label {
   padding: 3px 9px;
   border-radius: 4px;
 }
-.badge-new  { background: rgba(0,212,255,0.12);  color: var(--cyan);  border: 1px solid rgba(0,212,255,0.3); }
+.badge-new  { background: rgba(99, 102, 241,0.12);  color: var(--cyan);  border: 1px solid rgba(99, 102, 241,0.3); }
 .badge-hot  { background: rgba(255,100,50,0.12); color: #ff6432;      border: 1px solid rgba(255,100,50,0.3); }
-.badge-sale { background: rgba(74,222,128,0.12); color: #4ade80;      border: 1px solid rgba(74,222,128,0.3); }
+.badge-sale { background: rgba(99, 102, 241,0.12); color: #8796ed;      border: 1px solid rgba(99, 102, 241,0.3); }
 
 /* ─── STATUS PILLS ───────────────────────────────────────── */
 .status { display: inline-flex; align-items: center; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; }
-.status-delivered  { background: rgba(74,222,128,0.12);  color: #4ade80;  border: 1px solid rgba(74,222,128,0.25); }
-.status-processing { background: rgba(0,212,255,0.12);   color: var(--cyan); border: 1px solid rgba(0,212,255,0.25); }
+.status-delivered  { background: rgba(99, 102, 241,0.12);  color: #8796ed;  border: 1px solid rgba(99, 102, 241,0.25); }
+.status-processing { background: rgba(99, 102, 241,0.12);   color: var(--cyan); border: 1px solid rgba(99, 102, 241,0.25); }
 .status-shipped    { background: rgba(251,191,36,0.12);  color: #fbbf24;  border: 1px solid rgba(251,191,36,0.25); }
 
 /* ─── SECURITY NOTE ──────────────────────────────────────── */
@@ -400,8 +400,8 @@ label {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  background: rgba(0, 212, 255, 0.04);
-  border: 1px solid rgba(0, 212, 255, 0.12);
+  background: rgba(99, 102, 241, 0.04);
+  border: 1px solid rgba(99, 102, 241, 0.12);
   border-radius: var(--radius);
   /* more padding for readability */
   padding: 1.15rem 1.35rem;

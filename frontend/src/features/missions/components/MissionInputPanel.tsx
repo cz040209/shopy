@@ -29,9 +29,9 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
   return (
     <section className={styles.inputPanel} aria-labelledby="mission-input-title">
       <div className={styles.sectionIntro}>
-        <span>01 · SHAPE YOUR BRIEF</span>
-        <h2 id="mission-input-title">What should Shopy make happen?</h2>
-        <p>Use natural language. Include a budget, what you own, and what matters most if you know them.</p>
+        <span>01 · DEFINE YOUR MISSION</span>
+        <h2 id="mission-input-title">Set the brief. We’ll handle the details.</h2>
+        <p>Describe the outcome, budget, what you already own, and the priorities that should guide the recommendation.</p>
       </div>
       <div className={styles.inputSurface}>
         <textarea

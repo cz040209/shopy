@@ -141,7 +141,19 @@ class ProductSearchAgent:
                     chosen_ids.append(product_id)
 
         grounded_ids = self._grounded_role_ids(ranked, state)
-        chosen_ids = list(dict.fromkeys([*grounded_ids, *chosen_ids]))
+        memory = state.get("memory_context")
+        prior_selected = memory.get("selected_products", []) if isinstance(memory, dict) else []
+        prior_ids = {
+            str(item.get("id")) for item in prior_selected
+            if isinstance(item, dict) and item.get("id")
+        }
+        # Keep reference products in the bounded shortlist so comparative
+        # criteria can be verified against catalog facts rather than prose.
+        reference_ids = [
+            str(item["product"]["id"]) for item in ranked
+            if str(item["product"]["id"]) in prior_ids
+        ]
+        chosen_ids = list(dict.fromkeys([*grounded_ids, *reference_ids, *chosen_ids]))
         if not chosen_ids:
             chosen_ids = [str(item["product"]["id"]) for item in ranked[:shortlist_limit]]
         by_id = {str(item["product"]["id"]): item for item in ranked}

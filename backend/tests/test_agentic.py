@@ -9,9 +9,10 @@ from app.agentic.intent import IntentMissionAgent, StructuredOutputError, build_
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
 from app.agentic.brand_voice import BrandVoiceAgent
-from app.agentic.auditor import ShoppingAuditor
+from app.agentic.auditor import AuditFinding, ShoppingAuditor
 from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.schemas import MissionInterpretation
+from app.agentic.manager import WorkflowManager
 from app.agentic.state import initial_shopping_state
 
 
@@ -60,6 +61,61 @@ def test_need_planner_returns_required_and_optional_categories():
 
     assert result.required_categories == ["gaming setup"]
     assert result.optional_categories == []
+
+
+def test_need_planner_does_not_rebuy_a_more_specific_owned_item():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="complete the look", owned_items=["beige t-shirt with navy trim"],
+        bundle_items=[{"query": "beige shirt", "quantity": 1}, {"query": "white sneakers", "quantity": 1}],
+    )
+
+    result = NeedPlannerAgent().plan(mission)
+
+    assert result.required_categories == ["white sneakers"]
+
+
+def test_intent_normalization_reconciles_vision_and_malformed_duplicate_requirements():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="complete the look",
+        requires_catalog=True, requested_actions=["search_products"],
+        owned_items=["red beaded necklace"],
+        bundle_items=[{"query": "beige shirt"}, {"query": "red necklace"}],
+        catalog_queries=["beige shirt", "red necklace"],
+        fulfillment_requirements=[
+            {"kind": "category", "field": "category", "value": "shirt"},
+            {"kind": "category", "field": None, "value": "necklace"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(mission, {"vision_context": {
+        "existing_items": ["beige t-shirt with navy trim", "red beaded necklace"],
+        "possible_shopping_needs": ["white sneakers", "navy trousers"],
+    }})
+
+    assert [item.query for item in normalized.bundle_items] == ["white sneakers", "navy trousers"]
+    assert [item.value for item in normalized.fulfillment_requirements] == ["white sneakers", "navy trousers"]
+    assert "beige t-shirt with navy trim" in normalized.owned_items
+
+
+def test_intent_normalization_removes_feature_duplicates_embedded_in_bundle_roles():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="WFH setup",
+        bundle_items=[{"query": "ergonomic chair"}, {"query": "standing desk"}],
+        fulfillment_requirements=[
+            {"kind": "category", "field": "category", "value": "chair"},
+            {"kind": "category", "field": "category", "value": "desk"},
+            {"kind": "feature", "field": "features", "value": "ergonomic"},
+            {"kind": "feature", "field": "features", "value": "standing desk"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(mission, None)
+
+    assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
+        {"kind": "category", "value": "chair", "field": None, "quantity": 1},
+        {"kind": "category", "value": "desk", "field": None, "quantity": 1},
+    ]
 
 
 def test_initial_state_is_complete_and_mutable_fields_are_not_shared():
@@ -114,6 +170,51 @@ async def test_intent_agent_retries_a_schema_failure():
 
     assert model.calls == 2
     assert result.goal == "gaming setup"
+
+
+@pytest.mark.anyio
+async def test_intent_agent_retries_an_unverifiable_optimization_continuation():
+    class SearchArgs(BaseModel):
+        query: str
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    class RetryComparisonModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            payload = {
+                "mission_type": "product_search",
+                "recommendation_mode": "bundle",
+                "goal": "refine the current setup",
+                "requires_catalog": True,
+                "continues_context": True,
+                "optimization_mode": "lower total cost",
+                "requested_actions": ["search_products"],
+                "selection_criteria": [] if self.calls == 1 else [{
+                    "field": "price", "operator": "lower_than_reference",
+                    "value": None, "weight": 3,
+                }],
+            }
+            return AIMessage(content=json.dumps(payload))
+
+    model = RetryComparisonModel()
+    result = await IntentMissionAgent(model, tools=[SearchTool()]).interpret(
+        "Refine the current bundle",
+        runtime_context={"short_term_memory": {
+            "selected_products": [{"id": "prior-product"}],
+            "current_bundle": {"total": "500.00"},
+        }},
+    )
+
+    assert model.calls == 2
+    assert result.selection_criteria[0].field == "price"
+    assert result.selection_criteria[0].operator == "lower_than_reference"
 
 
 @pytest.mark.anyio
@@ -208,6 +309,39 @@ def test_catalog_selection_does_not_invent_product_family_aliases():
     assert BrandVoiceAgent.select_catalog_products(state) == [
         {"id": "toiletry", "quantity": 1},
     ]
+
+
+def test_product_role_matching_rejects_accessories_that_only_mention_the_role():
+    monitor_arm = {
+        "name": "Arc Single Monitor Arm", "category": "Desk Accessories",
+        "specs": [{"label": "Compatibility", "value": "17-32 inch monitors"}],
+        "attributes": {"compatibility": "VESA monitors"},
+    }
+    desk_mat = {
+        "name": "Orbit XL Desk Mat", "category": "Desk Accessories",
+        "specs": [], "attributes": {"compatibility": "keyboard and mouse"},
+    }
+
+    assert not BundleOptimizerAgent._matches(monitor_arm, "monitor")
+    assert not BundleOptimizerAgent._matches(desk_mat, "mouse")
+    assert not BrandVoiceAgent._matches_requirement(
+        monitor_arm, {"kind": "category", "value": "monitor", "field": None}
+    )
+    assert BundleOptimizerAgent._matches(monitor_arm, "monitor arm")
+
+
+def test_auditor_allows_llm_objection_that_only_repeats_a_verified_disclosed_gap():
+    finding = AuditFinding(
+        code="missing_requirement_coverage",
+        message="The standing desk was not included.",
+        excerpt="A standing desk could not be included in this selection.",
+    )
+    state = {
+        "unfulfilled_requirements": ["standing desk"],
+        "fulfillment_gaps": ["No verified candidate covered: standing desk"],
+    }
+
+    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
 
 
 def test_feature_requirement_requires_value_and_product_role():
@@ -418,6 +552,116 @@ def test_optimisation_continuation_uses_llm_criteria_and_a_prior_catalog_fact():
         "field": "price", "operator": "lower_than_reference",
         "reference_value": "3999.00", "eligible_count": 1,
     }]
+
+
+def test_bundle_refinement_inherits_the_complete_prior_mission_contract():
+    follow_up = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="single",
+        goal="a cheaper setup", continues_context=True, optimization_mode="cheaper",
+        requires_catalog=True, requested_actions=["search_products"],
+        bundle_items=[{"query": "cheaper setup"}],
+        fulfillment_requirements=[{"kind": "category", "value": "setup"}],
+        selection_criteria=[{
+            "field": "price", "operator": "lower_than_reference", "value": None, "weight": 3,
+        }],
+    )
+    memory = {
+        "budget": 1000,
+        "preferences": ["lightweight"],
+        "current_mission": {
+            "mission_type": "product_search", "recommendation_mode": "bundle",
+            "goal": "travel setup", "requires_catalog": True,
+            "catalog_queries": ["carry-on", "travel pillow", "travel adapter"],
+            "requested_actions": ["search_products"],
+            "bundle_items": [{"query": "carry-on"}, {"query": "travel pillow"}, {"query": "travel adapter"}],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": "carry-on", "quantity": 1},
+                {"kind": "category", "value": "travel pillow", "quantity": 1},
+                {"kind": "category", "value": "travel adapter", "quantity": 1},
+            ],
+        },
+    }
+
+    merged = ShoppingOrchestrator._merge_continuation_mission(follow_up, memory)
+
+    assert merged.goal == "travel setup"
+    assert merged.recommendation_mode == "bundle"
+    assert merged.budget == 1000
+    assert [item.query for item in merged.bundle_items] == ["carry-on", "travel pillow", "travel adapter"]
+    assert [item.value for item in merged.fulfillment_requirements] == ["carry-on", "travel pillow", "travel adapter"]
+    assert merged.selection_criteria == follow_up.selection_criteria
+
+
+def test_manager_always_runs_optimizer_for_bundle_mode_even_with_one_planned_role():
+    plan = WorkflowManager().plan({
+        "mission_type": "product_search", "recommendation_mode": "bundle",
+        "required_categories": ["travel setup"], "owned_items": [],
+    }, ["search_products"])
+
+    assert plan["stages"] == ["bundle_optimizer"]
+
+
+def test_manager_does_not_schedule_review_intelligence_for_aggregate_ratings():
+    plan = WorkflowManager().plan({
+        "mission_type": "product_search", "recommendation_mode": "single",
+        "required_categories": ["headphones"], "owned_items": [],
+    }, ["search_products", "get_product_reviews"])
+
+    assert plan["stages"] == []
+
+
+def test_bundle_price_refinement_uses_prior_total_without_filtering_product_roles():
+    state = initial_shopping_state("Make the setup cheaper")
+    state.update({
+        "continues_context": True, "recommendation_mode": "bundle", "optimization_mode": "cheaper",
+        "selection_criteria": [{
+            "field": "price", "operator": "lower_than_reference", "value": None, "weight": 3,
+        }],
+        "memory_context": {
+            "selected_products": [{"id": "old-chair"}, {"id": "old-lamp"}],
+            "current_bundle": {"total": "500.00"},
+        },
+    })
+    candidates = [
+        {"id": "old-chair", "name": "Old Chair", "price": "350"},
+        {"id": "new-chair", "name": "New Chair", "price": "220"},
+        {"id": "old-lamp", "name": "Old Lamp", "price": "150"},
+        {"id": "new-lamp", "name": "New Lamp", "price": "80"},
+    ]
+
+    alternatives, context = ShoppingOrchestrator._apply_optimization_context(state, candidates)
+
+    assert {item["id"] for item in alternatives} == {item["id"] for item in candidates}
+    assert context["reference_bundle_total"] == "500.00"
+    assert context["applied_comparisons"] == [{
+        "field": "price", "operator": "lower_than_reference", "reference_value": "500.00",
+        "scope": "bundle_total", "eligible_count": 4,
+    }]
+
+
+@pytest.mark.anyio
+async def test_bundle_price_refinement_selects_a_lower_total_for_the_same_roles():
+    state = initial_shopping_state("Make the setup cheaper")
+    state.update({
+        "recommendation_mode": "bundle", "budget": 1000,
+        "required_categories": ["chair", "lamp"],
+        "selection_context": {"applied_comparisons": [{
+            "field": "price", "operator": "lower_than_reference",
+            "reference_value": "500.00", "scope": "bundle_total",
+        }]},
+        "candidate_products": [
+            {"id": "premium-chair", "name": "Premium Chair", "category": "Chairs", "price": "420", "currency": "MYR", "inventory_quantity": 2},
+            {"id": "value-chair", "name": "Value Chair", "category": "Chairs", "price": "220", "currency": "MYR", "inventory_quantity": 2},
+            {"id": "premium-lamp", "name": "Premium Lamp", "category": "Lamps", "price": "190", "currency": "MYR", "inventory_quantity": 2},
+            {"id": "value-lamp", "name": "Value Lamp", "category": "Lamps", "price": "80", "currency": "MYR", "inventory_quantity": 2},
+        ],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["bundle"]["total"] == "300"
+    assert {item["id"] for item in result["selected_products"]} == {"value-chair", "value-lamp"}
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
 
 
 def test_optimisation_can_rank_by_dynamic_qualitative_catalog_evidence():

@@ -165,7 +165,10 @@ class ShoppingAuditor:
         self._validate_attachments(state, verified_products, errors)
         llm_review = await self._review_final_response(state, verified_products, verified_total=total)
         if llm_review is not None and llm_review.verdict == "fail":
-            errors.extend(finding.model_dump() for finding in llm_review.findings)
+            errors.extend(
+                finding.model_dump() for finding in llm_review.findings
+                if not self._is_transparent_verified_gap(finding, state)
+            )
         errors, warnings = self._apply_confidence_gate(errors, llm_review)
         return AuditResult(
             status="pass" if not errors else "fail",
@@ -173,6 +176,36 @@ class ShoppingAuditor:
             warnings=warnings,
             total=str(total),
             llm_review=(llm_review.model_dump() if llm_review is not None else {"status": "skipped"}),
+        )
+
+    @staticmethod
+    def _is_transparent_verified_gap(finding: AuditFinding, state: dict[str, Any]) -> bool:
+        """Do not turn a truthful, verified partial result into an outage.
+
+        Deterministic validation still rejects invented gaps and missed eligible
+        products. This only removes an LLM objection to clearly disclosing a gap
+        that the optimizer and structured response have already agreed upon.
+        """
+        if finding.code not in {"requirement_not_met", "missing_requirement_coverage"}:
+            return False
+        declared = [
+            str(value).casefold().strip() for value in state.get("unfulfilled_requirements", [])
+            if isinstance(value, str) and value.strip()
+        ]
+        gaps = [str(value).casefold() for value in state.get("fulfillment_gaps", [])]
+        supported = [
+            value for value in declared
+            if any(
+                BrandVoiceAgent._terms_present(value, gap)
+                or BrandVoiceAgent._terms_present(gap, value)
+                for gap in gaps
+            )
+        ]
+        excerpt = finding.excerpt.casefold()
+        return bool(supported) and any(
+            BrandVoiceAgent._terms_present(value, excerpt)
+            or BrandVoiceAgent._terms_present(excerpt, value)
+            for value in supported
         )
 
     async def _audit_stock_response(self, state: dict[str, Any], tools: ToolExecutor | None) -> AuditResult:
@@ -501,6 +534,11 @@ class ShoppingAuditor:
             "fulfillment_requirements": state.get("fulfillment_requirements", []),
             "fulfillment_gaps": state.get("fulfillment_gaps", []),
             "verified_unfulfilled_requirements": state.get("unfulfilled_requirements", []),
+            "verified_selection_context": state.get("selection_context", {}),
+            "prior_verified_bundle": (
+                state.get("memory_context", {}).get("current_bundle")
+                if isinstance(state.get("memory_context"), dict) else None
+            ),
             "vision_context": state.get("vision_context"),
             "verified_arithmetic": {
                 "selected_total": str(verified_total) if verified_total is not None else None,

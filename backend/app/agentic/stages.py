@@ -15,9 +15,6 @@ class FutureAnalysisAgent(Protocol):
 class ProductSearchAgent(FutureAnalysisAgent, Protocol): ...
 
 
-class ReviewAgent(FutureAnalysisAgent, Protocol): ...
-
-
 class SellerRiskAgent(FutureAnalysisAgent, Protocol): ...
 
 

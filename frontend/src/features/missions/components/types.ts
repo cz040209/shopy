@@ -24,8 +24,20 @@ export type MissionData = {
 export type MissionHistoryItem = { id: string; label: string; total: number; at: string };
 
 export type BundleWorkspace = {
-  bundle?: { rationale?: string[]; trade_offs?: string[]; budget_remaining?: string | number | null } | null;
+  bundle?: {
+    rationale?: string[];
+    trade_offs?: string[];
+    budget_remaining?: string | number | null;
+    product_count?: number;
+    required_category_coverage?: {
+      covered?: string[];
+      missing?: string[];
+      matches?: Array<{ requirement?: string; product_id?: string }>;
+    };
+  } | null;
   compatibility?: Array<{ status?: string; reason?: string; message?: string }>;
   product_rankings?: Array<{ product_id?: string; reasons?: string[] }>;
   audit?: { status?: string };
+  fulfillment_gaps?: string[];
+  unfulfilled_requirements?: string[];
 };

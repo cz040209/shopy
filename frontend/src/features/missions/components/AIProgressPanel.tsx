@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
 import styles from "./mission-studio.module.css";
 
-const steps = ["Understanding mission", "Searching products", "Analyzing reviews", "Checking compatibility", "Optimizing bundle", "Auditing result"];
+const steps = ["Understanding mission", "Searching products", "Evaluating catalog ratings", "Checking compatibility", "Optimizing bundle", "Auditing result"];
 const focusOrbitPoses = [
   { x: 0, y: 76, z: 110, scale: 1, rotateY: 0, opacity: 1 },
   { x: 255, y: 38, z: 12, scale: 0.8, rotateY: -43, opacity: 0.68 },
@@ -21,9 +21,9 @@ export default function AIProgressPanel({ busy, complete, activeStep, focus = fa
   return (
     <aside className={`${styles.progressPanel} ${focus ? styles.progressPanelFocus : ""}`} aria-live="polite">
       {!focus && <div className={styles.progressHeading}>
-        <span>02 · AI WORKSPACE</span>
-        <h2>{busy ? "Shopy is building it." : complete ? "Your answer is ready." : "See the reasoning unfold."}</h2>
-        <p>{busy ? "Live activity from your shopping agents." : "Start the mission to watch each specialist do its part."}</p>
+        <span>02 · EXECUTION WORKSPACE</span>
+        <h2>{busy ? "Building your recommendation." : complete ? "Recommendation verified." : "A clear view of the process."}</h2>
+        <p>{busy ? "Live progress across the recommendation workflow." : "Start the mission to follow each verification stage."}</p>
       </div>}
       {busy ? (
         <div className={styles.processingOrbit} aria-label={`Step ${activeStep + 1}: ${steps[activeStep]}`}>

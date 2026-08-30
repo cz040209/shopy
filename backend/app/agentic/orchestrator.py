@@ -24,7 +24,7 @@ from .planning import PlanningAgent
 from .observability import OrchestrationRecorder, active_recorder
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
-from .review_intelligence import ReviewIntelligenceAgent
+from .schemas import MissionInterpretation
 from .state import ShoppingAgentState, initial_shopping_state
 from .tools import CommerceToolRegistry, ToolExecutionError
 from .vision import VisionAgent
@@ -33,7 +33,7 @@ from .vision import VisionAgent
 class ShoppingOrchestrator:
     """Main controller for the first LangGraph shopping workflow.
 
-    Future Product Search, Review, Seller Risk, Compatibility, Bundle,
+    Product Search, Compatibility, Bundle,
     Auditor, Repair, and Vision nodes attach after ``next_stage``.
     """
 
@@ -57,7 +57,6 @@ class ShoppingOrchestrator:
         self.manager = WorkflowManager()
         self.product_resolver = ProductResolutionAgent(shared_model)
         self.product_search_agent = ProductSearchAgent(tool_registry, shared_model)
-        self.review_agent = ReviewIntelligenceAgent(shared_model, tool_registry)
         self.compatibility_agent = CompatibilityAgent(shared_model)
         self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
@@ -78,7 +77,6 @@ class ShoppingOrchestrator:
         workflow.add_node("planning", self._planning_node)
         workflow.add_node("manager", self._manager_node)
         workflow.add_node("product_search", self._product_search_node)
-        workflow.add_node("review_intelligence", self._review_node)
         workflow.add_node("compatibility", self._compatibility_node)
         workflow.add_node("bundle_optimizer", self._bundle_optimizer_node)
         workflow.add_node("response_draft", self._response_draft_node)
@@ -107,10 +105,6 @@ class ShoppingOrchestrator:
         )
         workflow.add_conditional_edges(
             "product_search", self._after_product_search,
-            {"review_intelligence": "review_intelligence", "compatibility": "compatibility", "bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
-        )
-        workflow.add_conditional_edges(
-            "review_intelligence", self._after_review,
             {"compatibility": "compatibility", "bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
         )
         workflow.add_conditional_edges(
@@ -155,8 +149,6 @@ class ShoppingOrchestrator:
             inputs["goal"] = state.get("goal")
         elif node == "vision":
             inputs["mode"] = state.get("vision_input", {}).get("mode")
-        elif node == "review_intelligence":
-            inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
         elif node == "compatibility":
             inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
         elif node == "bundle_optimizer":
@@ -184,9 +176,6 @@ class ShoppingOrchestrator:
 
     def _after_product_search(self, state: ShoppingAgentState) -> str:
         return self.manager.next_stage(state)
-
-    def _after_review(self, state: ShoppingAgentState) -> str:
-        return self.manager.next_stage(state, "review_intelligence")
 
     def _after_compatibility(self, state: ShoppingAgentState) -> str:
         return self.manager.next_stage(state, "compatibility")
@@ -250,28 +239,21 @@ class ShoppingOrchestrator:
             runtime_context["short_term_memory"] = state["memory_context"]
         mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
         memory_context = state.get("memory_context") or {}
-        previous_mission = memory_context.get("current_mission", {}) if isinstance(memory_context, dict) else {}
-        inherited_budget = memory_context.get("budget") if mission.continues_context and isinstance(memory_context, dict) else None
-        inherited_preferences = memory_context.get("preferences", []) if mission.continues_context and isinstance(memory_context, dict) else []
-        inherited_constraints = memory_context.get("constraints", []) if mission.continues_context and isinstance(memory_context, dict) else []
-        inherited_owned_items = memory_context.get("owned_items", []) if mission.continues_context and isinstance(memory_context, dict) else []
-        inherited_mission = previous_mission if mission.continues_context and isinstance(previous_mission, dict) else {}
+        mission = self._merge_continuation_mission(mission, memory_context)
         output = {
             **self._event(state, "intent_agent"),
             "mission_type": mission.mission_type, "recommendation_mode": mission.recommendation_mode, "goal": mission.goal,
             "requires_planning": mission.requires_planning, "requires_catalog": mission.requires_catalog,
             "continues_context": mission.continues_context,
-            "optimization_mode": mission.optimization_mode or (
-                memory_context.get("optimization_mode") if mission.continues_context else None
-            ),
-            "catalog_query": mission.catalog_query or inherited_mission.get("catalog_query"),
-            "catalog_queries": mission.catalog_queries or inherited_mission.get("catalog_queries", []), "requested_actions": mission.requested_actions,
-            "budget": mission.budget if mission.budget is not None else inherited_budget,
+            "optimization_mode": mission.optimization_mode,
+            "catalog_query": mission.catalog_query,
+            "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions,
+            "budget": mission.budget,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
-            "preferences": list(dict.fromkeys([*inherited_preferences, *mission.preferences])),
+            "preferences": mission.preferences,
             "key_requirements": mission.key_requirements,
-            "constraints": list(dict.fromkeys([*inherited_constraints, *mission.constraints])),
-            "owned_items": list(dict.fromkeys([*inherited_owned_items, *mission.owned_items])), "priorities": mission.priorities,
+            "constraints": mission.constraints,
+            "owned_items": mission.owned_items, "priorities": mission.priorities,
             "selection_criteria": [item.model_dump() for item in mission.selection_criteria],
             "fulfillment_requirements": [item.model_dump() for item in mission.fulfillment_requirements],
             "mission": mission.model_dump(),
@@ -279,8 +261,69 @@ class ShoppingOrchestrator:
         self._record_node(state, "intent_agent", output)
         return output
 
+    @staticmethod
+    def _merge_continuation_mission(
+        mission: MissionInterpretation, memory_context: object
+    ) -> MissionInterpretation:
+        """Build one coherent mission from a follow-up and audited session memory."""
+        if not mission.continues_context or not isinstance(memory_context, dict):
+            return mission
+        previous = memory_context.get("current_mission")
+        if not isinstance(previous, dict):
+            previous = {}
+        data = mission.model_dump()
+        refinement = bool(mission.optimization_mode or mission.selection_criteria)
+        list_fields = (
+            "catalog_queries", "requested_actions", "bundle_items", "preferences",
+            "key_requirements", "constraints", "owned_items", "priorities",
+            "fulfillment_requirements",
+        )
+        for field in list_fields:
+            prior_values = previous.get(field)
+            if not data.get(field) and isinstance(prior_values, list):
+                data[field] = prior_values
+        for field in ("catalog_query",):
+            if not data.get(field) and previous.get(field):
+                data[field] = previous[field]
+        if data.get("budget") is None and memory_context.get("budget") is not None:
+            data["budget"] = memory_context["budget"]
+        for field in ("preferences", "constraints", "owned_items"):
+            remembered = memory_context.get(field)
+            if isinstance(remembered, list):
+                data[field] = list(dict.fromkeys([*remembered, *data.get(field, [])]))
+        if refinement:
+            # A refinement modifies the active selection; it is not a new
+            # information-only mission. Preserve the prior shape unless the
+            # follow-up supplied concrete replacement roles.
+            if previous.get("goal"):
+                data["goal"] = previous["goal"]
+            if previous.get("mission_type"):
+                data["mission_type"] = previous["mission_type"]
+            if previous.get("recommendation_mode"):
+                data["recommendation_mode"] = previous["recommendation_mode"]
+            # A refinement of an existing bundle changes selection criteria,
+            # not the bundle's product-role contract. Some models restate a
+            # vague one-item phrase from the follow-up; use the last audited
+            # role plan instead of silently dropping the other bundle roles.
+            if previous.get("recommendation_mode") == "bundle":
+                for field in (
+                    "catalog_query", "catalog_queries", "requested_actions",
+                    "bundle_items", "key_requirements", "fulfillment_requirements",
+                ):
+                    if previous.get(field):
+                        data[field] = previous[field]
+            data["requires_catalog"] = bool(
+                previous.get("requires_catalog", True)
+                or memory_context.get("selected_products")
+                or memory_context.get("current_bundle")
+            )
+            data["requires_planning"] = bool(previous.get("requires_planning", False))
+            if not data.get("requested_actions"):
+                data["requested_actions"] = ["search_products"]
+        data["optimization_mode"] = mission.optimization_mode or memory_context.get("optimization_mode")
+        return MissionInterpretation.model_validate(data)
+
     async def _need_planner_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        from .schemas import MissionInterpretation
         plan = self.need_planner.plan(MissionInterpretation.model_validate(state["mission"]))
         output = {**self._event(state, "need_planner"), "required_categories": plan.required_categories, "optional_categories": plan.optional_categories}
         self._record_node(state, "need_planner", output)
@@ -345,12 +388,7 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", output)
             return output
         action_candidates, resolution_context = await self._resolve_action_candidates(state, actions, candidates)
-        immediate_actions = list(actions)
-        if "review_intelligence" in state.get("execution_plan", {}).get("stages", []):
-            # Review Intelligence owns review retrieval and summarisation; do
-            # not spend the request budget fetching the same reviews twice.
-            immediate_actions = [action for action in immediate_actions if action != "get_product_reviews"]
-        tool_context = [*resolution_context, *(await self._execute_requested_actions(immediate_actions, action_candidates, state))]
+        tool_context = [*resolution_context, *(await self._execute_requested_actions(actions, action_candidates, state))]
         # Resolution is required for a named product/detail request, but it
         # must not collapse a recommendation into the model's first match.
         # Product discovery deliberately retains the verified shortlist so the
@@ -414,11 +452,33 @@ class ShoppingOrchestrator:
         reference_products = [product for product in candidates if str(product.get("id")) in prior_ids]
         filtered = list(candidates)
         applied: list[dict[str, Any]] = []
+        prior_bundle = memory.get("current_bundle") if isinstance(memory, dict) else None
+        bundle_total = None
+        if isinstance(prior_bundle, dict):
+            try:
+                bundle_total = Decimal(str(prior_bundle.get("total")))
+            except (InvalidOperation, TypeError, ValueError):
+                bundle_total = None
         for criterion in criteria:
             operator = str(criterion.get("operator", ""))
             if operator not in {"lower_than_reference", "higher_than_reference"}:
                 continue
             field = str(criterion["field"])
+            # Price applied to a continuing bundle means the combined selection,
+            # not "every candidate must cost less than the cheapest old item".
+            # Preserve role diversity here; the bundle optimiser enforces the
+            # verified prior-total comparison across candidate combinations.
+            if (
+                state.get("recommendation_mode") == "bundle"
+                and field.casefold().strip() == "price"
+                and bundle_total is not None
+            ):
+                applied.append({
+                    "field": field, "operator": operator,
+                    "reference_value": str(bundle_total), "scope": "bundle_total",
+                    "eligible_count": len(filtered),
+                })
+                continue
             references = [
                 value for product in reference_products
                 if (value := ShoppingOrchestrator._numeric_catalog_fact(product, field)) is not None
@@ -444,6 +504,8 @@ class ShoppingOrchestrator:
             "eligible_alternative_count": len(filtered),
             "no_eligible_alternative": bool(applied and not filtered),
         }
+        if bundle_total is not None:
+            context["reference_bundle_total"] = str(bundle_total)
         if context["no_eligible_alternative"]:
             return [], context
         return sorted(filtered, key=lambda product: ShoppingOrchestrator._optimization_sort_key(product, criteria)), context
@@ -488,12 +550,6 @@ class ShoppingOrchestrator:
                 if value is not None:
                     numeric_orders.append(value if operator == "lower_than_reference" else -value)
         return (-match_score, *numeric_orders, str(product.get("name", "")))
-
-    async def _review_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        insights = {} if state.get("stock_results") else await self.review_agent.run(state)
-        output = {**self._event(state, "review_intelligence"), **insights}
-        self._record_node(state, "review_intelligence", output)
-        return output
 
     async def _compatibility_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         output = {**self._event(state, "compatibility"), **(await self.compatibility_agent.run(state))}

@@ -10,14 +10,14 @@
 }
 
 .checkoutAction {
-  border: 1px solid rgba(150, 217, 244, 0.34) !important;
-  background: linear-gradient(115deg, #7b69ed, #35b9dc) !important;
+  border: 1px solid rgba(134, 146, 224, 0.34) !important;
+  background: linear-gradient(115deg, #7b69ed, #6574de) !important;
   box-shadow: 0 14px 28px rgba(56, 128, 214, 0.24), inset 0 1px rgba(255, 255, 255, 0.2) !important;
   color: #fff !important;
 }
 
 .checkoutAction:hover {
-  background: linear-gradient(115deg, #8877f2, #45c7e8) !important;
+  background: linear-gradient(115deg, #8877f2, #7180e7) !important;
   box-shadow: 0 18px 34px rgba(56, 128, 214, 0.32), inset 0 1px rgba(255, 255, 255, 0.25) !important;
   transform: translateY(-2px);
 }
@@ -29,8 +29,8 @@
 }
 
 .continueAction:hover {
-  border-color: rgba(112, 225, 240, 0.54) !important;
-  background: rgba(66, 175, 203, 0.1) !important;
+  border-color: rgba(129, 140, 248, 0.54) !important;
+  background: rgba(82, 96, 190, 0.1) !important;
   color: #fff !important;
   transform: translateY(-2px);
 }

@@ -37,7 +37,6 @@ class ShoppingAgentState(TypedDict):
     optional_categories: list[str]
     candidate_products: list[dict[str, Any]]
     product_rankings: list[dict[str, Any]]
-    review_insights: dict[str, dict[str, Any]]
     compatibility_results: list[dict[str, Any]]
     compatibility_plan: dict[str, Any]
     bundle: dict[str, Any] | None
@@ -96,7 +95,6 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "optional_categories": [],
         "candidate_products": [],
         "product_rankings": [],
-        "review_insights": {},
         "compatibility_results": [],
         "compatibility_plan": {},
         "bundle": None,

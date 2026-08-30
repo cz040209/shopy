@@ -1,6 +1,8 @@
-/* eslint-disable @next/next/no-img-element */
+"use client";
+
 import Link from "next/link";
-import { Check, CircleHelp, ShoppingBag, X } from "lucide-react";
+import { Check, CircleAlert, CircleHelp, Package, ShieldCheck, ShoppingBag, X } from "lucide-react";
+import ProductImage from "@/features/products/components/ProductImage";
 import { Attachment, BundleWorkspace, MissionData } from "./types";
 import styles from "./bundle-canvas.module.css";
 
@@ -13,25 +15,40 @@ type Props = {
   onRemove: (productId: string) => void;
 };
 
-const slotClasses = [styles.center, styles.top, styles.left, styles.right];
+const money = (value: number) => value.toLocaleString("en-MY", { maximumFractionDigits: 0 });
 
-function ProductNode({ item, slot, onRemove }: { item: Attachment; slot: number; onRemove: (productId: string) => void }) {
-  return <div className={`${styles.nodeShell} ${slotClasses[slot] ?? ""}`}><Link href={`/product/${item.product_id}`} className={styles.node}><img src={item.image_url} alt={item.image_alt_text || item.name} /><div><small>{item.category || `Bundle item ${slot + 1}`}</small><strong>{item.name}</strong><b>RM {Number(item.price).toLocaleString("en-MY", { minimumFractionDigits: 0 })}</b></div></Link><button type="button" className={styles.remove} aria-label={`Remove ${item.name} from this bundle`} onClick={() => onRemove(item.product_id)}><X size={14} /></button></div>;
+function readableReason(value: string) {
+  const cleaned = value.replaceAll("_", " ").replace(/\bdeterministically\b/gi, "").replace(/\s+/g, " ").replace(/\s+([.,])/g, "$1").trim();
+  return cleaned ? cleaned[0].toUpperCase() + cleaned.slice(1) : "";
+}
+
+function ProductNode({ item, index, onRemove }: { item: Attachment; index: number; onRemove: (productId: string) => void }) {
+  const initials = item.name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+  return <article className={styles.nodeShell}><Link href={`/product/${item.product_id}`} className={styles.node} aria-label={`View ${item.name}`}><div className={styles.media}><ProductImage src={item.image_url} alt={item.image_alt_text || item.name} fill sizes="(max-width: 650px) 80px, 104px" className={styles.productImage} fallback={<span className={styles.imageFallback} aria-hidden="true"><Package size={24} /><b>{initials}</b></span>} /><span className={styles.sequence}>{String(index + 1).padStart(2, "0")}</span></div><div className={styles.nodeCopy}><small>{item.category || "Recommended item"}</small><strong title={item.name}>{item.name}</strong>{item.brand && <span className={styles.brand}>{item.brand}</span>}<b>RM {money(Number(item.price))}</b></div></Link><button type="button" className={styles.remove} aria-label={`Remove ${item.name} from this bundle`} onClick={() => onRemove(item.product_id)}><X size={15} /></button></article>;
 }
 
 export default function BundleBoard({ items, mission, workspace, adding, onAdd, onRemove }: Props) {
   const isComparison = mission.recommendation_mode === "single" && items.length > 1;
   const total = items.reduce((sum, item) => sum + Number(item.price), 0);
-  const budgetRemaining = mission.budget ? Number(mission.budget) - total : null;
-  const primary = [...items].sort((a, b) => Number(b.price) - Number(a.price));
-  const diagramItems = primary.slice(0, 4);
-  const reasons = [
-    ...(mission.priorities ?? []).map((value) => `Prioritizes ${value}`),
-    ...(mission.preferences ?? []).map((value) => `Matches your ${value} preference`),
-    ...(workspace.bundle?.rationale ?? []),
-    ...(workspace.compatibility ?? []).filter((item) => item.status === "compatible").map((item) => item.reason || item.message || "Compatibility checked"),
-    workspace.audit?.status === "pass" ? "Catalog facts and seller data audited" : "",
-  ].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).slice(0, 5);
+  const hasBudget = mission.budget !== null && mission.budget !== undefined;
+  const budget = hasBudget ? Number(mission.budget) : null;
+  const budgetRemaining = budget === null ? null : budget - total;
+  const budgetPercent = budget && budget > 0 ? Math.min((total / budget) * 100, 100) : 0;
+  const overBudget = budgetRemaining !== null && budgetRemaining < 0;
+  const products = [...items].sort((a, b) => Number(b.price) - Number(a.price));
+  const coverage = workspace.bundle?.required_category_coverage;
+  const covered = coverage?.covered ?? [];
+  const missing = coverage?.missing ?? [];
+  const plannedCount = new Set([...covered, ...missing]).size;
+  const compatibilityVerified = (workspace.compatibility ?? []).some((item) => item.status === "compatible");
+  const reasons = [...(mission.priorities ?? []).map((value) => `Prioritizes ${value}`), ...(mission.preferences ?? []).map((value) => `Matches your ${value} preference`), ...(workspace.bundle?.rationale ?? []), ...(workspace.compatibility ?? []).filter((item) => item.status === "compatible").map((item) => item.reason || item.message || "Compatibility checked"), workspace.audit?.status === "pass" ? "Catalog facts and seller data audited" : ""].map(readableReason).filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).slice(0, 6);
   const title = mission.goal || "Your recommended setup";
-  return <section className={styles.canvas}><header className={styles.heading}><span>{title.toUpperCase()}</span><h2>{isComparison ? "Your AI Shortlist" : "Your AI Bundle Canvas"}</h2>{!isComparison && <><strong>RM {total.toLocaleString("en-MY", { minimumFractionDigits: 0 })}</strong>{budgetRemaining !== null && <small>{budgetRemaining >= 0 ? `RM ${budgetRemaining.toLocaleString()} under budget` : `RM ${Math.abs(budgetRemaining).toLocaleString()} over budget`}</small>}</>}</header><div className={styles.diagram}>{diagramItems.map((item, index) => <ProductNode item={item} slot={index} key={item.product_id} onRemove={onRemove} />)}{!isComparison && diagramItems.length > 1 && <span className={styles.compatible}>COMPATIBILITY CHECKED</span>}</div>{primary.length > 4 && <div className={styles.extras}>{primary.slice(4).map((item) => <Link href={`/product/${item.product_id}`} key={item.product_id}>+ {item.name} · RM {Number(item.price).toLocaleString("en-MY", { maximumFractionDigits: 0 })}</Link>)}</div>}<div className={styles.why}><span><CircleHelp size={15} /> {isComparison ? "WHY THESE OPTIONS?" : "WHY THIS SETUP?"}</span><ul>{(reasons.length ? reasons : ["Selected for your stated mission", "Verified against the current Shopy catalog", "Bundle total calculated from live product prices"]).map((reason) => <li key={reason}><Check size={13} />{reason}</li>)}</ul></div>{!isComparison && <button type="button" className={styles.add} disabled={adding || !items.length} onClick={onAdd}><ShoppingBag size={17} />{adding ? "Adding bundle…" : `Add ${items.length} ${items.length === 1 ? "item" : "items"}`}</button>}</section>;
+  return <section className={styles.canvas}>
+    <header className={styles.heading}><span>{title.toUpperCase()}</span><h2>{isComparison ? "Verified product shortlist" : "Recommended mission bundle"}</h2><p>{isComparison ? `${items.length} verified options to compare` : `${items.length} coordinated ${items.length === 1 ? "item" : "items"} selected for this mission`}</p>{!isComparison && <strong>RM {money(total)}</strong>}</header>
+    {!isComparison && hasBudget && budget !== null && <div className={`${styles.budgetCard} ${overBudget ? styles.budgetOver : styles.budgetWithin}`}><div><span>Bundle budget</span><b>RM {money(total)} <small>of RM {money(budget)}</small></b></div><strong>{overBudget ? `RM ${money(Math.abs(budgetRemaining ?? 0))} over` : `RM ${money(budgetRemaining ?? 0)} remaining`}</strong><div className={styles.budgetTrack} aria-label={`${Math.round(total / Math.max(budget, 1) * 100)} percent of budget used`}><i style={{ width: `${budgetPercent}%` }} /></div></div>}
+    <div className={`${styles.diagram} ${isComparison ? styles.comparison : ""}`}>{!isComparison && <div className={styles.bundleHub}><span><ShieldCheck size={18} /></span><div><small>RECOMMENDATION MAP</small><strong>{compatibilityVerified ? "Compatibility verified" : "Catalog-verified selection"}</strong></div><b>{items.length} {items.length === 1 ? "PICK" : "PICKS"}</b></div>}<div className={styles.productGrid}>{products.map((item, index) => <ProductNode item={item} index={index} key={item.product_id} onRemove={onRemove} />)}</div></div>
+    {!isComparison && plannedCount > 0 && <div className={styles.coverage}><div className={styles.coverageHeading}><span>PLAN COVERAGE</span><strong>{covered.length} of {plannedCount} roles covered</strong></div><div className={styles.coverageChips}>{covered.map((role) => <span className={styles.coveredChip} key={`covered-${role}`}><Check size={13} />{role}</span>)}{missing.map((role) => <span className={styles.missingChip} key={`missing-${role}`}><CircleAlert size={13} />Not found: {role}</span>)}</div>{missing.length > 0 && <p>The available recommendations remain usable, but these requested roles could not be filled from verified catalog matches.</p>}</div>}
+    <div className={styles.why}><span><CircleHelp size={15} /> {isComparison ? "WHY THESE OPTIONS?" : "WHY THIS SETUP?"}</span><ul>{(reasons.length ? reasons : ["Selected for your stated mission", "Verified against the current Shopy catalog", "Bundle total calculated from current product prices"]).map((reason) => <li key={reason}><Check size={14} />{reason}</li>)}</ul></div>
+    {!isComparison && <button type="button" className={styles.add} disabled={adding || !items.length} onClick={onAdd}><ShoppingBag size={17} />{adding ? "Adding bundle…" : `Add all ${items.length} ${items.length === 1 ? "item" : "items"}`}</button>}
+  </section>;
 }

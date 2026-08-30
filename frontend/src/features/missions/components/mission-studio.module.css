@@ -34,8 +34,8 @@
 }
 
 .liveStatus {
-  border: 1px solid rgba(109, 236, 218, 0.17);
-  border-radius: 999px;
+  border: 1px solid rgba(129, 140, 248, 0.2);
+  border-radius: 8px;
   padding: 9px 13px;
   background: rgba(12, 27, 44, 0.72);
   color: #c7d6e6;
@@ -48,8 +48,8 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #70e6cb;
-  box-shadow: 0 0 14px rgba(112, 230, 203, 0.8);
+  background: #7c8cff;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.48);
 }
 
 .hero {
@@ -70,7 +70,7 @@
   width: 430px;
   height: 430px;
   border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, rgba(102, 226, 239, 0.36), rgba(106, 74, 231, 0.17) 42%, transparent 68%);
+  background: radial-gradient(circle at 40% 35%, rgba(82, 102, 219, 0.24), rgba(42, 52, 110, 0.13) 42%, transparent 68%);
   filter: blur(3px);
   pointer-events: none;
 }
@@ -91,7 +91,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #78e8f4;
+  color: #92a0ff;
   font-size: 12px;
   font-weight: 850;
   letter-spacing: 0.14em;
@@ -109,7 +109,7 @@
 
 .heroCopy h1 em {
   font-style: normal;
-  background: linear-gradient(105deg, #72e6ef 5%, #a496ff 82%);
+  background: linear-gradient(105deg, #d9deff 5%, #8d9cff 82%);
   background-clip: text;
   color: transparent;
 }
@@ -139,16 +139,16 @@
 }
 
 .heroSignals svg {
-  color: #76e4c7;
+  color: #8796f5;
 }
 
 .briefPreview {
   overflow: hidden;
-  border: 1px solid rgba(134, 216, 236, 0.24);
-  border-radius: 24px;
+  border: 1px solid rgba(139, 151, 199, 0.2);
+  border-radius: 14px;
   padding: 25px;
-  background: linear-gradient(145deg, rgba(13, 30, 54, 0.94), rgba(22, 25, 65, 0.94));
-  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.26), inset 0 1px rgba(255, 255, 255, 0.05);
+  background: linear-gradient(145deg, rgba(14, 19, 35, 0.98), rgba(18, 22, 43, 0.98));
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24), inset 0 1px rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(18px);
 }
 
@@ -159,7 +159,7 @@
   width: 160px;
   height: 160px;
   border-radius: 50%;
-  background: rgba(88, 221, 235, 0.11);
+  background: rgba(98, 112, 223, 0.08);
   content: "";
 }
 
@@ -179,10 +179,10 @@
 }
 
 .previewTopline b {
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 7px 9px;
-  background: rgba(104, 231, 208, 0.1);
-  color: #76e4c7;
+  background: rgba(99, 102, 241, 0.11);
+  color: #aab4ff;
 }
 
 .briefPreview > p {
@@ -225,9 +225,9 @@
 .inputPanel,
 .progressPanel {
   border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 18px;
-  background: linear-gradient(150deg, rgba(12, 20, 38, 0.98), rgba(15, 25, 46, 0.96));
-  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.16), inset 0 1px rgba(255, 255, 255, 0.025);
+  border-radius: 12px;
+  background: linear-gradient(150deg, rgba(12, 17, 30, 0.99), rgba(15, 20, 37, 0.98));
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.18), inset 0 1px rgba(255, 255, 255, 0.025);
 }
 
 .inputPanel {
@@ -271,14 +271,14 @@
 }
 
 .inputSurface:focus-within {
-  border-color: rgba(45, 212, 191, 0.68);
+  border-color: rgba(116, 132, 255, 0.7);
   background: #0a1327;
-  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.11);
 }
 
 .inputSparkle {
   margin: 0;
-  color: #73e8f3;
+  color: #9ca8ff;
 }
 
 .inputSurface textarea {
@@ -304,11 +304,11 @@
   gap: 8px;
   width: 52px;
   height: 52px;
-  border: 1px solid #35bba7;
-  border-radius: 9px;
+  border: 1px solid #7180ea;
+  border-radius: 8px;
   padding: 0;
-  background: #159782;
-  box-shadow: 0 6px 14px rgba(10, 115, 99, 0.22);
+  background: #5363d5;
+  box-shadow: 0 7px 16px rgba(29, 39, 112, 0.3);
   color: #f8fffd;
   cursor: pointer;
   font: 750 13px var(--font-sans);
@@ -316,9 +316,9 @@
 }
 
 .launchButton:hover:not(:disabled) {
-  border-color: #5bdbc5;
-  background: #167f70;
-  box-shadow: 0 9px 18px rgba(10, 115, 99, 0.3);
+  border-color: #91a0ff;
+  background: #6272e4;
+  box-shadow: 0 9px 20px rgba(31, 42, 126, 0.35);
 }
 
 .launchButton:disabled {
@@ -353,9 +353,9 @@
   align-items: center;
   gap: 7px;
   border: 1px solid rgba(131, 166, 220, 0.2);
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 10px 13px;
-  background: rgba(28, 42, 77, 0.64);
+  background: rgba(27, 34, 61, 0.72);
   color: #dce6f4;
   font-size: 13px;
   font-weight: 700;
@@ -363,7 +363,7 @@
 }
 
 .chip svg {
-  color: #78e5ed;
+  color: #95a2ff;
 }
 
 button.chip {
@@ -390,7 +390,7 @@ button.chip {
   border: 0;
   padding: 3px 0;
   background: transparent;
-  color: #8edfe8;
+  color: #a8b2f3;
   cursor: pointer;
   font: 750 13px var(--font-sans);
 }
@@ -399,7 +399,7 @@ button.chip {
   position: relative;
   overflow: visible;
   padding: 34px;
-  background: linear-gradient(150deg, rgba(13, 23, 42, 0.98), rgba(12, 30, 47, 0.96));
+  background: linear-gradient(150deg, rgba(13, 19, 34, 0.99), rgba(14, 21, 40, 0.98));
 }
 
 .workspaceFocusBackdrop {
@@ -418,6 +418,49 @@ button.chip {
   max-height: calc(100dvh - 56px);
   overflow: visible;
 }
+
+.bundleReadyBackdrop {
+  position: fixed;
+  z-index: 95;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 5, 14, 0.72);
+  backdrop-filter: blur(12px) saturate(0.65);
+}
+
+.bundleReadyCard {
+  position: relative;
+  width: min(480px, 100%);
+  overflow: hidden;
+  border: 1px solid rgba(133, 145, 198, 0.32);
+  border-radius: 14px;
+  padding: clamp(28px, 5vw, 44px);
+  background: radial-gradient(circle at 50% 0, rgba(90, 105, 218, 0.16), transparent 44%), linear-gradient(145deg, rgba(13, 18, 32, 0.995), rgba(18, 21, 42, 0.995));
+  box-shadow: 0 30px 72px rgba(0, 0, 0, 0.52), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  text-align: center;
+}
+
+.bundleReadyIcon {
+  display: grid;
+  width: 70px;
+  height: 70px;
+  margin: 0 auto 20px;
+  place-items: center;
+  border: 1px solid rgba(139, 151, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(91, 105, 220, 0.13);
+  color: #aeb8ff;
+  box-shadow: 0 12px 28px rgba(22, 29, 91, 0.24);
+}
+
+.bundleReadyCard small { color: #9ca8ff; font-size: 10px; font-weight: 850; letter-spacing: 0.16em; }
+.bundleReadyCard h2 { margin: 10px 0 8px; color: #fff; font-family: var(--font-display); font-size: clamp(30px, 5vw, 42px); letter-spacing: -0.05em; }
+.bundleReadyCard p { margin: 0; color: #aebdd1; font-size: 14px; line-height: 1.55; }
+.bundleReadyCard > strong { display: block; margin-top: 18px; color: #c9d0ff; font-size: 25px; }
+.bundleReadyCard button { width: 100%; margin-top: 24px; border: 1px solid #7381e7; border-radius: 8px; padding: 14px 18px; background: #5868d8; color: #fff; cursor: pointer; font: 850 13px var(--font-sans); transition: background 180ms ease, transform 180ms ease; }
+.bundleReadyCard button:hover { background: #6676e6; transform: translateY(-1px); }
 
 .progressPanelFocus {
   min-height: min(530px, calc(100dvh - 56px));
@@ -481,7 +524,7 @@ button.chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #80e4d0;
+  color: #9eabff;
   font-size: 9px;
   letter-spacing: 0.13em;
 }
@@ -490,8 +533,8 @@ button.chip {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #7eead6;
-  box-shadow: 0 0 12px #7eead6;
+  background: #7d8bf1;
+  box-shadow: 0 0 10px rgba(125, 139, 241, 0.55);
   animation: livePulse 1.25s ease-in-out infinite;
 }
 
@@ -500,25 +543,25 @@ button.chip {
 }
 
 .progressPanel li.done i {
-  border-color: rgba(109, 229, 201, 0.22);
-  background: rgba(58, 178, 151, 0.1);
-  color: #72e5c9;
+  border-color: rgba(129, 140, 248, 0.24);
+  background: rgba(99, 102, 241, 0.11);
+  color: #aab4ff;
 }
 
 .progressPanel li.active {
   min-height: 62px;
-  border-color: rgba(45, 212, 191, 0.55);
-  background: rgba(15, 89, 90, 0.22);
-  color: #eefdfa;
-  box-shadow: inset 3px 0 #2dd4bf;
+  border-color: rgba(116, 132, 255, 0.52);
+  background: rgba(52, 60, 124, 0.22);
+  color: #f2f4ff;
+  box-shadow: inset 3px 0 #6978e4;
 }
 
 .progressPanel li.active i {
   width: 36px;
   height: 36px;
-  border-color: rgba(45, 212, 191, 0.56);
-  background: rgba(45, 212, 191, 0.12);
-  color: #8af0df;
+  border-color: rgba(116, 132, 255, 0.56);
+  background: rgba(99, 102, 241, 0.13);
+  color: #b8c0ff;
   box-shadow: none;
 }
 
@@ -536,12 +579,12 @@ button.chip {
   min-height: 334px;
   margin-top: 24px;
   overflow: hidden;
-  border: 1px solid rgba(111, 234, 224, 0.17);
-  border-radius: 18px;
+  border: 1px solid rgba(129, 140, 248, 0.17);
+  border-radius: 12px;
   padding: 16px;
   background:
-    radial-gradient(circle at 50% 53%, rgba(28, 210, 200, 0.16), transparent 38%),
-    linear-gradient(145deg, rgba(8, 22, 40, 0.88), rgba(10, 34, 48, 0.66));
+    radial-gradient(circle at 50% 53%, rgba(91, 105, 220, 0.14), transparent 38%),
+    linear-gradient(145deg, rgba(9, 15, 29, 0.9), rgba(15, 20, 42, 0.76));
   perspective: 860px;
 }
 
@@ -552,7 +595,7 @@ button.chip {
   left: 50%;
   width: 270px;
   height: 74px;
-  border: 1px solid rgba(78, 236, 222, 0.27);
+  border: 1px solid rgba(122, 135, 236, 0.25);
   border-radius: 50%;
   content: "";
   transform: translateX(-50%) rotateX(65deg);
@@ -569,7 +612,7 @@ button.chip {
   width: 186px;
   height: 186px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(104, 240, 225, 0.19), rgba(68, 133, 238, 0.08) 42%, transparent 69%);
+  background: radial-gradient(circle, rgba(107, 120, 231, 0.17), rgba(68, 85, 180, 0.07) 42%, transparent 69%);
   filter: blur(2px);
   transform: translateX(-50%);
   animation: orbitBreathe 3.8s ease-in-out infinite;
@@ -581,7 +624,7 @@ button.chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #79ede1;
+  color: #a8b2ff;
   font-size: 9px;
   font-weight: 850;
   letter-spacing: 0.12em;
@@ -598,33 +641,34 @@ button.chip {
   align-items: center;
   width: min(196px, 65%);
   min-height: 92px;
-  border: 1px solid rgba(120, 226, 222, 0.3);
+  border: 1px solid rgba(132, 145, 225, 0.28);
   border-radius: 15px;
   padding: 13px;
-  background: linear-gradient(140deg, rgba(21, 63, 80, 0.98), rgba(15, 29, 58, 0.96));
+  background: linear-gradient(140deg, rgba(27, 34, 67, 0.98), rgba(15, 21, 43, 0.97));
   box-shadow: 0 20px 42px rgba(0, 0, 0, 0.29), inset 0 1px rgba(255, 255, 255, 0.08);
   transform-style: preserve-3d;
 }
 
-.orbitCardFront { left: 50%; z-index: 3; margin-left: -98px; border-color: rgba(95, 245, 221, 0.72); box-shadow: 0 0 0 1px rgba(53, 211, 190, 0.13), 0 22px 48px rgba(2, 12, 28, 0.55), 0 0 34px rgba(47, 209, 193, 0.14); }
+.orbitCardFront { left: 50%; z-index: 3; margin-left: -98px; border-color: rgba(137, 150, 255, 0.7); box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.13), 0 22px 48px rgba(2, 7, 22, 0.55), 0 0 30px rgba(87, 100, 211, 0.13); }
 .orbitCardRight { right: -20px; z-index: 1; transform-origin: right center; }
 .orbitCardLeft { left: -20px; z-index: 1; transform-origin: left center; }
 
-.orbitNumber { display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid rgba(115, 239, 225, 0.38); border-radius: 10px; background: rgba(79, 220, 203, 0.12); color: #9af6e8; font-size: 10px; font-weight: 850; letter-spacing: 0.06em; }
+.orbitNumber { display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid rgba(137, 150, 255, 0.36); border-radius: 10px; background: rgba(91, 105, 220, 0.13); color: #c0c7ff; font-size: 10px; font-weight: 850; letter-spacing: 0.06em; }
 .orbitCard strong { color: #f2fbff; font-size: 13px; line-height: 1.2; }
-.orbitLive { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; color: #82eedc; font-size: 9px; font-weight: 850; letter-spacing: 0.13em; }
+.orbitLive { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; color: #abb5ff; font-size: 9px; font-weight: 850; letter-spacing: 0.13em; }
 .orbitLive svg { animation: spin 1.35s linear infinite; }
 .processingOrbit > p { position: absolute; z-index: 3; right: 16px; bottom: 14px; left: 16px; display: flex; align-items: center; justify-content: center; gap: 7px; margin: 0; color: #879cb7; font-size: 10px; line-height: 1.35; text-align: center; }
-.processingOrbit > p span { width: 6px; height: 6px; border-radius: 50%; background: #75ead5; box-shadow: 0 0 12px #75ead5; animation: livePulse 1.25s ease-in-out infinite; }
+.processingOrbit > p span { width: 6px; height: 6px; border-radius: 50%; background: #7f8df0; box-shadow: 0 0 10px rgba(127, 141, 240, 0.55); animation: livePulse 1.25s ease-in-out infinite; }
 
 .results {
   display: grid;
   gap: 24px;
   margin-top: 24px;
   border: 1px solid rgba(139, 161, 222, 0.18);
-  border-radius: 30px;
+  border-radius: 16px;
   padding: clamp(26px, 4vw, 48px);
-  background: linear-gradient(145deg, rgba(10, 18, 40, 0.96), rgba(15, 19, 49, 0.95));
+  background: linear-gradient(145deg, rgba(10, 15, 29, 0.98), rgba(16, 19, 39, 0.97));
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.2);
 }
 
 .resultHeading {
@@ -636,13 +680,13 @@ button.chip {
   position: absolute;
   right: 0;
   bottom: 5px;
-  color: #7ee9d1;
+  color: #c1c8ff;
   font-size: clamp(23px, 3vw, 36px);
 }
 
 .optimizations {
   border: 1px solid rgba(139, 165, 221, 0.15);
-  border-radius: 17px;
+  border-radius: 10px;
   padding: 18px;
   background: rgba(7, 15, 34, 0.58);
 }
@@ -661,9 +705,9 @@ button.chip {
   align-items: center;
   gap: 7px;
   border: 1px solid rgba(133, 173, 226, 0.2);
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 10px 13px;
-  background: rgba(27, 42, 76, 0.7);
+  background: rgba(27, 34, 63, 0.74);
   color: #dce8f5;
   cursor: pointer;
   font: 750 13px var(--font-sans);
@@ -673,9 +717,9 @@ button.chip {
 .optimizations button:hover,
 .alternatives button:hover,
 .error button:hover {
-  border-color: rgba(102, 225, 239, 0.55);
-  background: rgba(45, 77, 114, 0.76);
-  transform: translateY(-2px);
+  border-color: rgba(132, 145, 255, 0.54);
+  background: rgba(50, 59, 114, 0.72);
+  transform: translateY(-1px);
 }
 
 .optimizations button:disabled {
@@ -685,10 +729,10 @@ button.chip {
 
 .feedbackForm {
   margin-top: 14px;
-  border: 1px solid rgba(120, 225, 239, 0.18);
-  border-radius: 17px;
+  border: 1px solid rgba(132, 145, 213, 0.2);
+  border-radius: 10px;
   padding: 16px;
-  background: rgba(8, 24, 45, 0.58);
+  background: rgba(11, 17, 33, 0.72);
 }
 
 .feedbackForm label {
@@ -717,14 +761,14 @@ button.chip {
 }
 
 .feedbackForm input:focus {
-  border-color: rgba(111, 229, 240, 0.72);
+  border-color: rgba(125, 139, 244, 0.72);
 }
 
 .feedbackForm button {
   border: 0;
   border-radius: 10px;
   padding: 10px 13px;
-  background: linear-gradient(135deg, #7863e8, #28bbd1);
+  background: #5969d9;
   color: #fff;
   cursor: pointer;
   font: 800 12px var(--font-sans);
@@ -751,7 +795,7 @@ button.chip {
 }
 
 .insight span {
-  color: #79e6f0;
+  color: #9ca8ff;
   font-size: 11px;
   font-weight: 850;
   letter-spacing: 0.13em;
@@ -786,7 +830,7 @@ button.chip {
 }
 
 .alternatives article > svg {
-  color: #78e6ef;
+  color: #9ca8ff;
 }
 
 .alternatives article strong {
@@ -881,7 +925,7 @@ button.chip {
 }
 
 @keyframes livePulse {
-  50% { opacity: 0.35; box-shadow: 0 0 3px #7eead6; transform: scale(0.7); }
+  50% { opacity: 0.35; box-shadow: 0 0 3px #7f8df0; transform: scale(0.7); }
 }
 
 @keyframes orbitBreathe {

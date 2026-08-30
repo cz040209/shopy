@@ -11,15 +11,16 @@ class WorkflowManager:
     may describe requested actions, but cannot cause an unknown stage to run.
     """
 
-    _VALID_STAGES = ("review_intelligence", "compatibility", "bundle_optimizer")
+    _VALID_STAGES = ("compatibility", "bundle_optimizer")
 
     def plan(self, state: dict[str, Any], actions: list[str]) -> dict[str, Any]:
         mission_type = str(state.get("mission_type", "")).casefold()
-        requested = set(actions)
         stages: list[str] = []
-        if "get_product_reviews" in requested:
-            stages.append("review_intelligence")
-        if mission_type in {"build_setup", "bundle"} or len(state.get("required_categories", [])) > 1:
+        if (
+            state.get("recommendation_mode") == "bundle"
+            or mission_type in {"build_setup", "bundle"}
+            or len(state.get("required_categories", [])) > 1
+        ):
             stages.append("bundle_optimizer")
         # Compatibility is meaningful only after a tentative bundle exists.
         if state.get("owned_items") or mission_type in {"build_setup", "bundle"}:

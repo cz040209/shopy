@@ -65,6 +65,10 @@ Rules:
 - When planning_context is supplied, turn its summary, steps, and follow-up
   questions into a clear customer-facing plan. Suggested shopping categories
   are planning suggestions, not catalog availability claims.
+- When vision_context is supplied, treat existing_items as already owned and
+  possible_shopping_needs as contextual leads. Recommend only verified catalog
+  products selected for the reconciled required_categories; do not recommend a
+  photographed item merely because it is visible.
 - Ask a concise follow-up only when the verified data is insufficient.
 - When repair_feedback or fulfillment_gaps is supplied, correct the listed issue
   and clearly explain any verified requirement that cannot be fulfilled. Never
@@ -76,6 +80,10 @@ Rules:
   useful trade-off or requirement, and leave both product_ids and
   unfulfilled_requirements empty. Do not claim the product type itself is
   unavailable.
+- For a refinement, describe an option as lower/higher/better than the prior
+  selection only when selection_context contains the applied comparison and
+  verified reference value. For bundle-total comparisons, state the prior and
+  new verified totals when useful; never infer improvement from product names.
 - Apply the supplied brand_voice_guidance style, but phrase the answer naturally
   for this request. Avoid canned openings such as "I can help with that" and do
   not reuse a fixed sentence template. Lead with the requested fact or result."""
@@ -193,9 +201,9 @@ class BrandVoiceAgent:
             "budget_guidance": self._budget_guidance(state, products),
             "bundle_budget_guidance": self._bundle_budget_guidance(state),
             "verified_tool_results": state.get("tool_context", []),
-            "verified_review_insights": state.get("review_insights", {}),
             "verified_compatibility": state.get("compatibility_results", []),
             "verified_bundle": state.get("bundle"),
+            "vision_context": state.get("vision_context"),
             "planning_context": state.get("planning_context"),
             "fulfillment_gaps": state.get("fulfillment_gaps", []),
             "fulfillment_requirements": state.get("fulfillment_requirements", []),
@@ -547,8 +555,21 @@ class BrandVoiceAgent:
         if kind == "category":
             attributes = product.get("attributes", {})
             department = attributes.get("department", "") if isinstance(attributes, dict) else ""
-            category_evidence = f"{identity} {department}".casefold()
-            return BrandVoiceAgent._terms_present(value, category_evidence)
+            typed_values = [
+                str(item) for key, item in attributes.items()
+                if key.casefold() in {"type", "product_type"} or key.casefold().endswith("_category")
+            ] if isinstance(attributes, dict) else []
+            identity_parts = [str(product.get("name", "")), str(product.get("category", "")), *typed_values]
+            requested = BrandVoiceAgent._normalized_terms(value)
+            available = set(BrandVoiceAgent._normalized_terms(" ".join(identity_parts)))
+            heads = {
+                terms[-1] for part in identity_parts
+                if (terms := BrandVoiceAgent._normalized_terms(part))
+            }
+            # Department is useful corroborating evidence but is too broad to
+            # establish the product's actual role by itself.
+            available.update(BrandVoiceAgent._normalized_terms(str(department)))
+            return bool(requested) and set(requested).issubset(available) and requested[-1] in heads
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})
             attribute_value = str(attributes.get(field, "")) if isinstance(attributes, dict) else ""

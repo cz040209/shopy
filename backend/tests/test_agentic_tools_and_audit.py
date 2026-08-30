@@ -457,10 +457,9 @@ async def test_orchestrator_executes_each_planned_catalog_action(db_session):
 
     assert result["audit_result"]["status"] == "pass"
     assert [item["tool"] for item in result["tool_context"]] == [
-        "product_resolution", "get_product", "get_seller",
+        "product_resolution", "get_product", "get_product_reviews", "get_product_reviews", "get_seller",
         "compare_products", "calculate_bundle_total",
     ]
-    assert result["review_insights"]
 
 
 @pytest.mark.anyio

@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowLeft, CircleCheck, RefreshCw, WandSparkles } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, apiFetch } from "@/lib/api";
 import { useCart } from "@/features/cart/cart-context";
 import AIProgressPanel from "./AIProgressPanel";
@@ -19,6 +19,65 @@ import styles from "./mission-studio.module.css";
 const emptyMission: MissionData = { preferences: [], owned_items: [], priorities: [] };
 const progressStepCount = 6;
 const stageDurationMs = 1800;
+const workspaceStorageKey = "shopy:mission-workspace:v1";
+
+type StoredMissionWorkspace = {
+  version: 1;
+  routeMission: string;
+  request: string;
+  analysis: string;
+  mission: MissionData;
+  items: Attachment[];
+  workspace: BundleWorkspace;
+  history: MissionHistoryItem[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAttachment(value: unknown): value is Attachment {
+  if (!isRecord(value)) return false;
+  return typeof value.product_id === "string"
+    && typeof value.name === "string"
+    && (typeof value.price === "string" || typeof value.price === "number")
+    && typeof value.currency === "string"
+    && typeof value.image_url === "string";
+}
+
+function isHistoryItem(value: unknown): value is MissionHistoryItem {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.label === "string"
+    && typeof value.total === "number"
+    && typeof value.at === "string";
+}
+
+function readStoredWorkspace(): StoredMissionWorkspace | null {
+  try {
+    const raw = window.sessionStorage.getItem(workspaceStorageKey);
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)
+      || value.version !== 1
+      || typeof value.routeMission !== "string"
+      || typeof value.request !== "string"
+      || typeof value.analysis !== "string"
+      || !value.analysis.trim()
+      || !isRecord(value.mission)
+      || !Array.isArray(value.items)
+      || !value.items.every(isAttachment)
+      || !isRecord(value.workspace)
+      || !Array.isArray(value.history)
+      || !value.history.every(isHistoryItem)) {
+      return null;
+    }
+    return value as StoredMissionWorkspace;
+  } catch {
+    // Storage can be unavailable or contain data from an older app version.
+    return null;
+  }
+}
 
 function draftMission(text: string): MissionData {
   const budget = text.match(/(?:under|below|budget(?:\s+of)?|within)\s*(?:rm)?\s*([\d,]+)/i)?.[1];
@@ -68,6 +127,8 @@ export default function MissionWorkspace() {
   const [adding, setAdding] = useState(false);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
   const [feedback, setFeedback] = useState("");
+  const [showBundleReady, setShowBundleReady] = useState(false);
+  const resultsRef = useRef<HTMLElement>(null);
   const { refreshCart } = useCart();
   const complete = Boolean(analysis);
   const total = useMemo(() => items.reduce((sum, item) => sum + Number(item.price), 0), [items]);
@@ -80,6 +141,53 @@ export default function MissionWorkspace() {
     return () => window.clearInterval(timer);
   }, [busy]);
 
+  useEffect(() => {
+    const stored = readStoredWorkspace();
+    // A mission supplied in the URL represents a new brief unless it matches
+    // the saved workspace (as it does when returning from a product page).
+    if (!stored || stored.routeMission !== initialRequest) return;
+    const frame = window.requestAnimationFrame(() => {
+      setRequest(stored.request);
+      setAnalysis(stored.analysis);
+      setMission({ ...emptyMission, ...stored.mission });
+      setItems(stored.items);
+      setBundleWorkspace(stored.workspace);
+      setHistory(stored.history.slice(0, 5));
+      setProgressStep(progressStepCount);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialRequest]);
+
+  useEffect(() => {
+    if (!analysis.trim()) return;
+    const snapshot: StoredMissionWorkspace = {
+      version: 1,
+      routeMission: initialRequest,
+      request,
+      analysis,
+      mission,
+      items,
+      workspace: bundleWorkspace,
+      history: history.slice(0, 5),
+    };
+    try {
+      window.sessionStorage.setItem(workspaceStorageKey, JSON.stringify(snapshot));
+    } catch {
+      // The recommendation remains usable even when browser storage is blocked.
+    }
+  }, [analysis, bundleWorkspace, history, initialRequest, items, mission, request]);
+
+  useEffect(() => {
+    if (!showBundleReady) return;
+    const timer = window.setTimeout(() => setShowBundleReady(false), 6000);
+    return () => window.clearTimeout(timer);
+  }, [showBundleReady]);
+
+  const revealBundle = () => {
+    setShowBundleReady(false);
+    resultsRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  };
+
   const runMission = async (nextRequest = request) => {
     if (!nextRequest.trim()) return;
     const startedAt = performance.now();
@@ -89,6 +197,7 @@ export default function MissionWorkspace() {
     setAnalysis("");
     setItems([]);
     setBundleWorkspace({});
+    setShowBundleReady(false);
 
     try {
       const response = await fetch(`${API_URL}/api/chat`, {
@@ -121,6 +230,7 @@ export default function MissionWorkspace() {
       setItems(nextItems);
       setBundleWorkspace(data.workspace ?? {});
       setMission({ ...emptyMission, ...data.mission });
+      setShowBundleReady(nextItems.length > 0);
       setHistory((previous) => [{
         id: crypto.randomUUID(),
         label: data.mission?.goal || nextRequest,
@@ -176,7 +286,7 @@ export default function MissionWorkspace() {
         <Link className={styles.back} href="/">
           <ArrowLeft size={18} /> All missions
         </Link>
-        <span className={styles.liveStatus}><i /> AI mission studio</span>
+        <span className={styles.liveStatus}><i /> Mission control</span>
       </motion.nav>
 
       <motion.header
@@ -258,6 +368,38 @@ export default function MissionWorkspace() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showBundleReady && items.length > 0 && (
+          <motion.div
+            className={styles.bundleReadyBackdrop}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.24 }}
+            role="status"
+            aria-live="polite"
+            aria-label="Your recommendations are ready"
+            onClick={revealBundle}
+          >
+            <motion.div
+              className={styles.bundleReadyCard}
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 24, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -12, scale: 0.97 }}
+              transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <span className={styles.bundleReadyIcon}><CircleCheck size={34} /></span>
+              <small>RECOMMENDATION COMPLETE</small>
+              <h2>Your verified selection is ready.</h2>
+              <p>{items.length} catalog-verified {items.length === 1 ? "item is" : "items are"} ready for review.</p>
+              <strong>RM {total.toLocaleString("en-MY", { maximumFractionDigits: 0 })}</strong>
+              <button type="button" onClick={revealBundle}>View recommendations</button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="wait">
         {error && (
           <motion.section className={styles.error} key="error" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
@@ -269,14 +411,15 @@ export default function MissionWorkspace() {
         {complete && (
           <motion.section
             className={styles.results}
+            ref={resultsRef}
             key="results"
             initial={{ opacity: 0, y: 26, scale: 0.99 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
           >
             <div className={styles.resultHeading}>
-              <span>MISSION COMPLETE</span>
-              <h2>Your bundle, ready to explore.</h2>
+              <span>VERIFIED OUTPUT</span>
+              <h2>Your recommendation, ready for review.</h2>
               {items.length > 0 && <strong>RM {total.toLocaleString("en-MY", { maximumFractionDigits: 0 })}</strong>}
             </div>
             <OptimizationActions disabled={busy} onPick={refine} />

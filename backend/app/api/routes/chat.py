@@ -290,6 +290,8 @@ async def chat(
         "compatibility": trace.state.get("compatibility_results", []),
         "product_rankings": trace.state.get("product_rankings", []),
         "audit": trace.state.get("audit_result", {}),
+        "fulfillment_gaps": trace.state.get("fulfillment_gaps", []),
+        "unfulfilled_requirements": trace.state.get("unfulfilled_requirements", []),
     }
     return ChatResponse(
         reply=reply, conversation_id=conversation.id, attachments=attachments,
