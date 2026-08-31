@@ -236,6 +236,8 @@ class ProductSearchAgent:
         values.extend(
             requirement.get("value", "") for requirement in state.get("fulfillment_requirements", [])
             if isinstance(requirement, dict)
+            and str(requirement.get("kind", "")).casefold().strip()
+            in {"category", "feature", "attribute"}
         )
         return {
             cls._normalize_token(token)

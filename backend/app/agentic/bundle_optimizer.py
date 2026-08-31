@@ -251,7 +251,11 @@ class BundleOptimizerAgent:
             choice = next((item for item in options if (price := self._price(item)) is not None and (budget_limit is None or total + price <= budget_limit)), None)
             if choice is not None:
                 selected.append(choice); total += self._price(choice) or Decimal("0"); covered.append(category)
-        if not selected and products:
+        # With explicit roles, an arbitrary affordable product is not a valid
+        # fallback: it creates a recommendation unrelated to the planned need.
+        # The empty selection plus verified gaps is the honest result. Retain
+        # the broad fallback only when there are no product-role constraints.
+        if not selected and products and not state.get("required_categories"):
             for product in sorted(products, key=lambda item: (
                 (self._price(item) or Decimal("Infinity")) if prefer_lower_total else -self._score(item, state, plan),
                 str(item["name"]),

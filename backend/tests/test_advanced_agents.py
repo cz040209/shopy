@@ -224,3 +224,23 @@ async def test_exact_catalog_role_overrides_an_incorrect_semantic_mapping():
     result = await BundleOptimizerAgent(WrongMappingModel()).run(state)
 
     assert result["selected_products"] == [{"id": "arm", "quantity": 1}]
+
+
+@pytest.mark.anyio
+async def test_bundle_optimizer_does_not_fallback_to_an_unrelated_affordable_product():
+    state = initial_shopping_state("Build a kit within my budget")
+    state.update({
+        "budget": 500,
+        "recommendation_mode": "bundle",
+        "required_categories": ["compact first aid kit"],
+        "candidate_products": [{
+            "id": "unrelated", "name": "Decorative Desk Tray", "brand": "Test",
+            "category": "Office Decor", "price": "49", "currency": "MYR",
+            "inventory_quantity": 2, "specs": [], "attributes": {},
+        }],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["selected_products"] == []
+    assert result["bundle"]["required_category_coverage"]["missing"] == ["compact first aid kit"]

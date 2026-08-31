@@ -113,10 +113,12 @@ class BrandVoiceAgent:
     """Turn verified tool data into a varied, customer-facing Shopy response."""
 
     source = "structured_llm_brand_voice_v1"
+    fallback_source = "deterministic_catalog_renderer_v1"
     _NON_SHOPPING_MISSIONS = {"information_request", "greeting", "smalltalk"}
     stock_source = "structured_llm_brand_voice_stock_v1"
     _VOICE_STYLES = ("warm and clear", "direct and helpful", "upbeat and concise", "calm and reassuring")
     _GENERIC_REQUIREMENT_TERMS = {"item", "items", "option", "options", "product", "products"}
+    _SHOPPING_REQUIREMENT_KINDS = {"category", "feature", "attribute"}
 
     def __init__(
         self,
@@ -216,36 +218,160 @@ class BrandVoiceAgent:
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
         expected_ids = {str(product["id"]) for product in products}
-        draft = (
-            await self._draft_with_catalog_selection(messages, payload, state, expected_ids)
-            if catalog_selection_required
-            else await self._draft_with_product_coverage(messages, payload, state, expected_ids)
-        )
-        drafted_ids = [str(product_id) for product_id in draft.product_ids]
-        # Tool-information responses (seller, reviews, details, comparisons,
-        # and bundle totals) intentionally have no recommendation cards. The
-        # model may still echo an ID from the candidate context; it is not a
-        # customer-facing claim, so discard it instead of failing the whole run.
-        if not expected_ids:
-            drafted_ids = []
-        elif catalog_selection_required and not self._is_valid_catalog_selection(drafted_ids, expected_ids):
-            raise ResponseDraftError("Response model must select one to four verified catalog products.")
-        elif not catalog_selection_required and not self._has_exact_product_coverage(drafted_ids, expected_ids):
-            raise ResponseDraftError("Response model must reference exactly the verified selected products.")
-
         products_by_id = {str(product["id"]): product for product in products}
-        draft = await self._ensure_exact_product_names(
-            draft, payload, state, products_by_id, drafted_ids
-        )
+        drafted_ids: list[str] = []
+        response_source = self.source
+        try:
+            draft = (
+                await self._draft_with_catalog_selection(messages, payload, state, expected_ids)
+                if catalog_selection_required
+                else await self._draft_with_product_coverage(messages, payload, state, expected_ids)
+            )
+            drafted_ids = [str(product_id) for product_id in draft.product_ids]
+            # Tool-information responses (seller, reviews, details, comparisons,
+            # and bundle totals) intentionally have no recommendation cards. The
+            # model may still echo an ID from the candidate context; it is not a
+            # customer-facing claim, so discard it instead of failing the whole run.
+            if not expected_ids:
+                drafted_ids = []
+            elif catalog_selection_required and not self._is_valid_catalog_selection(drafted_ids, expected_ids):
+                raise ResponseDraftError("Response model must select one to four verified catalog products.")
+            elif not catalog_selection_required and not self._has_exact_product_coverage(drafted_ids, expected_ids):
+                raise ResponseDraftError("Response model must reference exactly the verified selected products.")
+
+            draft = await self._ensure_exact_product_names(
+                draft, payload, state, products_by_id, drafted_ids
+            )
+            required_missing = self._verified_missing_requirements(state)
+            declared_missing = {
+                value.casefold().strip() for value in draft.unfulfilled_requirements
+            }
+            if any(
+                missing.casefold() not in declared_missing
+                or missing.casefold() not in draft.response.casefold()
+                for missing in required_missing
+            ):
+                raise ResponseDraftError(
+                    "Response model did not visibly disclose every verified fulfillment gap."
+                )
+        except Exception as error:
+            # Product selection, totals, and gaps have already been verified by
+            # deterministic stages. A wording/schema/provider failure must not
+            # turn that safe result into a 503. Render only those verified facts;
+            # never infer a replacement product or domain-specific recommendation.
+            log_ai_event(
+                "agent.brand_voice.safe_fallback",
+                request_id=str(state.get("run_id", "")),
+                reason=type(error).__name__,
+            )
+            drafted_ids = self._fallback_product_ids(
+                state,
+                products_by_id,
+                catalog_selection_required=catalog_selection_required,
+                preferred_ids=drafted_ids,
+            )
+            draft = self._safe_fallback_draft(state, products_by_id, drafted_ids)
+            response_source = self.fallback_source
         claims = [self._claim(products_by_id[product_id]) for product_id in drafted_ids]
         return {
             "final_response": draft.response.strip(),
             "selected_products": [{"id": product_id, "quantity": 1} for product_id in drafted_ids],
             "response_claims": claims,
-            "response_source": self.source,
+            "response_source": response_source,
             "attachments": self._attachments(products_by_id, drafted_ids),
             "unfulfilled_requirements": draft.unfulfilled_requirements,
         }
+
+    @classmethod
+    def _fallback_product_ids(
+        cls,
+        state: dict[str, Any],
+        products_by_id: dict[str, dict[str, Any]],
+        *,
+        catalog_selection_required: bool,
+        preferred_ids: list[str],
+    ) -> list[str]:
+        """Resolve safe response IDs solely from verified selection state."""
+        if catalog_selection_required:
+            candidate_ids = set(products_by_id)
+            if cls._is_valid_catalog_selection(preferred_ids, candidate_ids):
+                return preferred_ids
+            deterministic = cls.select_catalog_products(state, limit=4)
+            return [
+                str(item["id"]) for item in deterministic
+                if str(item.get("id")) in candidate_ids
+            ]
+        selected_ids = [
+            str(item.get("id")) for item in state.get("selected_products", [])
+            if isinstance(item, dict) and str(item.get("id")) in products_by_id
+        ]
+        return list(dict.fromkeys(selected_ids))
+
+    @staticmethod
+    def _safe_fallback_draft(
+        state: dict[str, Any],
+        products_by_id: dict[str, dict[str, Any]],
+        product_ids: list[str],
+    ) -> ResponseDraft:
+        """Render a useful response without adding any unverified prose facts."""
+        missing = BrandVoiceAgent._verified_missing_requirements(state)
+
+        lines: list[str] = []
+        if product_ids:
+            lines.append(
+                "Here is the verified selection I could assemble:" if missing
+                else "Your verified selection is ready:"
+            )
+            total = Decimal("0")
+            for product_id in product_ids:
+                product = products_by_id[product_id]
+                price = Decimal(str(product["price"]))
+                total += price
+                lines.append(f"- {product['name']} — RM {price.quantize(Decimal('0.01'))}")
+            if state.get("recommendation_mode") == "bundle":
+                lines.append(f"Bundle total: RM {total.quantize(Decimal('0.01'))}.")
+                if state.get("budget") is not None:
+                    target = Decimal(str(state["budget"]))
+                    if total > target:
+                        lines.append(
+                            f"This is RM {(total - target).quantize(Decimal('0.01'))} above your budget."
+                        )
+        else:
+            lines.append("I could not assemble a verified product selection from the current catalog.")
+        if missing:
+            lines.append("I could not verify a matching item for: " + ", ".join(missing) + ".")
+            lines.append("Tell me which requirement or trade-off you would like to adjust, and I can try again.")
+        elif not product_ids:
+            lines.append("Add a product type or adjust the constraints, and I can search again.")
+        return ResponseDraft(
+            response="\n".join(lines),
+            product_ids=product_ids,
+            unfulfilled_requirements=missing,
+        )
+
+    @staticmethod
+    def _verified_missing_requirements(state: dict[str, Any]) -> list[str]:
+        """Return exact typed roles backed by optimizer/search gap records."""
+        missing: list[str] = []
+        bundle = state.get("bundle") if isinstance(state.get("bundle"), dict) else {}
+        coverage = bundle.get("required_category_coverage", {}) if isinstance(bundle, dict) else {}
+        if isinstance(coverage, dict):
+            missing.extend(
+                str(value).strip() for value in coverage.get("missing", [])
+                if str(value).strip()
+            )
+        gaps = [str(value) for value in state.get("fulfillment_gaps", [])]
+        for requirement in state.get("fulfillment_requirements", []):
+            if (
+                not isinstance(requirement, dict)
+                or str(requirement.get("kind", "")).casefold().strip()
+                not in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+            ):
+                continue
+            value = str(requirement.get("value", "")).strip()
+            if value and any(value.casefold() in gap.casefold() for gap in gaps):
+                missing.append(value)
+        return list(dict.fromkeys(missing))[:30]
 
     async def polish(self, state: dict[str, Any]) -> dict[str, Any]:
         """Produce the final wording without changing the already-audited facts."""
@@ -264,9 +390,10 @@ class BrandVoiceAgent:
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
             ])
             polished = PolishedResponseDraft.model_validate(_json_object(response.content))
-        except (StructuredOutputError, ValidationError):
+        except Exception:
             # The audited draft is safer than retrying with an unconstrained
-            # fallback response when the editor cannot meet its strict schema.
+            # fallback response when the optional editor is unavailable or
+            # cannot meet its strict schema.
             return {"final_response": original.strip()}
         return {"final_response": polished.response.strip()}
 
@@ -453,7 +580,11 @@ class BrandVoiceAgent:
         remaining = Decimal(str(budget)) if budget is not None else None
         selected: list[dict[str, Any]] = []
         excluded = {str(product_id) for product_id in state.get("excluded_product_ids", [])}
-        requirements = [item for item in state.get("fulfillment_requirements", []) if isinstance(item, dict)]
+        requirements = [
+            item for item in state.get("fulfillment_requirements", [])
+            if isinstance(item, dict)
+            and str(item.get("kind", "")).casefold().strip() in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+        ]
         single_recommendation = state.get("recommendation_mode", "single") == "single"
         selection_limit = max(1, min(12, limit if limit is not None else max(2 if single_recommendation else 1, len(requirements) or 3)))
         uncovered = set(range(len(requirements)))
@@ -527,13 +658,19 @@ class BrandVoiceAgent:
         for requirement in state.get("fulfillment_requirements", []):
             if not isinstance(requirement, dict) or not str(requirement.get("value", "")).strip():
                 continue
+            if str(requirement.get("kind", "")).casefold().strip() not in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS:
+                continue
             if not any(BrandVoiceAgent._matches_requirement(product, requirement) for product in products):
                 gaps.append(f"No verified catalog match for: {requirement['value']}")
         return gaps
 
     @staticmethod
     def _meets_fulfillment_requirements(product: dict[str, Any], state: dict[str, Any]) -> bool:
-        requirements = [item for item in state.get("fulfillment_requirements", []) if isinstance(item, dict)]
+        requirements = [
+            item for item in state.get("fulfillment_requirements", [])
+            if isinstance(item, dict)
+            and str(item.get("kind", "")).casefold().strip() in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+        ]
         return all(BrandVoiceAgent._matches_requirement(product, requirement) for requirement in requirements)
 
     @staticmethod

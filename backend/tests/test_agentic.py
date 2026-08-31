@@ -270,6 +270,131 @@ async def test_brand_voice_retries_a_valid_draft_that_omits_a_verified_product_i
     assert result["response_claims"][0]["id"] == product_id
 
 
+@pytest.mark.anyio
+async def test_brand_voice_uses_verified_renderer_when_model_keeps_renaming_product():
+    product_id = "22222222-2222-2222-2222-222222222222"
+
+    class RenamingModel:
+        async def ainvoke(self, input, **kwargs):
+            return AIMessage(content=json.dumps({
+                "response": "A shortened product name for RM 49.00.",
+                "product_ids": [product_id],
+                "unfulfilled_requirements": [],
+            }))
+
+    state = initial_shopping_state("Recommend an item")
+    state.update({
+        "candidate_products": [{
+            "id": product_id, "slug": "exact-product", "name": "Exact Verified Product Name",
+            "brand": "Shopy", "price": "49.00", "currency": "MYR",
+            "inventory_quantity": 3, "category": "Accessories", "specs": [],
+            "attributes": {}, "image_url": None,
+        }],
+        "selected_products": [{"id": product_id, "quantity": 1}],
+    })
+
+    result = await BrandVoiceAgent(RenamingModel(), max_format_attempts=2).compose(state)
+
+    assert "Exact Verified Product Name" in result["final_response"]
+    assert result["selected_products"] == [{"id": product_id, "quantity": 1}]
+    assert result["response_source"] == "deterministic_catalog_renderer_v1"
+
+
+@pytest.mark.anyio
+async def test_optional_brand_polish_preserves_audited_response_during_model_outage():
+    class UnavailableModel:
+        async def ainvoke(self, input, **kwargs):
+            raise RuntimeError("temporary provider failure")
+
+    state = initial_shopping_state("Recommend an item")
+    state["final_response"] = "Exact audited response."
+
+    result = await BrandVoiceAgent(UnavailableModel()).polish(state)
+
+    assert result == {"final_response": "Exact audited response."}
+
+
+@pytest.mark.anyio
+async def test_brand_voice_replaces_hidden_gap_response_with_visible_verified_disclosure():
+    missing_role = "portable charger"
+
+    class HiddenGapModel:
+        async def ainvoke(self, input, **kwargs):
+            return AIMessage(content=json.dumps({
+                "response": "I can prepare the requested kit.",
+                "product_ids": [],
+                "unfulfilled_requirements": [missing_role],
+            }))
+
+    state = initial_shopping_state("Prepare a kit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "bundle": {
+            "required_category_coverage": {"covered": [], "missing": [missing_role], "matches": []},
+            "selected_products": [], "total": "0",
+        },
+        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": missing_role, "field": None, "quantity": 1},
+        ],
+    })
+
+    result = await BrandVoiceAgent(HiddenGapModel(), max_format_attempts=1).compose(state)
+
+    assert missing_role in result["final_response"]
+    assert "could not verify" in result["final_response"].casefold()
+    assert result["response_source"] == "deterministic_catalog_renderer_v1"
+
+
+def test_non_product_planning_requirement_does_not_select_a_false_catalog_match():
+    state = initial_shopping_state("Prepare a kit under 500")
+    state.update({
+        "recommendation_mode": "bundle",
+        "budget": 500,
+        "fulfillment_requirements": [
+            {"kind": "budget", "value": "500", "field": None, "quantity": 1},
+        ],
+        "candidate_products": [{
+            "id": "cleaner", "name": "Interior Cleaner", "brand": "Test",
+            "category": "Automotive", "price": "40", "inventory_quantity": 2,
+            "specs": [{"label": "Size", "value": "500 ml"}], "attributes": {},
+        }],
+    })
+
+    assert BrandVoiceAgent.fulfillment_gaps(state["candidate_products"], state) == []
+
+
+@pytest.mark.anyio
+async def test_auditor_delivers_transparent_no_match_bundle_and_ignores_planning_metadata():
+    missing_role = "portable charger"
+    state = initial_shopping_state("Prepare a kit under 500")
+    state.update({
+        "budget": 500,
+        "recommendation_mode": "bundle",
+        "selected_products": [],
+        "bundle": {
+            "selected_products": [], "total": "0", "currency": "MYR",
+            "required_category_coverage": {
+                "covered": [], "missing": [missing_role], "matches": [],
+            },
+        },
+        "fulfillment_requirements": [
+            {"kind": "budget", "value": "500", "field": None, "quantity": 1},
+            {"kind": "category", "value": missing_role, "field": None, "quantity": 1},
+        ],
+        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
+        "unfulfilled_requirements": [missing_role],
+        "final_response": f"I could not verify a matching item for: {missing_role}.",
+        "response_claims": [],
+        "response_source": "deterministic_catalog_renderer_v1",
+        "attachments": [],
+    })
+
+    result = await ShoppingAuditor().audit(state, tools=None)
+
+    assert result["status"] == "pass"
+
+
 def test_catalog_selection_covers_each_dynamic_requirement_with_a_different_product():
     state = initial_shopping_state("Build a work outfit")
     state.update({
@@ -339,6 +464,20 @@ def test_auditor_allows_llm_objection_that_only_repeats_a_verified_disclosed_gap
     state = {
         "unfulfilled_requirements": ["standing desk"],
         "fulfillment_gaps": ["No verified candidate covered: standing desk"],
+    }
+
+    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
+
+
+def test_auditor_recognizes_verified_gap_named_in_finding_message_not_excerpt():
+    finding = AuditFinding(
+        code="missing_requirement_coverage",
+        message="The portable charger requirement is not covered.",
+        excerpt="I can help with your request.",
+    )
+    state = {
+        "unfulfilled_requirements": ["portable charger"],
+        "fulfillment_gaps": ["No verified candidate covered: portable charger"],
     }
 
     assert ShoppingAuditor._is_transparent_verified_gap(finding, state)

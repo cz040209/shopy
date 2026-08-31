@@ -201,10 +201,14 @@ class ShoppingAuditor:
                 for gap in gaps
             )
         ]
-        excerpt = finding.excerpt.casefold()
+        # Review models sometimes quote a generic opening while naming the
+        # actual missing role in the finding message. Consider both fields, but
+        # still require an exact optimizer-backed gap term before suppressing
+        # the semantic objection.
+        finding_text = f"{finding.excerpt} {finding.message}".casefold()
         return bool(supported) and any(
-            BrandVoiceAgent._terms_present(value, excerpt)
-            or BrandVoiceAgent._terms_present(excerpt, value)
+            BrandVoiceAgent._terms_present(value, finding_text)
+            or BrandVoiceAgent._terms_present(finding_text, value)
             for value in supported
         )
 
@@ -322,7 +326,11 @@ class ShoppingAuditor:
             and state["selection_context"].get("no_eligible_alternative") is True
         )
         for requirement in state.get("fulfillment_requirements", []):
-            if not isinstance(requirement, dict):
+            if (
+                not isinstance(requirement, dict)
+                or str(requirement.get("kind", "")).casefold().strip()
+                not in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+            ):
                 continue
             value = str(requirement.get("value", "")).casefold().strip()
             if value not in declared_unfulfilled:
@@ -345,7 +353,11 @@ class ShoppingAuditor:
                     })
                     break
         for requirement in state.get("fulfillment_requirements", []):
-            if not isinstance(requirement, dict):
+            if (
+                not isinstance(requirement, dict)
+                or str(requirement.get("kind", "")).casefold().strip()
+                not in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+            ):
                 continue
             kind, value = str(requirement.get("kind", "")), str(requirement.get("value", "")).casefold().strip()
             quantity = int(requirement.get("quantity", 1) or 1)
@@ -554,7 +566,10 @@ class ShoppingAuditor:
                 HumanMessage(content=json.dumps({"final_response": state["final_response"], "verified_evidence": evidence}, default=str)),
             ])
             return LlmAuditReview.model_validate(_json_object(response.content))
-        except (StructuredOutputError, ValidationError, ValueError, TypeError, json.JSONDecodeError):
+        except Exception:
+            # This review is additive to deterministic verification. A model
+            # outage or malformed review must not discard an otherwise fully
+            # verified recommendation.
             return None
 
     @classmethod
@@ -586,7 +601,11 @@ class ShoppingAuditor:
         """Accept only the structured writer and exact verified facts."""
         if state.get("response_source") is None:
             return
-        if state.get("response_source") not in {"structured_llm_catalog_v1", "structured_llm_brand_voice_v1"}:
+        if state.get("response_source") not in {
+            "structured_llm_catalog_v1",
+            "structured_llm_brand_voice_v1",
+            "deterministic_catalog_renderer_v1",
+        }:
             errors.append({"code": "untrusted_response_source", "message": "The response was not created by the verified renderer."})
             return
         if not isinstance(state.get("final_response"), str) or not state["final_response"].strip():
