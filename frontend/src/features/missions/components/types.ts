@@ -21,7 +21,12 @@ export type MissionData = {
   priorities?: string[];
 };
 
-export type MissionHistoryItem = { id: string; label: string; total: number; at: string };
+export type MissionHistoryItem = {
+  id: string;
+  label: string;
+  price_label: string;
+  at: string;
+};
 
 export type BundleWorkspace = {
   bundle?: {

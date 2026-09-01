@@ -60,6 +60,10 @@ Rules:
 - Treat verified_arithmetic as the source of truth for selected totals and
   budget remaining. Do not recalculate those values yourself or flag a response
   merely because your own arithmetic differs from the supplied verified value.
+- Apply the budget according to verified_arithmetic.budget_scope. In
+  "per_option" scope, the products are alternatives: evaluate each option_total
+  independently and never add their prices together. In "combined_bundle"
+  scope, selected_total is the price of the bundle bought together.
 - Fail only for a concrete, customer-facing factual claim, contradiction, or
   stated customer requirement that is clearly unmet. Quote the exact response
   excerpt in every finding.
@@ -72,6 +76,15 @@ Rules:
 - Do not fail a requirement listed in verified_unfulfilled_requirements when it
   is also supported by a verified fulfillment gap; transparent partial coverage
   is safer than inventing a catalog match.
+- "Within tolerance" means the recommendation may be shown with a disclosure;
+  it does not mean the bundle is within the customer's stated budget. When the
+  exact selected_total, budget, and over_target_by are correctly described as
+  over/above budget, that sentence is supported and must not be failed.
+- The sentence "I could not verify a catalog match for <requirement>" claims
+  only that the verified search did not produce a match. It is supported when
+  the exact requirement is in verified_unfulfilled_requirements and a matching
+  fulfillment_gaps entry exists. Do not reinterpret it as a claim that the
+  product type does not exist or is globally unavailable.
 - Do not approve a claim merely because it sounds plausible. If there is no
   evidence for it, report unsupported_prose_claim.
 - Return pass with an empty findings list when there are no concrete issues.
@@ -162,12 +175,19 @@ class ShoppingAuditor:
         self._validate_response_coverage(state, selected_ids, errors)
         self._validate_fulfillment(state, verified_products, errors)
         self._validate_response_claims(state, verified_products, errors)
+        if BrandVoiceAgent._contains_unverified_availability_language(
+            str(state.get("final_response", ""))
+        ):
+            errors.append({
+                "code": "unsupported_availability_claim",
+                "message": "A non-stock response uses unverified live availability language.",
+            })
         self._validate_attachments(state, verified_products, errors)
         llm_review = await self._review_final_response(state, verified_products, verified_total=total)
         if llm_review is not None and llm_review.verdict == "fail":
             errors.extend(
                 finding.model_dump() for finding in llm_review.findings
-                if not self._is_transparent_verified_gap(finding, state)
+                if not self._is_deterministically_supported_finding(finding, state)
             )
         errors, warnings = self._apply_confidence_gate(errors, llm_review)
         return AuditResult(
@@ -186,7 +206,8 @@ class ShoppingAuditor:
         products. This only removes an LLM objection to clearly disclosing a gap
         that the optimizer and structured response have already agreed upon.
         """
-        if finding.code not in {"requirement_not_met", "missing_requirement_coverage"}:
+        allowed_codes = {"requirement_not_met", "missing_requirement_coverage"}
+        if finding.code not in allowed_codes | {"unsupported_prose_claim"}:
             return False
         declared = [
             str(value).casefold().strip() for value in state.get("unfulfilled_requirements", [])
@@ -206,10 +227,58 @@ class ShoppingAuditor:
         # still require an exact optimizer-backed gap term before suppressing
         # the semantic objection.
         finding_text = f"{finding.excerpt} {finding.message}".casefold()
-        return bool(supported) and any(
-            BrandVoiceAgent._terms_present(value, finding_text)
+        referenced = [
+            value for value in supported
+            if BrandVoiceAgent._terms_present(value, finding_text)
             or BrandVoiceAgent._terms_present(finding_text, value)
-            for value in supported
+        ]
+        if not referenced:
+            return False
+        if finding.code in allowed_codes:
+            return True
+        # An unsupported-prose objection is ignored only for the exact,
+        # evidence-scoped sentence emitted by the response writer. Other prose
+        # claims mentioning the same requirement remain subject to LLM audit.
+        excerpt = finding.excerpt.casefold()
+        return any(
+            BrandVoiceAgent._gap_disclosure(value).casefold() in excerpt
+            for value in referenced
+        )
+
+    @classmethod
+    def _is_verified_budget_disclosure(
+        cls, finding: AuditFinding, state: dict[str, Any]
+    ) -> bool:
+        """Ignore semantic objections to arithmetic already checked exactly."""
+        if finding.code != "unsupported_prose_claim" or state.get("budget") is None:
+            return False
+        bundle = state.get("bundle")
+        if state.get("recommendation_mode") != "bundle" or not isinstance(bundle, dict):
+            return False
+        try:
+            target = Decimal(str(state["budget"])).quantize(Decimal("0.01"))
+            total = Decimal(str(bundle["total"])).quantize(Decimal("0.01"))
+        except Exception:
+            return False
+        if total <= target:
+            return False
+        excerpt = finding.excerpt
+        amounts = {
+            Decimal(value.replace(",", "")).quantize(Decimal("0.01"))
+            for value in cls._money_pattern.findall(excerpt)
+        }
+        return (
+            {target, total, total - target}.issubset(amounts)
+            and re.search(r"\b(?:over|above)\b", excerpt, re.IGNORECASE) is not None
+            and re.search(r"\b(?:within|under)\s+(?:the\s+|your\s+)?budget\b", excerpt, re.IGNORECASE) is None
+        )
+
+    @classmethod
+    def _is_deterministically_supported_finding(
+        cls, finding: AuditFinding, state: dict[str, Any]
+    ) -> bool:
+        return cls._is_transparent_verified_gap(finding, state) or cls._is_verified_budget_disclosure(
+            finding, state
         )
 
     async def _audit_stock_response(self, state: dict[str, Any], tools: ToolExecutor | None) -> AuditResult:
@@ -244,7 +313,10 @@ class ShoppingAuditor:
             state, {str(claim.get("id")): claim for claim in claims if isinstance(claim, dict)}
         )
         if llm_review is not None and llm_review.verdict == "fail":
-            errors.extend(finding.model_dump() for finding in llm_review.findings)
+            errors.extend(
+                finding.model_dump() for finding in llm_review.findings
+                if not self._is_deterministically_supported_finding(finding, state)
+            )
         errors, warnings = self._apply_confidence_gate(errors, llm_review)
         return AuditResult(
             status="pass" if not errors else "fail",
@@ -315,6 +387,18 @@ class ShoppingAuditor:
             errors.append({
                 "code": "invalid_unfulfilled_requirement",
                 "message": "The response declared a fulfillment gap that is not supported by catalog search results.",
+            })
+        selection_context = state.get("selection_context", {})
+        if (
+            state.get("recommendation_mode", "single") == "single"
+            and declared_unfulfilled
+            and isinstance(selection_context, dict)
+            and int(selection_context.get("eligible_alternative_count", 0) or 0) > 0
+            and selection_context.get("no_eligible_alternative") is not True
+        ):
+            errors.append({
+                "code": "catalog_match_not_selected",
+                "message": "Verified refinement alternatives exist but were not carried into the response.",
             })
         # A response may not declare a need unavailable when the search has
         # already supplied an in-stock, budget-eligible verified candidate.
@@ -519,23 +603,11 @@ class ShoppingAuditor:
         """
         if self.model is None or not isinstance(state.get("final_response"), str):
             return None
-        budget_remaining = None
-        permitted_max = None
-        over_target_by = None
-        within_tolerance = None
-        if verified_total is not None and state.get("budget") is not None:
-            try:
-                target = Decimal(str(state["budget"]))
-                budget_remaining = str(target - verified_total)
-                permitted_max = recommendation_budget_limit(target)
-                over_target_by = str(verified_total - target) if verified_total > target else None
-                within_tolerance = permitted_max is not None and verified_total <= permitted_max
-            except Exception:
-                pass
         evidence = {
             "customer_request": state.get("user_request", ""),
             "mission": {
                 "goal": state.get("goal"), "budget": state.get("budget"),
+                "recommendation_mode": state.get("recommendation_mode", "single"),
                 "preferences": state.get("preferences", []), "constraints": state.get("constraints", []),
             },
             "verified_products": list(verified_products.values()),
@@ -552,13 +624,9 @@ class ShoppingAuditor:
                 if isinstance(state.get("memory_context"), dict) else None
             ),
             "vision_context": state.get("vision_context"),
-            "verified_arithmetic": {
-                "selected_total": str(verified_total) if verified_total is not None else None,
-                "budget_remaining": budget_remaining,
-                "permitted_max": str(permitted_max) if permitted_max is not None else None,
-                "over_target_by": over_target_by,
-                "within_tolerance": within_tolerance,
-            },
+            "verified_arithmetic": self._verified_arithmetic(
+                state, verified_products, verified_total
+            ),
         }
         try:
             response = await self.model.ainvoke([
@@ -571,6 +639,75 @@ class ShoppingAuditor:
             # outage or malformed review must not discard an otherwise fully
             # verified recommendation.
             return None
+
+    @staticmethod
+    def _verified_arithmetic(
+        state: dict[str, Any],
+        verified_products: dict[str, dict[str, Any]],
+        verified_total: Decimal | None,
+    ) -> dict[str, Any]:
+        """Describe budget arithmetic using the mission's purchase semantics."""
+        mode = state.get("recommendation_mode", "single")
+        target: Decimal | None = None
+        permitted_max: Decimal | None = None
+        if state.get("budget") is not None:
+            try:
+                target = Decimal(str(state["budget"]))
+                permitted_max = recommendation_budget_limit(target)
+            except Exception:
+                target = None
+                permitted_max = None
+
+        if mode == "bundle":
+            return {
+                "budget_scope": "combined_bundle",
+                "selected_total": str(verified_total) if verified_total is not None else None,
+                "budget_target": str(target) if target is not None else None,
+                "budget_remaining": (
+                    str(target - verified_total)
+                    if target is not None and verified_total is not None else None
+                ),
+                "permitted_max": str(permitted_max) if permitted_max is not None else None,
+                "over_target_by": (
+                    str(verified_total - target)
+                    if target is not None and verified_total is not None and verified_total > target
+                    else None
+                ),
+                "within_tolerance": (
+                    verified_total <= permitted_max
+                    if verified_total is not None and permitted_max is not None else None
+                ),
+            }
+
+        quantities = {
+            str(item.get("id")): int(item.get("quantity", 1))
+            for item in state.get("selected_products", [])
+            if isinstance(item, dict)
+        }
+        option_totals = []
+        for product_id, product in verified_products.items():
+            try:
+                option_total = Decimal(str(product["price"])) * quantities.get(product_id, 1)
+            except Exception:
+                continue
+            option_totals.append({
+                "product_id": product_id,
+                "option_total": str(option_total),
+                "within_target": option_total <= target if target is not None else None,
+                "within_tolerance": option_total <= permitted_max if permitted_max is not None else None,
+                "over_target_by": (
+                    str(option_total - target)
+                    if target is not None and option_total > target else None
+                ),
+            })
+        return {
+            "budget_scope": "per_option",
+            "budget_target": str(target) if target is not None else None,
+            "permitted_max_per_option": str(permitted_max) if permitted_max is not None else None,
+            "option_totals": option_totals,
+            "selected_total": None,
+            "note": "These products are alternatives and are not purchased together.",
+        }
 
     @classmethod
     def _apply_confidence_gate(

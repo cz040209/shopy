@@ -72,8 +72,12 @@ Rules:
 - Ask a concise follow-up only when the verified data is insufficient.
 - When repair_feedback or fulfillment_gaps is supplied, correct the listed issue
   and clearly explain any verified requirement that cannot be fulfilled. Never
-  hide an unmet requirement. Copy each unmet requirement's value exactly into
-  unfulfilled_requirements; otherwise return an empty list.
+  hide an unmet requirement. For each verified missing requirement, use this
+  exact evidence-scoped sentence: "I could not verify a catalog match for
+  <requirement>." Copy the requirement's value exactly into both that sentence
+  and unfulfilled_requirements; otherwise return an empty list. Do not broaden
+  a catalog-match gap into a claim that the product type does not exist, is
+  unavailable, or is out of stock.
 - When selection_context says no_eligible_alternative is true, explain that no
   verified alternative met the supplied optimisation criteria. State only the
   reference values and criteria that selection_context supplies, ask for a
@@ -248,11 +252,15 @@ class BrandVoiceAgent:
             }
             if any(
                 missing.casefold() not in declared_missing
-                or missing.casefold() not in draft.response.casefold()
+                or self._gap_disclosure(missing).casefold() not in draft.response.casefold()
                 for missing in required_missing
             ):
                 raise ResponseDraftError(
                     "Response model did not visibly disclose every verified fulfillment gap."
+                )
+            if self._contains_unverified_availability_language(draft.response):
+                raise ResponseDraftError(
+                    "Response model introduced availability language without a stock check."
                 )
         except Exception as error:
             # Product selection, totals, and gaps have already been verified by
@@ -339,7 +347,7 @@ class BrandVoiceAgent:
         else:
             lines.append("I could not assemble a verified product selection from the current catalog.")
         if missing:
-            lines.append("I could not verify a matching item for: " + ", ".join(missing) + ".")
+            lines.extend(BrandVoiceAgent._gap_disclosure(requirement) for requirement in missing)
             lines.append("Tell me which requirement or trade-off you would like to adjust, and I can try again.")
         elif not product_ids:
             lines.append("Add a product type or adjust the constraints, and I can search again.")
@@ -348,6 +356,21 @@ class BrandVoiceAgent:
             product_ids=product_ids,
             unfulfilled_requirements=missing,
         )
+
+    @staticmethod
+    def _gap_disclosure(requirement: str) -> str:
+        """Render a dynamic gap without claiming global product unavailability."""
+        return f"I could not verify a catalog match for {requirement}."
+
+    @staticmethod
+    def _contains_unverified_availability_language(response: str) -> bool:
+        """Reject live-inventory wording without blocking verified variants."""
+        return re.search(
+            r"\b(?:available\s+for\s+(?:RM|MYR)|currently\s+available|availability|"
+            r"in[ -]?stock|out[ -]?of[ -]?stock|sold[ -]?out|inventory)\b",
+            response,
+            re.IGNORECASE,
+        ) is not None
 
     @staticmethod
     def _verified_missing_requirements(state: dict[str, Any]) -> list[str]:

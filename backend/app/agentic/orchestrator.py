@@ -361,8 +361,11 @@ class ShoppingOrchestrator:
             output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
             return output
-        candidates, selection_context = self._apply_optimization_context(
+        role_candidates = self._role_constrained_candidates(
             state, search_output["candidate_products"]
+        )
+        candidates, selection_context = self._apply_optimization_context(
+            state, role_candidates
         )
         result = {**result, "product_rankings": search_output["product_rankings"]}
         if "check_stock" in actions:
@@ -387,7 +390,9 @@ class ShoppingOrchestrator:
             }
             self._record_node(state, "product_search", output)
             return output
-        action_candidates, resolution_context = await self._resolve_action_candidates(state, actions, candidates)
+        action_candidates, resolution_context = await self._resolve_action_candidates(
+            {**state, "selection_context": selection_context}, actions, candidates
+        )
         tool_context = [*resolution_context, *(await self._execute_requested_actions(actions, action_candidates, state))]
         # Resolution is required for a named product/detail request, but it
         # must not collapse a recommendation into the model's first match.
@@ -426,6 +431,29 @@ class ShoppingOrchestrator:
         }
         self._record_node(state, "product_search", output)
         return output
+
+    @staticmethod
+    def _role_constrained_candidates(
+        state: ShoppingAgentState, candidates: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Keep single-product refinements within the active product role."""
+        if state.get("recommendation_mode", "single") != "single":
+            return candidates
+        requirements = [
+            item for item in state.get("fulfillment_requirements", [])
+            if isinstance(item, dict)
+            and str(item.get("kind", "")).casefold().strip()
+            in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+        ]
+        if not requirements:
+            return candidates
+        return [
+            product for product in candidates
+            if all(
+                BrandVoiceAgent._matches_requirement(product, requirement)
+                for requirement in requirements
+            )
+        ]
 
     @staticmethod
     def _apply_optimization_context(
@@ -663,7 +691,14 @@ class ShoppingOrchestrator:
         if not search_only and not resolving_actions.intersection(actions):
             return candidates, []
         resolved_ids = await self.product_resolver.resolve(
-            user_request=state["user_request"], actions=actions, candidates=candidates
+            user_request=state["user_request"], actions=actions, candidates=candidates,
+            mission_context={
+                "goal": state.get("goal"),
+                "recommendation_mode": state.get("recommendation_mode"),
+                "fulfillment_requirements": state.get("fulfillment_requirements", []),
+                "optimization_mode": state.get("optimization_mode"),
+                "selection_context": state.get("selection_context", {}),
+            },
         )
         if resolved_ids:
             by_id = {str(product["id"]): product for product in candidates}
@@ -822,7 +857,10 @@ class ShoppingOrchestrator:
         }
         selected = [item for item in state.get("selected_products", []) if str(item.get("id")) not in excluded]
         selection_was_lost = any(
-            isinstance(item, dict) and item.get("code") == "catalog_match_not_selected"
+            isinstance(item, dict) and item.get("code") in {
+                "catalog_match_not_selected", "unsupported_unavailability_claim",
+                "fulfillment_requirement_unmet", "requirement_not_met",
+            }
             for item in audit_errors
         )
         bundle_repair_codes = {

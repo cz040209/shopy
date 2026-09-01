@@ -43,6 +43,9 @@
 .nodeCopy b { margin-top: auto; color: #c5ccff; font-size: 14px; }
 .remove { position: absolute; z-index: 3; top: 9px; right: 9px; display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid rgba(255, 255, 255, 0.19); border-radius: 50%; padding: 0; background: rgba(8, 15, 32, 0.91); color: #d9e5f4; cursor: pointer; transition: background 180ms ease, color 180ms ease, transform 180ms ease; }
 .remove:hover { background: #ef5b78; color: #fff; transform: scale(1.06); }
+.optionAdd { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; margin-top: 9px; border: 1px solid rgba(113, 128, 231, 0.72); border-radius: 8px; padding: 11px 13px; background: rgba(88, 104, 216, 0.16); color: #dce1ff; cursor: pointer; font: 800 12px var(--font-sans); transition: border-color 180ms ease, background 180ms ease, transform 180ms ease; }
+.optionAdd:hover { border-color: #8492ee; background: rgba(88, 104, 216, 0.28); transform: translateY(-1px); }
+.optionAdd:disabled { cursor: wait; opacity: 0.62; transform: none; }
 .coverage { margin: 8px 0 18px; border: 1px solid rgba(130, 155, 207, 0.17); border-radius: 17px; padding: 18px 20px; background: rgba(7, 15, 34, 0.48); }
 .coverageHeading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .coverageHeading span { color: #9ca8ff; font-size: 10px; font-weight: 850; letter-spacing: 0.12em; }

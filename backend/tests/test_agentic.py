@@ -341,8 +341,7 @@ async def test_brand_voice_replaces_hidden_gap_response_with_visible_verified_di
 
     result = await BrandVoiceAgent(HiddenGapModel(), max_format_attempts=1).compose(state)
 
-    assert missing_role in result["final_response"]
-    assert "could not verify" in result["final_response"].casefold()
+    assert BrandVoiceAgent._gap_disclosure(missing_role) in result["final_response"]
     assert result["response_source"] == "deterministic_catalog_renderer_v1"
 
 
@@ -481,6 +480,120 @@ def test_auditor_recognizes_verified_gap_named_in_finding_message_not_excerpt():
     }
 
     assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
+
+
+def test_auditor_allows_exact_writer_disclosure_when_review_mislabels_it_as_unsupported():
+    missing_role = "travel toiletries kit"
+    finding = AuditFinding(
+        code="unsupported_prose_claim",
+        message="The response says the item was not found, but the bundle only marks it missing.",
+        excerpt=BrandVoiceAgent._gap_disclosure(missing_role),
+    )
+    state = {
+        "unfulfilled_requirements": [missing_role],
+        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
+    }
+
+    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
+
+
+def test_auditor_keeps_a_different_unsupported_claim_about_a_missing_role():
+    missing_role = "travel toiletries kit"
+    finding = AuditFinding(
+        code="unsupported_prose_claim",
+        message="The waterproof claim is not in verified evidence.",
+        excerpt="The travel toiletries kit is completely waterproof.",
+    )
+    state = {
+        "unfulfilled_requirements": [missing_role],
+        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
+    }
+
+    assert not ShoppingAuditor._is_transparent_verified_gap(finding, state)
+
+
+def test_auditor_allows_exact_verified_over_budget_disclosure():
+    finding = AuditFinding(
+        code="unsupported_prose_claim",
+        message="The overage is within the configured recommendation tolerance.",
+        excerpt="The total is RM 417.00, which is RM 17.00 over your budget of RM 400.00.",
+    )
+    state = {
+        "budget": 400,
+        "recommendation_mode": "bundle",
+        "bundle": {"total": "417.00"},
+    }
+
+    assert ShoppingAuditor._is_verified_budget_disclosure(finding, state)
+
+
+def test_semantic_audit_arithmetic_keeps_single_recommendations_as_alternatives():
+    state = {
+        "recommendation_mode": "single",
+        "budget": 3800,
+        "selected_products": [
+            {"id": "pixel", "quantity": 1},
+            {"id": "xiaomi", "quantity": 1},
+            {"id": "nova", "quantity": 1},
+        ],
+    }
+    products = {
+        "pixel": {"id": "pixel", "price": "3799.00"},
+        "xiaomi": {"id": "xiaomi", "price": "3499.00"},
+        "nova": {"id": "nova", "price": "2190.00"},
+    }
+
+    arithmetic = ShoppingAuditor._verified_arithmetic(
+        state, products, Decimal("9488.00")
+    )
+
+    assert arithmetic["budget_scope"] == "per_option"
+    assert arithmetic["selected_total"] is None
+    assert [item["option_total"] for item in arithmetic["option_totals"]] == [
+        "3799.00", "3499.00", "2190.00",
+    ]
+    assert all(item["within_target"] for item in arithmetic["option_totals"])
+
+
+def test_semantic_audit_arithmetic_combines_products_only_for_bundles():
+    arithmetic = ShoppingAuditor._verified_arithmetic(
+        {"recommendation_mode": "bundle", "budget": 400},
+        {},
+        Decimal("417.00"),
+    )
+
+    assert arithmetic["budget_scope"] == "combined_bundle"
+    assert arithmetic["selected_total"] == "417.00"
+    assert arithmetic["over_target_by"] == "17.00"
+
+
+def test_response_writer_rejects_unverified_availability_language_dynamically():
+    assert BrandVoiceAgent._contains_unverified_availability_language(
+        "The verified option is available for RM 3499.00."
+    )
+    assert not BrandVoiceAgent._contains_unverified_availability_language(
+        "The verified option costs RM 3499.00."
+    )
+    assert not BrandVoiceAgent._contains_unverified_availability_language(
+        "The verified color is available in Black and Silver."
+    )
+
+
+@pytest.mark.anyio
+async def test_auditor_blocks_price_based_availability_outside_stock_flow():
+    state = initial_shopping_state("Show me an option")
+    state.update({
+        "final_response": "The verified option is available for RM 3499.00.",
+        "response_source": "structured_llm_brand_voice_v1",
+        "response_claims": [],
+    })
+
+    audit = await ShoppingAuditor().audit(state, tools=None)
+
+    assert any(
+        error["code"] == "unsupported_availability_claim"
+        for error in audit["errors"]
+    )
 
 
 def test_feature_requirement_requires_value_and_product_role():
@@ -691,6 +804,57 @@ def test_optimisation_continuation_uses_llm_criteria_and_a_prior_catalog_fact():
         "field": "price", "operator": "lower_than_reference",
         "reference_value": "3999.00", "eligible_count": 1,
     }]
+
+
+def test_single_refinement_filters_by_dynamic_product_role_before_comparison():
+    state = initial_shopping_state("Make it cheaper")
+    state.update({
+        "recommendation_mode": "single",
+        "continues_context": True,
+        "fulfillment_requirements": [
+            {"kind": "category", "field": None, "value": "phone", "quantity": 1},
+        ],
+        "selection_criteria": [{
+            "field": "price", "operator": "lower_than_reference", "value": None, "weight": 3,
+        }],
+        "memory_context": {"selected_products": [{"id": "current-phone", "quantity": 1}]},
+    })
+    candidates = [
+        {"id": "current-phone", "name": "Current Phone", "category": "Phones", "price": "3499"},
+        {"id": "value-phone", "name": "Value Phone", "category": "Phones", "price": "2190"},
+        {"id": "cable", "name": "Phone Charging Cable", "category": "Cables", "price": "49"},
+        {"id": "holder", "name": "Magnetic Phone Holder", "category": "Car Accessories", "price": "59"},
+    ]
+
+    role_candidates = ShoppingOrchestrator._role_constrained_candidates(state, candidates)
+    alternatives, context = ShoppingOrchestrator._apply_optimization_context(
+        state, role_candidates
+    )
+
+    assert [item["id"] for item in role_candidates] == ["current-phone", "value-phone"]
+    assert [item["id"] for item in alternatives] == ["value-phone"]
+    assert context["eligible_alternative_count"] == 1
+
+
+def test_auditor_rejects_a_false_gap_when_refinement_alternatives_exist():
+    state = initial_shopping_state("Make it cheaper")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [
+            {"kind": "category", "field": None, "value": "phone", "quantity": 1},
+        ],
+        "fulfillment_gaps": ["No verified catalog match for: phone"],
+        "unfulfilled_requirements": ["phone"],
+        "selection_context": {
+            "eligible_alternative_count": 2,
+            "no_eligible_alternative": False,
+        },
+    })
+    errors: list[dict[str, str]] = []
+
+    ShoppingAuditor._validate_fulfillment(state, {}, errors)
+
+    assert any(error["code"] == "catalog_match_not_selected" for error in errors)
 
 
 def test_bundle_refinement_inherits_the_complete_prior_mission_contract():

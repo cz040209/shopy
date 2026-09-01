@@ -13,16 +13,17 @@ import BundleBoard from "./BundleBoard";
 import MissionHistory from "./MissionHistory";
 import MissionInputPanel from "./MissionInputPanel";
 import OptimizationActions from "./OptimizationActions";
+import { recommendationPriceSummary } from "./pricing";
 import { Attachment, BundleWorkspace, MissionData, MissionHistoryItem } from "./types";
 import styles from "./mission-studio.module.css";
 
 const emptyMission: MissionData = { preferences: [], owned_items: [], priorities: [] };
 const progressStepCount = 6;
 const stageDurationMs = 1800;
-const workspaceStorageKey = "shopy:mission-workspace:v1";
+const workspaceStorageKey = "shopy:mission-workspace:v2";
 
 type StoredMissionWorkspace = {
-  version: 1;
+  version: 2;
   routeMission: string;
   request: string;
   analysis: string;
@@ -49,7 +50,7 @@ function isHistoryItem(value: unknown): value is MissionHistoryItem {
   return isRecord(value)
     && typeof value.id === "string"
     && typeof value.label === "string"
-    && typeof value.total === "number"
+    && typeof value.price_label === "string"
     && typeof value.at === "string";
 }
 
@@ -59,7 +60,7 @@ function readStoredWorkspace(): StoredMissionWorkspace | null {
     if (!raw) return null;
     const value: unknown = JSON.parse(raw);
     if (!isRecord(value)
-      || value.version !== 1
+      || value.version !== 2
       || typeof value.routeMission !== "string"
       || typeof value.request !== "string"
       || typeof value.analysis !== "string"
@@ -125,13 +126,17 @@ export default function MissionWorkspace() {
   const [bundleWorkspace, setBundleWorkspace] = useState<BundleWorkspace>({});
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [addingProductId, setAddingProductId] = useState<string | null>(null);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
   const [feedback, setFeedback] = useState("");
   const [showBundleReady, setShowBundleReady] = useState(false);
   const resultsRef = useRef<HTMLElement>(null);
   const { refreshCart } = useCart();
   const complete = Boolean(analysis);
-  const total = useMemo(() => items.reduce((sum, item) => sum + Number(item.price), 0), [items]);
+  const priceSummary = useMemo(
+    () => recommendationPriceSummary(items, mission.recommendation_mode),
+    [items, mission.recommendation_mode],
+  );
 
   useEffect(() => {
     if (!busy) return;
@@ -161,7 +166,7 @@ export default function MissionWorkspace() {
   useEffect(() => {
     if (!analysis.trim()) return;
     const snapshot: StoredMissionWorkspace = {
-      version: 1,
+      version: 2,
       routeMission: initialRequest,
       request,
       analysis,
@@ -234,7 +239,10 @@ export default function MissionWorkspace() {
       setHistory((previous) => [{
         id: crypto.randomUUID(),
         label: data.mission?.goal || nextRequest,
-        total: nextItems.reduce((sum, item) => sum + Number(item.price), 0),
+        price_label: recommendationPriceSummary(
+          nextItems,
+          data.mission?.recommendation_mode,
+        )?.label ?? "No priced options",
         at: "Just now",
       }, ...previous].slice(0, 5));
     } catch (reason) {
@@ -271,6 +279,22 @@ export default function MissionWorkspace() {
       await refreshCart();
     } finally {
       setAdding(false);
+    }
+  };
+
+  const addRecommendation = async (productId: string) => {
+    setAddingProductId(productId);
+    setError("");
+    try {
+      await apiFetch("/api/v1/cart/items", {
+        method: "POST",
+        body: JSON.stringify({ product_id: productId, quantity: 1 }),
+      });
+      await refreshCart();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not add this item to your cart.");
+    } finally {
+      setAddingProductId(null);
     }
   };
 
@@ -393,7 +417,7 @@ export default function MissionWorkspace() {
               <small>RECOMMENDATION COMPLETE</small>
               <h2>Your verified selection is ready.</h2>
               <p>{items.length} catalog-verified {items.length === 1 ? "item is" : "items are"} ready for review.</p>
-              <strong>RM {total.toLocaleString("en-MY", { maximumFractionDigits: 0 })}</strong>
+              {priceSummary && <strong>{priceSummary.label}</strong>}
               <button type="button" onClick={revealBundle}>View recommendations</button>
             </motion.div>
           </motion.div>
@@ -420,7 +444,7 @@ export default function MissionWorkspace() {
             <div className={styles.resultHeading}>
               <span>VERIFIED OUTPUT</span>
               <h2>Your recommendation, ready for review.</h2>
-              {items.length > 0 && <strong>RM {total.toLocaleString("en-MY", { maximumFractionDigits: 0 })}</strong>}
+              {priceSummary && <strong>{priceSummary.label}</strong>}
             </div>
             <OptimizationActions disabled={busy} onPick={refine} />
             <form className={styles.feedbackForm} onSubmit={(event) => { event.preventDefault(); refine(feedback); }}>
@@ -438,7 +462,7 @@ export default function MissionWorkspace() {
               <p>Shopy keeps this mission in short-term memory so each revision starts from your last brief.</p>
             </form>
             {items.length ? (
-              <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} onAdd={() => void addBundle()} onRemove={removeBundleItem} />
+              <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} addingProductId={addingProductId} onAdd={() => void addBundle()} onAddItem={(productId) => void addRecommendation(productId)} onRemove={removeBundleItem} />
             ) : (
               <section className={styles.insight}><span>MISSION INSIGHT</span><p>{analysis}</p></section>
             )}

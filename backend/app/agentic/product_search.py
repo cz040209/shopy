@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import settings
 
+from .brand_voice import BrandVoiceAgent
 from .intent import AsyncChatModel, StructuredOutputError, _json_object
 from .state import ShoppingAgentState
 from .tools import CommerceToolRegistry, ToolExecutionError
@@ -173,24 +174,15 @@ class ProductSearchAgent:
         selected: list[str] = []
         per_role = max(1, settings.agent_catalog_role_matches_per_need)
         for role in dict.fromkeys(roles):
-            role_terms = {
-                cls._normalize_token(token)
-                for token in re.findall(r"[\w]+", role.casefold())
-                if len(token) > 1 and token not in cls._GENERIC_QUERY_TERMS
-            }
-            if not role_terms:
-                continue
             matches = 0
             for item in ranked:
                 product = item["product"]
-                evidence = " ".join(map(str, [
-                    product.get("name", ""), product.get("brand", ""), product.get("category", ""),
-                    product.get("search_terms", []), product.get("specs", []), product.get("attributes", {}),
-                ])).casefold()
-                evidence_terms = {
-                    cls._normalize_token(token) for token in re.findall(r"[\w]+", evidence)
-                }
-                if role_terms.issubset(evidence_terms):
+                # A role is grounded by product identity, not by incidental
+                # compatibility/specification mentions. A cable may mention a
+                # phone, for example, but it is not itself a phone.
+                if BrandVoiceAgent._matches_requirement(product, {
+                    "kind": "category", "field": None, "value": role,
+                }):
                     product_id = str(product["id"])
                     if product_id not in selected:
                         selected.append(product_id)

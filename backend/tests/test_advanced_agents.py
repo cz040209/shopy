@@ -113,6 +113,29 @@ async def test_catalog_shortlist_preserves_exact_matches_for_each_planned_role()
     assert "mouse" in [item["product"]["id"] for item in result]
 
 
+def test_grounded_role_ids_reject_products_that_only_mention_the_requested_role():
+    ranked = [
+        {"product": {
+            "id": "cable", "name": "USB-C Charging Cable", "brand": "Test",
+            "category": "Cables", "price": "49", "inventory_quantity": 2,
+            "search_terms": ["phone charging"],
+            "specs": [{"label": "Compatibility", "value": "phones and tablets"}],
+            "attributes": {},
+        }, "score": 50, "reasons": []},
+        {"product": {
+            "id": "phone", "name": "Value Smartphone", "brand": "Test",
+            "category": "Phones", "price": "999", "inventory_quantity": 2,
+            "search_terms": [], "specs": [], "attributes": {},
+        }, "score": 40, "reasons": []},
+    ]
+    state = initial_shopping_state("Find a phone")
+    state["required_categories"] = ["phone"]
+
+    grounded = ProductSearchAgent._grounded_role_ids(ranked, state)
+
+    assert grounded == ["phone"]
+
+
 class VisionGenerator:
     async def generate(self, **kwargs):
         return '{"detected_objects":["sofa","window"],"category":["living room"],"colors":["beige"],"style":["minimal"],"existing_items":["sofa"],"possible_shopping_needs":["floor lamp"],"visual_constraints":["keep walkway clear"]}'

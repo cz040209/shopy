@@ -28,6 +28,9 @@ Rules:
   colors, size, specifications, or compatibility), choose the one best product.
 - For comparisons, choose the two to four intended products.
 - For browsing or recommendations, choose the one to four most relevant products.
+- For a refinement, resolve against mission_context and selection_context as
+  well as the short follow-up text. Preserve the active product role and choose
+  candidates that satisfy the verified comparison or preference direction.
 - Return an empty list when the request remains ambiguous rather than guessing."""
 
 
@@ -36,11 +39,13 @@ class ProductResolutionAgent:
         self.model = model
 
     async def resolve(
-        self, *, user_request: str, actions: list[str], candidates: list[dict[str, Any]]
+        self, *, user_request: str, actions: list[str], candidates: list[dict[str, Any]],
+        mission_context: dict[str, Any] | None = None,
     ) -> list[str]:
         payload = {
             "customer_request": user_request,
             "requested_actions": actions,
+            "mission_context": mission_context or {},
             "verified_candidates": [
                 {"id": product["id"], "name": product["name"], "brand": product["brand"], "category": product["category"]}
                 for product in candidates
