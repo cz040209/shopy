@@ -771,6 +771,41 @@ def test_catalog_selection_normalizes_product_type_across_category_fields():
     assert BrandVoiceAgent.select_catalog_products(state) == [{"id": "laptop", "quantity": 1}]
 
 
+@pytest.mark.anyio
+async def test_bundle_resolves_generic_product_form_terms_from_catalog_evidence():
+    """Customer phrasing should not create a gap for an equivalent catalog type."""
+    shampoo = {
+        "id": "shampoo", "name": "Gold Class Car Wash Shampoo", "brand": "Meguiar's",
+        "category": "Car Shampoo", "price": "49", "inventory_quantity": 8,
+        "specs": [], "attributes": {"department": "automotive", "car_care_category": "Car Shampoo"},
+    }
+    mitt = {
+        "id": "mitt", "name": "Chenille Premium Car Wash Mitt", "brand": "Chemical Guys",
+        "category": "Wash Mitt", "price": "29", "inventory_quantity": 8,
+        "specs": [], "attributes": {"department": "automotive", "car_care_category": "Wash Mitt"},
+    }
+    state = initial_shopping_state("Build a weekly wash kit")
+    state.update({
+        "recommendation_mode": "bundle", "budget": 300,
+        "required_categories": ["car wash soap"],
+        "fulfillment_requirements": [{"kind": "category", "value": "car wash soap", "field": None, "quantity": 1}],
+        "candidate_products": [shampoo, mitt],
+    })
+
+    assert BrandVoiceAgent.fulfillment_gaps(state["candidate_products"], state) == []
+    assert BrandVoiceAgent._matches_requirement(
+        shampoo, {"kind": "category", "value": "car wash soap", "field": None}
+    )
+    assert not BrandVoiceAgent._matches_requirement(
+        mitt, {"kind": "category", "value": "car wash soap", "field": None}
+    )
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["selected_products"] == [{"id": "shampoo", "quantity": 1}]
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
+
+
 def test_catalog_queries_remove_only_redundant_subqueries():
     state = initial_shopping_state("Find a cheap laptop")
     state.update({"catalog_queries": ["cheap laptop", "toner"], "catalog_query": "laptop"})

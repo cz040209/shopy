@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     shopping_memory_ttl_seconds: int = 1800
     shopping_memory_recent_turns: int = 8
     redis_socket_timeout_seconds: float = 1
+    upload_directory: Path = Path("/tmp/shopy-uploads")
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_tls: bool = True
+
+    @property
+    def receipt_email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from_email)
 
 
 settings = Settings()

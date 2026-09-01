@@ -15,6 +15,7 @@ from app.config import settings
 
 from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, StructuredOutputError, _json_object
+from .product_roles import matches_product_role, normalized_terms
 
 
 class ResponseDraftError(StructuredOutputError):
@@ -121,7 +122,6 @@ class BrandVoiceAgent:
     _NON_SHOPPING_MISSIONS = {"information_request", "greeting", "smalltalk"}
     stock_source = "structured_llm_brand_voice_stock_v1"
     _VOICE_STYLES = ("warm and clear", "direct and helpful", "upbeat and concise", "calm and reassuring")
-    _GENERIC_REQUIREMENT_TERMS = {"item", "items", "option", "options", "product", "products"}
     _SHOPPING_REQUIREMENT_KINDS = {"category", "feature", "attribute"}
 
     def __init__(
@@ -713,23 +713,7 @@ class BrandVoiceAgent:
         facts = f"{product.get('specs', [])} {product.get('attributes', {})}".casefold()
         field = str(requirement.get("field") or "").casefold()
         if kind == "category":
-            attributes = product.get("attributes", {})
-            department = attributes.get("department", "") if isinstance(attributes, dict) else ""
-            typed_values = [
-                str(item) for key, item in attributes.items()
-                if key.casefold() in {"type", "product_type"} or key.casefold().endswith("_category")
-            ] if isinstance(attributes, dict) else []
-            identity_parts = [str(product.get("name", "")), str(product.get("category", "")), *typed_values]
-            requested = BrandVoiceAgent._normalized_terms(value)
-            available = set(BrandVoiceAgent._normalized_terms(" ".join(identity_parts)))
-            heads = {
-                terms[-1] for part in identity_parts
-                if (terms := BrandVoiceAgent._normalized_terms(part))
-            }
-            # Department is useful corroborating evidence but is too broad to
-            # establish the product's actual role by itself.
-            available.update(BrandVoiceAgent._normalized_terms(str(department)))
-            return bool(requested) and set(requested).issubset(available) and requested[-1] in heads
+            return matches_product_role(product, value)
         if kind == "attribute" and field:
             attributes = product.get("attributes", {})
             attribute_value = str(attributes.get(field, "")) if isinstance(attributes, dict) else ""
@@ -761,21 +745,7 @@ class BrandVoiceAgent:
 
     @staticmethod
     def _normalized_terms(value: str) -> list[str]:
-        terms: list[str] = []
-        for token in re.findall(r"[\w]+", value.casefold()):
-            if len(token) < 2:
-                continue
-            # A light grammatical normalization is deliberately generic. It
-            # handles category labels such as "laptops"/"laptop" while keeping
-            # product names and attributes as catalog-supplied evidence.
-            if len(token) > 4 and token.endswith("ies"):
-                token = f"{token[:-3]}y"
-            elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-                token = token[:-1]
-            if token in BrandVoiceAgent._GENERIC_REQUIREMENT_TERMS:
-                continue
-            terms.append(token)
-        return terms
+        return normalized_terms(value)
 
     @staticmethod
     def _response_products(state: dict[str, Any], *, include_all_candidates: bool = False) -> list[dict[str, Any]]:

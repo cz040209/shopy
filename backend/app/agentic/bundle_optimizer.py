@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
-import re
 from typing import Any
 
 import json
@@ -13,6 +12,7 @@ from app.config import settings
 
 from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, _json_object
+from .product_roles import matches_product_role
 from .state import ShoppingAgentState
 
 
@@ -99,39 +99,10 @@ class BundleOptimizerAgent:
 
     @staticmethod
     def _matches(product: dict[str, Any], category: str) -> bool:
-        # Match product identity, not compatibility/specification mentions. For
-        # example a monitor arm can mention "monitor" and a desk mat can mention
-        # "mouse", but neither product itself fulfills those roles.
-        attributes = product.get("attributes", {})
-        typed_values = []
-        if isinstance(attributes, dict):
-            typed_values = [
-                str(value) for key, value in attributes.items()
-                if key.casefold() in {"type", "product_type"} or key.casefold().endswith("_category")
-            ]
-        identity_parts = [str(product.get("name", "")), str(product.get("category", "")), *typed_values]
-
-        def terms(value: str) -> list[str]:
-            normalized: list[str] = []
-            for token in re.findall(r"[a-z0-9]+", value.casefold()):
-                if len(token) > 4 and token.endswith("ies"):
-                    token = f"{token[:-3]}y"
-                elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-                    token = token[:-1]
-                normalized.append(token)
-            return normalized
-
-        words = set(terms(" ".join(identity_parts)))
-        identity_heads = {part_terms[-1] for part in identity_parts if (part_terms := terms(part))}
-        raw_roles = re.split(r"\bor\b", category.casefold())
-        roles = [
-            [token for token in terms(role) if token not in {"a", "an", "and", "the"}]
-            for role in raw_roles
-        ]
-        return any(
-            role and set(role).issubset(words) and role[-1] in identity_heads
-            for role in roles
-        )
+        # Match product identity, not compatibility/specification mentions.
+        # The shared matcher also resolves generic product-form terminology
+        # while requiring every role qualifier as catalog evidence.
+        return matches_product_role(product, category)
 
     @staticmethod
     def _price(product: dict[str, Any]) -> Decimal | None:

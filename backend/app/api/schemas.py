@@ -101,9 +101,31 @@ class UserResponse(BaseModel):
     id: UUID
     email: str
     full_name: str
+    phone: str | None
     avatar_url: str | None
     status: UserStatus
     created_at: datetime
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=160)
+    phone: str | None = Field(default=None, max_length=32)
+
+    @field_validator("full_name")
+    @classmethod
+    def clean_full_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if len(cleaned) < 2:
+            raise ValueError("Full name must contain at least 2 characters.")
+        return cleaned
+
+    @field_validator("phone")
+    @classmethod
+    def clean_phone(cls, value: str | None) -> str | None:
+        cleaned = value.strip() if value else None
+        if cleaned and len(cleaned) < 5:
+            raise ValueError("Enter a valid phone number.")
+        return cleaned
 
 
 class AuthResponse(BaseModel):
@@ -232,6 +254,7 @@ class OrderResponse(BaseModel):
     placed_at: datetime | None
     created_at: datetime
     items: list[OrderItemResponse]
+    receipt_email_queued: bool = False
 
 
 class WalletTransactionResponse(BaseModel):

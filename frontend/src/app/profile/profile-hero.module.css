@@ -1,0 +1,13 @@
+.hero.hero {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.hero.hero::before {
+  display: none;
+}
+
+.stats.stats { grid-template-columns: repeat(2, minmax(130px, 1fr)); max-width: 350px; }

@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -21,6 +23,7 @@ from ..schemas import (
     AuthResponse,
     LoginRequest,
     MessageResponse,
+    ProfileUpdateRequest,
     RegisterRequest,
     UserResponse,
 )
@@ -28,6 +31,8 @@ from ..schemas import (
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 SESSION_COOKIE_NAME = "shopy_session"
+AVATAR_CONTENT_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
 
 
 def utc_now() -> datetime:
@@ -152,6 +157,44 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
 
 @router.get("/me", response_model=UserResponse)
 def me(user: User = Depends(get_current_user)) -> UserResponse:
+    return UserResponse.model_validate(user)
+
+
+@router.patch("/me", response_model=UserResponse)
+def update_profile(payload: ProfileUpdateRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> UserResponse:
+    user.full_name = payload.full_name
+    user.phone = payload.phone
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(user)
+
+
+@router.post("/avatar", response_model=UserResponse)
+async def upload_avatar(
+    avatar: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    """Persist a small, browser-safe avatar for the authenticated account."""
+    extension = AVATAR_CONTENT_TYPES.get(avatar.content_type or "")
+    if extension is None:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Use a JPEG, PNG, or WebP image for your avatar.")
+    image_data = await avatar.read(MAX_AVATAR_BYTES + 1)
+    if not image_data or len(image_data) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Avatar images must be 2 MB or smaller.")
+    avatar_directory = settings.upload_directory / "avatars"
+    avatar_directory.mkdir(parents=True, exist_ok=True)
+    filename = f"{user.id}-{uuid4().hex}{extension}"
+    destination = avatar_directory / filename
+    destination.write_bytes(image_data)
+    previous_path = user.avatar_url
+    user.avatar_url = f"/uploads/avatars/{filename}"
+    db.commit()
+    db.refresh(user)
+    if previous_path and previous_path.startswith("/uploads/avatars/"):
+        previous_file = settings.upload_directory / Path(previous_path).relative_to("/uploads")
+        if previous_file != destination:
+            previous_file.unlink(missing_ok=True)
     return UserResponse.model_validate(user)
 
 

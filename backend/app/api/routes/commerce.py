@@ -3,15 +3,17 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
+from app.config import settings
 from app.models import Order, OrderItem, PaymentMethod, Review, User, Wallet, WalletTransaction
 from app.services.cart import add_cart_item, cart_subtotal, get_active_cart, remove_cart_item, update_cart_item
 from app.services.orders import create_order_from_cart
+from app.services.receipts import build_paid_receipt_pdf, send_paid_receipt_email
 from app.services.wallets import get_wallet, pay_order_with_wallet, top_up_wallet
 
 from ..schemas import (
@@ -35,14 +37,14 @@ def cart_response(cart) -> CartResponse:
     )
 
 
-def order_response(order: Order) -> OrderResponse:
+def order_response(order: Order, *, receipt_email_queued: bool = False) -> OrderResponse:
     return OrderResponse(
         id=order.id, order_number=order.order_number, status=order.status, payment_status=order.payment_status,
         currency=order.currency, subtotal=order.subtotal, tax_amount=order.tax_amount,
         handling_amount=order.handling_amount, discount_amount=order.discount_amount,
         total_amount=order.total_amount, shipping_address_snapshot=order.shipping_address_snapshot,
         placed_at=order.placed_at, created_at=order.created_at,
-        items=[OrderItemResponse(id=item.id, product_id=item.product_id, sku=item.sku, product_name=item.product_name, quantity=item.quantity, unit_price=item.unit_price, line_total=item.line_total, product_snapshot=item.product_snapshot) for item in order.items],
+        items=[OrderItemResponse(id=item.id, product_id=item.product_id, sku=item.sku, product_name=item.product_name, quantity=item.quantity, unit_price=item.unit_price, line_total=item.line_total, product_snapshot=item.product_snapshot) for item in order.items], receipt_email_queued=receipt_email_queued,
     )
 
 
@@ -68,7 +70,7 @@ def delete_item(item_id: UUID, user: User = Depends(get_current_user), db: Sessi
 
 
 @router.post("/orders/checkout", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
-def checkout(payload: CheckoutRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrderResponse:
+def checkout(payload: CheckoutRequest, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrderResponse:
     order = create_order_from_cart(
         db, user, shipping_address=payload.shipping_address.model_dump(), notes=payload.notes,
         payment_method=payload.payment_method, shipping_fee=payload.shipping_fee,
@@ -77,7 +79,17 @@ def checkout(payload: CheckoutRequest, user: User = Depends(get_current_user), d
         pay_order_with_wallet(db, user, order)
     db.commit()
     db.refresh(order)
-    return order_response(order)
+    receipt_email_queued = order.payment_status.value == "paid" and settings.receipt_email_enabled
+    if receipt_email_queued:
+        receipt_pdf = build_paid_receipt_pdf(order, customer_name=user.full_name)
+        background_tasks.add_task(
+            send_paid_receipt_email,
+            recipient_email=user.email,
+            recipient_name=user.full_name,
+            order_number=order.order_number,
+            receipt_pdf=receipt_pdf,
+        )
+    return order_response(order, receipt_email_queued=receipt_email_queued)
 
 
 @router.get("/orders", response_model=list[OrderResponse])

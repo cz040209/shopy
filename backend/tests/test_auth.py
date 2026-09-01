@@ -110,3 +110,37 @@ def test_registration_validates_password_strength(db_session):
         assert db_session.scalar(select(func.count()).select_from(User)) == 0
     finally:
         app.dependency_overrides.clear()
+
+
+def test_authenticated_user_can_upload_a_persistent_avatar(db_session):
+    client = auth_client(db_session)
+    try:
+        assert client.post("/api/v1/auth/register", json={
+            "full_name": "Avatar Member", "email": "avatar@example.com", "password": "Orbit2026!",
+        }).status_code == 201
+        avatar = client.post(
+            "/api/v1/auth/avatar",
+            files={"avatar": ("avatar.png", b"\x89PNG\r\n\x1a\nsmall-image", "image/png")},
+        )
+        assert avatar.status_code == 200
+        avatar_url = avatar.json()["avatar_url"]
+        assert avatar_url.startswith("/uploads/avatars/")
+        assert client.get(avatar_url).status_code == 200
+        assert client.get("/api/v1/auth/me").json()["avatar_url"] == avatar_url
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_authenticated_user_can_update_profile_details(db_session):
+    client = auth_client(db_session)
+    try:
+        assert client.post("/api/v1/auth/register", json={
+            "full_name": "Original Member", "email": "settings@example.com", "password": "Orbit2026!",
+        }).status_code == 201
+        updated = client.patch("/api/v1/auth/me", json={"full_name": "Updated Member", "phone": "+60123456789"})
+        assert updated.status_code == 200
+        assert updated.json()["full_name"] == "Updated Member"
+        assert updated.json()["phone"] == "+60123456789"
+        assert client.get("/api/v1/auth/me").json()["full_name"] == "Updated Member"
+    finally:
+        app.dependency_overrides.clear()

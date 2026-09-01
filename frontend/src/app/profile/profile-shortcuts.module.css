@@ -1,0 +1,8 @@
+.orders { --shortcut: #67e8f9; --shortcut-bg: rgba(34, 211, 238, .14); --shortcut-border: rgba(34, 211, 238, .4); }
+.dashboard { --shortcut: #86efac; --shortcut-bg: rgba(74, 222, 128, .14); --shortcut-border: rgba(74, 222, 128, .4); }
+.payments { --shortcut: #fdba74; --shortcut-bg: rgba(251, 146, 60, .14); --shortcut-border: rgba(251, 146, 60, .4); }
+.settings { --shortcut: #f9a8d4; --shortcut-bg: rgba(244, 114, 182, .14); --shortcut-border: rgba(244, 114, 182, .4); }
+
+.icon { background: var(--shortcut-bg) !important; color: var(--shortcut) !important; }
+.arrow { color: var(--shortcut) !important; }
+.orders:hover, .dashboard:hover, .payments:hover, .settings:hover { border-color: var(--shortcut-border) !important; }

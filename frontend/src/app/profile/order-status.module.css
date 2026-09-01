@@ -1,0 +1,3 @@
+.confirmed { background: rgba(34, 197, 94, .15) !important; color: #86efac !important; }
+.pending { background: rgba(234, 179, 8, .15) !important; color: #fde047 !important; }
+.failed { background: rgba(244, 63, 94, .15) !important; color: #fda4af !important; }

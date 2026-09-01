@@ -6,10 +6,18 @@ export type AuthUser = {
   id: string;
   email: string;
   full_name: string;
+  phone: string | null;
   avatar_url: string | null;
   status: "active" | "suspended" | "deleted";
   created_at: string;
 };
+
+export function resolveAvatarUrl(avatarUrl: string | null): string | null {
+  if (!avatarUrl) return null;
+  return avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://")
+    ? avatarUrl
+    : `${API_URL}${avatarUrl}`;
+}
 
 type AuthResponse = {
   user: AuthUser;

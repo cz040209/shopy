@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, BriefcaseBusiness, House, Plane } from "lucide-react";
 import styles from "./home.module.css";
+import heroTheme from "./home-hero-theme.module.css";
 import AIShoppingCamera from "@/features/vision/components/AIShoppingCamera";
 import { API_URL } from "@/lib/api";
 
@@ -101,8 +102,8 @@ export default function Home() {
   };
 
   return <main className={styles.home}>
-    <section className={styles.hero}>
-      <div className={styles.orbOne} /><div className={styles.orbTwo} />
+    <section className={`${styles.hero} ${heroTheme.hero}`}>
+      <div className={`${styles.orbOne} ${heroTheme.orbOne}`} /><div className={`${styles.orbTwo} ${heroTheme.orbTwo}`} />
       <span className={styles.kicker}>AI commerce, built around your goal</span>
       <h1>What can we <em>build</em> for you?</h1>
       <p className={styles.intro}>Skip the product hunt. Tell Shopy what you are trying to achieve, then let the right products come together.</p>

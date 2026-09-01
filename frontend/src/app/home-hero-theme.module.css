@@ -1,0 +1,18 @@
+.hero.hero::before {
+  inset: 8% 2%;
+  background:
+    radial-gradient(ellipse at 18% 18%, rgba(34, 211, 238, 0.25), transparent 39%),
+    radial-gradient(ellipse at 84% 17%, rgba(244, 114, 182, 0.19), transparent 36%),
+    radial-gradient(ellipse at 72% 86%, rgba(74, 222, 128, 0.18), transparent 39%),
+    radial-gradient(ellipse at 30% 90%, rgba(251, 146, 60, 0.14), transparent 36%);
+  filter: blur(48px);
+}
+
+.orbOne.orbOne,
+.orbTwo.orbTwo {
+  filter: blur(52px);
+  opacity: 0.2;
+}
+
+.orbOne.orbOne { background: #22d3ee; }
+.orbTwo.orbTwo { background: #4ade80; }

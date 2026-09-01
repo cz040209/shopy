@@ -39,6 +39,7 @@ function CheckoutContent() {
   const { cartItems, subtotal, refreshCart } = useCart();
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [paymentStage, setPaymentStage] = useState<"idle" | "processing" | "success">("idle");
+  const [receiptEmailQueued, setReceiptEmailQueued] = useState(false);
   const [shopyPayBalance, setShopyPayBalance] = useState(0);
   const [walletIsReady, setWalletIsReady] = useState(false);
   const cartSignature = cartItems
@@ -295,9 +296,10 @@ function CheckoutContent() {
           payment_method: "shopy_pay",
           shipping_fee: shippingFee.toFixed(2),
         }),
-      }) as { order_number: string; placed_at: string };
+      }) as { order_number: string; placed_at: string; receipt_email_queued: boolean };
       setInvoiceNumber(order.order_number);
       setInvoiceDate(new Date(order.placed_at).toLocaleDateString());
+      setReceiptEmailQueued(order.receipt_email_queued);
       await refreshCart();
       const wallet = await apiFetch("/api/v1/wallet") as WalletApiResponse;
       setShopyPayBalance(Number(wallet.balance));
@@ -333,7 +335,7 @@ function CheckoutContent() {
                 <span className={`${styles.paymentIcon} ${styles.paymentSuccessIcon}`}><CheckCircle2 size={34} /></span>
                 <p className={styles.paymentEyebrow}>Payment confirmed</p>
                 <h2>Thank you for shopping with Shopy.</h2>
-                <p>Your order <strong>#{invoiceNumber}</strong> is confirmed and we’re getting it ready for you.</p>
+                <p>Your order <strong>#{invoiceNumber}</strong> is confirmed and we’re getting it ready for you.{receiptEmailQueued ? " A paid PDF receipt is on its way to your email." : ""}</p>
                 <span className={styles.redirectNote}>Taking you back to Shopy…</span>
               </>
             )}

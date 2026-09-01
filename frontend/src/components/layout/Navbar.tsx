@@ -9,6 +9,7 @@ import {
   AUTH_CHANGE_EVENT,
   getCurrentUser,
   logoutAccount,
+  resolveAvatarUrl,
 } from "@/lib/auth";
 import { ShoppingBag, UserRound } from "lucide-react";
 import styles from "./Navbar.module.css";
@@ -47,16 +48,15 @@ export default function Navbar() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   function to_sync_avatar() {
-    const syncAvatar = () => {
+    const syncAvatar = async () => {
       try {
-        const stored = window.localStorage.getItem("shopy-avatar");
-        setAvatarUrl(stored);
+        setAvatarUrl(resolveAvatarUrl((await getCurrentUser())?.avatar_url ?? null));
       } catch {
-        // Ignore localStorage access issues.
+        setAvatarUrl(null);
       }
     };
 
-    const id = window.setTimeout(syncAvatar, 0);
+    const id = window.setTimeout(() => void syncAvatar(), 0);
     window.addEventListener("shopy-avatar-change", syncAvatar);
 
     return () => {
@@ -206,7 +206,7 @@ export default function Navbar() {
               ))}
             </div>
 
-            <div className="ml-auto flex flex-wrap items-center gap-3 sm:gap-5">
+            <div className="ml-auto flex flex-wrap items-center gap-4 sm:gap-6">
               <Link
                 href={isLoggedIn ? "/cart" : "/login?next=%2Fcart"}
                 className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-white transition duration-200 hover:-translate-y-0.5 hover:border-indigo-300/40 hover:bg-white/10 hover:text-indigo-300"
@@ -219,7 +219,7 @@ export default function Navbar() {
                   </span>
                 )}
               </Link>
-              <div className="group relative">
+              <div className="group relative ml-2 shrink-0 sm:ml-3">
                 <Link
                   href={isLoggedIn ? "/profile" : "/login"}
                   className={profileLinkClass()}

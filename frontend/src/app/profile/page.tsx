@@ -9,6 +9,7 @@ import {
   AuthUser,
   getCurrentUser,
   logoutAccount,
+  resolveAvatarUrl,
 } from "@/lib/auth";
 import {
   Bell,
@@ -17,12 +18,15 @@ import {
   CreditCard,
   PackageCheck,
   Settings,
+  ChartNoAxesCombined,
   UserRound,
-  Bot,
 } from "lucide-react";
 import styles from "./profile.module.css";
+import shortcutStyles from "./profile-shortcuts.module.css";
+import orderStatusStyles from "./order-status.module.css";
+import heroStyles from "./profile-hero.module.css";
 import RequireAuth from "@/components/auth/RequireAuth";
-import { apiFetch } from "@/lib/api";
+import { API_URL, apiFetch } from "@/lib/api";
 
 type AccountOrder = {
   id: string;
@@ -41,29 +45,29 @@ function accountSections(orderCount: number) {
   {
     title: "Order History",
     description: "Track active shipments and inspect previous purchases.",
-    icon: PackageCheck,
+    icon: PackageCheck, tone: "orders",
     href: "#order-history",
     metric: `${orderCount} order${orderCount === 1 ? "" : "s"}`,
   },
   {
-    title: "AI Insights",
-    description: "Review recommendations tuned to your shopping patterns.",
-    icon: Bot,
-    href: "/shop",
-    metric: "94% match",
+    title: "Purchase dashboard",
+    description: "See how often you shop and how your spending changes over time.",
+    icon: ChartNoAxesCombined, tone: "dashboard",
+    href: "/dashboard",
+    metric: "Activity",
   },
   {
     title: "Payment Vault",
     description: "Manage cards, billing preferences, and checkout speed.",
-    icon: CreditCard,
+    icon: CreditCard, tone: "payments",
     href: "/checkout",
     metric: "Secured",
   },
   {
     title: "Account Settings",
     description: "Update profile details, alerts, and privacy controls.",
-    icon: Settings,
-    href: "/login",
+    icon: Settings, tone: "settings",
+    href: "/settings",
     metric: "Verified",
   },
   ];
@@ -139,6 +143,8 @@ function ProfileContent() {
         setUser(currentUser);
         if (!currentUser) {
           setAvatar(null);
+        } else {
+          setAvatar(resolveAvatarUrl(currentUser.avatar_url));
         }
       } catch {
         if (isMounted) {
@@ -150,23 +156,12 @@ function ProfileContent() {
       }
     };
 
-    const avatarTimer = window.setTimeout(() => {
-      try {
-        const stored = window.localStorage.getItem("shopy-avatar");
-        if (stored) {
-          setAvatar(stored);
-        }
-      } catch {
-        // Ignore localStorage access issues for the optional avatar preview.
-      }
-    }, 0);
     void syncAuth();
 
     window.addEventListener(AUTH_CHANGE_EVENT, syncAuth);
 
     return () => {
       isMounted = false;
-      window.clearTimeout(avatarTimer);
       window.removeEventListener(AUTH_CHANGE_EVENT, syncAuth);
     };
   }, []);
@@ -206,8 +201,16 @@ function ProfileContent() {
 
     try {
       const resizedAvatar = await resizeAvatar(file);
-      setAvatar(resizedAvatar);
-      window.localStorage.setItem("shopy-avatar", resizedAvatar);
+      const formData = new FormData();
+      formData.append("avatar", new File([await (await fetch(resizedAvatar)).blob()], "avatar.jpg", { type: "image/jpeg" }));
+      const response = await fetch(`${API_URL}/api/v1/auth/avatar`, { method: "POST", body: formData, credentials: "include" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || "Could not upload your avatar.");
+      }
+      const updatedUser = await response.json() as AuthUser;
+      setUser(updatedUser);
+      setAvatar(resolveAvatarUrl(updatedUser.avatar_url));
       window.dispatchEvent(new Event("shopy-avatar-change"));
     } catch (error) {
       console.error(error);
@@ -218,14 +221,14 @@ function ProfileContent() {
 
   return (
     <main className={styles.page}>
-      <section className={styles.hero}>
+      <section className={`${styles.hero} ${heroStyles.hero}`}>
         <div className={styles.heroCopy}>
           <div className={styles.kicker}>Member center</div>
           <div className={styles.title}>Your account</div>
           <div className={styles.subtitle}>Manage orders, payment preferences, and personalised shopping in one place.</div>
           <div className={styles.heroActions}><Link href="/shop" className={styles.primaryAction}>Explore products</Link><Link href="/cart" className={styles.secondaryAction}>View cart</Link></div>
         </div>
-        <div className={styles.heroStats}><div><strong>{isLoadingOrders ? "—" : orders.length}</strong><span>Orders</span></div><div><strong>94%</strong><span>Match score</span></div><div><strong>24/7</strong><span>Wallet protection</span></div></div>
+        <div className={`${styles.heroStats} ${heroStyles.stats}`}><div><strong>{isLoadingOrders ? "—" : orders.length}</strong><span>Orders</span></div><div><strong>24/7</strong><span>Wallet protection</span></div></div>
       </section>
 
       <section className={styles.accountGrid}>
@@ -258,15 +261,15 @@ function ProfileContent() {
       <section className={styles.actionGrid}>
         {accountSections(orders.length).map((section) => {
           const Icon = section.icon;
-          return <Link key={section.title} href={section.href} className={styles.actionCard}>
-            <div className={styles.cardTop}><div className={styles.actionIcon}><Icon size={21} /></div><div className={styles.metric}>{section.metric}</div></div>
-            <div className={styles.cardBottom}><div><div className={styles.actionTitle}>{section.title}</div><div className={styles.actionDescription}>{section.description}</div></div><ChevronRight size={21} className={styles.chevron} /></div>
+          return <Link key={section.title} href={section.href} className={`${styles.actionCard} ${shortcutStyles[section.tone]}`}>
+            <div className={styles.cardTop}><div className={`${styles.actionIcon} ${shortcutStyles.icon}`}><Icon size={21} /></div><div className={styles.metric}>{section.metric}</div></div>
+            <div className={styles.cardBottom}><div><div className={styles.actionTitle}>{section.title}</div><div className={styles.actionDescription}>{section.description}</div></div><ChevronRight size={21} className={`${styles.chevron} ${shortcutStyles.arrow}`} /></div>
           </Link>;
         })}
       </section>
       <section id="order-history" className={styles.ordersSection} aria-labelledby="order-history-heading">
         <div className={styles.ordersHeader}><div><div className={styles.sectionKicker}>Order history</div><h2 id="order-history-heading" className={styles.sectionTitle}>Your recent orders</h2></div><span className={styles.sectionNote}>Synced with your Shopy account</span></div>
-        {isLoadingOrders ? <div className={styles.ordersEmpty}>Loading your orders…</div> : ordersError ? <div className={styles.ordersEmpty}>{ordersError}</div> : orders.length === 0 ? <div className={styles.ordersEmpty}>You have not placed an order yet. Completed checkout orders will appear here.</div> : <div className={styles.orderList}>{orders.map((order) => <article key={order.id} className={styles.orderCard}><div className={styles.orderTop}><div><span className={styles.orderLabel}>Order</span><strong>{order.order_number}</strong></div><span className={styles.orderStatus}>{order.status.replaceAll("_", " ")}</span></div><p className={styles.orderItems}>{order.items.map((item) => `${item.product_name} × ${item.quantity}`).join(", ")}</p><div className={styles.orderBottom}><span>{new Date(order.created_at).toLocaleDateString("en-MY", { dateStyle: "medium" })} · Payment {order.payment_status.replaceAll("_", " ")}</span><strong>{currency.format(Number(order.total_amount))}</strong></div></article>)}</div>}
+        {isLoadingOrders ? <div className={styles.ordersEmpty}>Loading your orders…</div> : ordersError ? <div className={styles.ordersEmpty}>{ordersError}</div> : orders.length === 0 ? <div className={styles.ordersEmpty}>You have not placed an order yet. Completed checkout orders will appear here.</div> : <div className={styles.orderList}>{orders.map((order) => { const statusTone = ["confirmed", "processing", "shipped", "delivered"].includes(order.status) ? "confirmed" : order.status === "pending" ? "pending" : "failed"; return <article key={order.id} className={styles.orderCard}><div className={styles.orderTop}><div><span className={styles.orderLabel}>Order</span><strong>{order.order_number}</strong></div><span className={`${styles.orderStatus} ${orderStatusStyles[statusTone]}`}>{order.status.replaceAll("_", " ")}</span></div><p className={styles.orderItems}>{order.items.map((item) => `${item.product_name} × ${item.quantity}`).join(", ")}</p><div className={styles.orderBottom}><span>{new Date(order.created_at).toLocaleDateString("en-MY", { dateStyle: "medium" })} · Payment {order.payment_status.replaceAll("_", " ")}</span><strong>{currency.format(Number(order.total_amount))}</strong></div></article>; })}</div>}
       </section>
     </main>
   );
