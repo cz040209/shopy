@@ -12,6 +12,11 @@ _ROLE_TERM_FAMILIES = (
     frozenset({"cleaner", "cleanser", "detergent", "shampoo", "soap", "wash"}),
 )
 _GENERIC_TERMS = {"item", "items", "option", "options", "product", "products"}
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "pair": 2, "dozen": 12,
+}
 
 
 def normalized_terms(value: str) -> list[str]:
@@ -75,3 +80,42 @@ def matches_product_role(product: dict[str, Any], role: str) -> bool:
     return bool(qualifiers) and set(qualifiers).issubset(available) and any(
         _same_product_form(requested_head, product_head) for product_head in heads
     )
+
+
+def units_per_package(product: dict[str, Any], role: str) -> int:
+    """Read an explicit role-unit count from structured pack-size evidence.
+
+    Counts are accepted only when the nearby noun matches the requested role,
+    so dimensions and volumes such as ``50 x 80 cm`` or ``473 ml`` cannot be
+    mistaken for the number of requested items.
+    """
+    attributes = product.get("attributes", {})
+    values: list[str] = []
+    if isinstance(attributes, dict):
+        values.extend(
+            str(value) for key, value in attributes.items()
+            if key.casefold().replace("_", " ") in {
+                "pack size", "package contents", "pack contents", "quantity", "count",
+            }
+        )
+    for spec in product.get("specs", []):
+        if not isinstance(spec, dict):
+            continue
+        label = str(spec.get("label", "")).casefold().replace("_", " ").strip()
+        if label in {"pack size", "package contents", "pack contents", "quantity", "count"}:
+            values.append(str(spec.get("value", "")))
+
+    requested = normalized_terms(role)
+    if not requested:
+        return 1
+    requested_head = requested[-1]
+    for value in values:
+        raw_tokens = re.findall(r"[\w]+", value.casefold())
+        for index, token in enumerate(raw_tokens):
+            count = int(token) if token.isdigit() else _NUMBER_WORDS.get(token)
+            if count is None or count < 1 or count > 99:
+                continue
+            nearby = normalized_terms(" ".join(raw_tokens[index + 1:index + 5]))
+            if any(_same_product_form(requested_head, term) for term in nearby):
+                return count
+    return 1

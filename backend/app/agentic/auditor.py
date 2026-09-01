@@ -14,6 +14,7 @@ from app.config import settings
 from .budgeting import recommendation_budget_limit
 from .brand_voice import BrandVoiceAgent
 from .intent import StructuredOutputError, _json_object
+from .product_roles import units_per_package
 
 
 class ToolExecutor(Protocol):
@@ -405,6 +406,14 @@ class ShoppingAuditor:
         # This check uses the same typed matcher as selection, so it applies to
         # every future catalog domain without keyword-specific prose rules.
         budget = state.get("budget")
+        selected_quantities: dict[str, int] = {}
+        for item in state.get("selected_products", []):
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            try:
+                selected_quantities[str(item["id"])] = max(1, int(item.get("quantity", 1) or 1))
+            except (TypeError, ValueError):
+                continue
         no_eligible_optimization_alternative = (
             isinstance(state.get("selection_context"), dict)
             and state["selection_context"].get("no_eligible_alternative") is True
@@ -464,21 +473,29 @@ class ShoppingAuditor:
                     within_budget = False
                 if within_budget and BrandVoiceAgent._matches_requirement(candidate, requirement):
                     eligible_candidates.append(candidate)
-            matches = 0
-            for product in verified_products.values():
-                matches += int(BrandVoiceAgent._matches_requirement(product, requirement))
+            matched_units = 0
+            for product_id, product in verified_products.items():
+                if BrandVoiceAgent._matches_requirement(product, requirement):
+                    matched_units += (
+                        selected_quantities.get(product_id, 1)
+                        * units_per_package(product, value)
+                    )
+            eligible_units = sum(
+                int(candidate.get("inventory_quantity", 0)) * units_per_package(candidate, value)
+                for candidate in eligible_candidates
+            )
             acknowledged_bundle_gap = (
                 missing_from_bundle(value)
                 and declared_for_requirement(value)
                 and declared_unfulfilled.issubset(allowed_unfulfilled)
             )
-            if len(eligible_candidates) >= quantity and matches < quantity and not acknowledged_bundle_gap:
+            if eligible_units >= quantity and matched_units < quantity and not acknowledged_bundle_gap:
                 errors.append({
                     "code": "catalog_match_not_selected",
                     "message": "Verified catalog matches were retrieved but not carried into the customer response.",
                     "requirement": value,
                 })
-            if matches < quantity:
+            if matched_units < quantity:
                 if no_eligible_optimization_alternative:
                     # A continuation can validly ask the customer to relax an
                     # intent-derived criterion when verified search returned

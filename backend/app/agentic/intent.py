@@ -91,7 +91,8 @@ Available runtime tools (the source of truth for requested_actions):
 
 ### Tool Execution & Actions
 * requested_actions may contain only exact names from the available runtime tools, selected only when needed and according to their documented input schemas.
-* When a selected tool needs a set of products and quantities, bundle_items must list each requested product phrase and quantity. Use quantity 1 only when the customer did not state a quantity.
+* When a selected tool needs a set of products and quantities, bundle_items must list each requested product phrase and quantity.
+* Quantity is customer evidence, not planning advice. Use quantity 1 whenever the customer did not explicitly state a count for that item. Never infer extra units from best practices, typical kits, product usage, or the available budget. Keep the matching fulfillment_requirement quantity identical to its bundle item quantity.
 
 ### Mission Classification (`mission_type`)
 * **stock_check**: Classify requests that ask whether a product is available, in stock, sold out, or has inventory as mission_type "stock_check". For stock_check, set catalog_query to the product words to search (for example, "spf 50 sunscreen"), not "check stock".
@@ -210,7 +211,7 @@ class IntentMissionAgent:
                     and has_reference_selection and not mission.selection_criteria
                 ):
                     raise StructuredOutputError("An optimization continuation requires a verifiable criterion.")
-                return self._normalize_mission(mission, runtime_context)
+                return self._normalize_mission(mission, runtime_context, user_request=user_request)
             except ValidationError as error:
                 last_error = StructuredOutputError("Intent model response does not match the mission schema.")
                 last_error.__cause__ = error
@@ -228,7 +229,7 @@ class IntentMissionAgent:
             error_type=type(last_error).__name__,
             requires_catalog=fallback.requires_catalog,
         )
-        return self._normalize_mission(fallback, runtime_context)
+        return self._normalize_mission(fallback, runtime_context, user_request=user_request)
 
     @staticmethod
     def _terms(value: str) -> set[str]:
@@ -251,7 +252,8 @@ class IntentMissionAgent:
 
     @classmethod
     def _normalize_mission(
-        cls, mission: MissionInterpretation, runtime_context: dict[str, Any] | None
+        cls, mission: MissionInterpretation, runtime_context: dict[str, Any] | None,
+        *, user_request: str | None = None,
     ) -> MissionInterpretation:
         """Reconcile model output with typed and visual workflow evidence.
 
@@ -267,7 +269,12 @@ class IntentMissionAgent:
         owned = list(dict.fromkeys([*mission.owned_items, *existing]))
 
         bundle_items = [
-            item for item in mission.bundle_items
+            item.model_copy(update={
+                "quantity": cls._grounded_quantity(
+                    user_request, item.query, item.quantity,
+                    runtime_context=runtime_context if mission.continues_context else None,
+                ),
+            }) for item in mission.bundle_items
             if not cls._covered_by_owned(item.query, owned)
         ]
         vision_needs = [
@@ -306,9 +313,28 @@ class IntentMissionAgent:
                 for role in role_phrases if cls._terms(requirement.value)
             ):
                 continue
+            matching_bundle_item = next((
+                item for item in bundle_items
+                if cls._terms(requirement.value) == cls._terms(item.query)
+                or (
+                    cls._terms(requirement.value)
+                    and cls._terms(item.query)
+                    and (
+                        cls._terms(requirement.value).issubset(cls._terms(item.query))
+                        or cls._terms(item.query).issubset(cls._terms(requirement.value))
+                    )
+                )
+            ), None)
+            quantity = (
+                matching_bundle_item.quantity if matching_bundle_item is not None
+                else cls._grounded_quantity(
+                    user_request, requirement.value, requirement.quantity,
+                    runtime_context=runtime_context if mission.continues_context else None,
+                )
+            )
             normalized = FulfillmentRequirement(
                 kind=kind, value=requirement.value.strip(), field=field,
-                quantity=requirement.quantity,
+                quantity=quantity,
             )
             key = (normalized.kind, normalized.value.casefold(), normalized.field or "", normalized.quantity)
             if key not in seen_requirements:
@@ -340,6 +366,59 @@ class IntentMissionAgent:
         if len(bundle_items) > 1:
             data["recommendation_mode"] = "bundle"
         return MissionInterpretation.model_validate(data)
+
+    _QUANTITY_WORDS = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+        "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+        "twelve": 12, "pair": 2, "dozen": 12,
+    }
+
+    @classmethod
+    def _grounded_quantity(
+        cls, user_request: str | None, role: str, claimed: int,
+        *, runtime_context: dict[str, Any] | None = None,
+    ) -> int:
+        """Keep a multi-unit count only when it is stated near that product role."""
+        if claimed <= 1:
+            return max(1, claimed)
+        memory = runtime_context.get("short_term_memory") if isinstance(runtime_context, dict) else None
+        prior_mission = memory.get("current_mission") if isinstance(memory, dict) else None
+        if isinstance(prior_mission, dict):
+            role_terms = cls._terms(role)
+            prior_items = [
+                *(
+                    item for item in prior_mission.get("bundle_items", [])
+                    if isinstance(item, dict)
+                ),
+                *(
+                    item for item in prior_mission.get("fulfillment_requirements", [])
+                    if isinstance(item, dict)
+                ),
+            ]
+            for item in prior_items:
+                prior_role = str(item.get("query", item.get("value", "")))
+                if cls._terms(prior_role) == role_terms:
+                    try:
+                        if int(item.get("quantity", 1) or 1) == claimed:
+                            return claimed
+                    except (TypeError, ValueError):
+                        continue
+        if user_request is None:
+            return claimed
+        request_tokens = re.findall(r"[\w]+", user_request.casefold())
+        role_terms = cls._terms(role)
+        quantity_positions = {
+            index for index, token in enumerate(request_tokens)
+            if (int(token) if token.isdigit() else cls._QUANTITY_WORDS.get(token)) == claimed
+        }
+        role_positions = {
+            index for index, token in enumerate(request_tokens)
+            if cls._terms(token) & role_terms
+        }
+        return claimed if any(
+            abs(quantity_index - role_index) <= 4
+            for quantity_index in quantity_positions for role_index in role_positions
+        ) else 1
 
     def _fallback_mission(
         self, user_request: str, partial: dict[str, object]

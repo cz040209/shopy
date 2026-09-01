@@ -118,6 +118,52 @@ def test_intent_normalization_removes_feature_duplicates_embedded_in_bundle_role
     ]
 
 
+def test_intent_normalization_does_not_invent_bundle_quantities():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="wash the car",
+        bundle_items=[{"query": "drying towel", "quantity": 2}],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "drying towel", "quantity": 2},
+        ],
+    )
+
+    inferred = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="I need to wash my car around RM 500"
+    )
+    explicit = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="I need two drying towels to wash my car"
+    )
+
+    assert inferred.bundle_items[0].quantity == 1
+    assert inferred.fulfillment_requirements[0].quantity == 1
+    assert explicit.bundle_items[0].quantity == 2
+    assert explicit.fulfillment_requirements[0].quantity == 2
+
+
+def test_intent_normalization_preserves_audited_quantity_during_refinement():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="make it cheaper",
+        continues_context=True,
+        bundle_items=[{"query": "drying towel", "quantity": 2}],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "drying towel", "quantity": 2},
+        ],
+    )
+    runtime_context = {"short_term_memory": {"current_mission": {
+        "bundle_items": [{"query": "drying towel", "quantity": 2}],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "drying towel", "quantity": 2},
+        ],
+    }}}
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, runtime_context, user_request="Make the bundle cheaper"
+    )
+
+    assert normalized.bundle_items[0].quantity == 2
+    assert normalized.fulfillment_requirements[0].quantity == 2
+
+
 def test_initial_state_is_complete_and_mutable_fields_are_not_shared():
     first = initial_shopping_state("Find a gaming setup")
     second = initial_shopping_state("Find a travel kit")
@@ -804,6 +850,62 @@ async def test_bundle_resolves_generic_product_form_terms_from_catalog_evidence(
 
     assert result["selected_products"] == [{"id": "shampoo", "quantity": 1}]
     assert result["bundle"]["required_category_coverage"]["missing"] == []
+
+
+@pytest.mark.anyio
+async def test_bundle_and_auditor_count_verified_units_inside_a_package():
+    towel_set = {
+        "id": "towels", "name": "Gauntlet Microfibre Drying Towel Set",
+        "brand": "The Rag Company", "category": "Drying Towels", "price": "45",
+        "currency": "MYR", "inventory_quantity": 8,
+        "specs": [{"label": "Pack size", "value": "2 towels, 50 × 80 cm"}],
+        "attributes": {"department": "automotive", "pack_size": "2 towels, 50 × 80 cm"},
+    }
+    state = initial_shopping_state("I need two drying towels")
+    state.update({
+        "recommendation_mode": "bundle", "budget": 500,
+        "bundle_items": [{"query": "drying towel", "quantity": 2}],
+        "required_categories": ["drying towel"],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "drying towel", "field": None, "quantity": 2},
+        ],
+        "candidate_products": [towel_set],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+    audited_state = {**state, **result, "unfulfilled_requirements": []}
+    errors: list[dict[str, str]] = []
+    ShoppingAuditor._validate_fulfillment(audited_state, {"towels": towel_set}, errors)
+
+    assert result["selected_products"] == [{"id": "towels", "quantity": 1}]
+    assert result["bundle"]["total"] == "45"
+    assert errors == []
+
+
+@pytest.mark.anyio
+async def test_bundle_buys_multiple_packages_when_pack_size_does_not_cover_quantity():
+    towel = {
+        "id": "towel", "name": "Microfibre Drying Towel", "brand": "Test",
+        "category": "Drying Towels", "price": "45", "currency": "MYR",
+        "inventory_quantity": 8,
+        "specs": [{"label": "Pack size", "value": "One towel"}],
+        "attributes": {"department": "automotive", "pack_size": "One towel"},
+    }
+    state = initial_shopping_state("I need two drying towels")
+    state.update({
+        "recommendation_mode": "bundle", "budget": 500,
+        "bundle_items": [{"query": "drying towel", "quantity": 2}],
+        "required_categories": ["drying towel"],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "drying towel", "field": None, "quantity": 2},
+        ],
+        "candidate_products": [towel],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["selected_products"] == [{"id": "towel", "quantity": 2}]
+    assert result["bundle"]["total"] == "90"
 
 
 def test_catalog_queries_remove_only_redundant_subqueries():

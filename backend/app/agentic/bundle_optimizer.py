@@ -12,7 +12,7 @@ from app.config import settings
 
 from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, _json_object
-from .product_roles import matches_product_role
+from .product_roles import matches_product_role, normalized_terms, units_per_package
 from .state import ShoppingAgentState
 
 
@@ -109,6 +109,35 @@ class BundleOptimizerAgent:
         try: return Decimal(str(product["price"]))
         except (InvalidOperation, KeyError, TypeError): return None
 
+    @staticmethod
+    def _required_quantity(state: ShoppingAgentState, role: str) -> int:
+        """Resolve a role quantity from the normalized runtime mission contract."""
+        role_terms = set(normalized_terms(role))
+        sources = [
+            *(
+                item for item in state.get("bundle_items", [])
+                if isinstance(item, dict)
+            ),
+            *(
+                item for item in state.get("fulfillment_requirements", [])
+                if isinstance(item, dict)
+                and str(item.get("kind", "")).casefold().strip() == "category"
+            ),
+        ]
+        quantities = []
+        for item in sources:
+            value = str(item.get("query", item.get("value", ""))).strip()
+            value_terms = set(normalized_terms(value))
+            if value.casefold() == role.casefold() or (
+                role_terms and value_terms
+                and (role_terms.issubset(value_terms) or value_terms.issubset(role_terms))
+            ):
+                try:
+                    quantities.append(max(1, int(item.get("quantity", 1) or 1)))
+                except (TypeError, ValueError):
+                    continue
+        return max(quantities, default=1)
+
     def _score(self, product: dict[str, Any], state: ShoppingAgentState, plan: BundlePlan) -> Decimal:
         price = self._price(product) or Decimal("999999")
         ranking = next((item for item in state.get("product_rankings", []) if str(item.get("product_id")) == str(product["id"])), {})
@@ -153,12 +182,12 @@ class BundleOptimizerAgent:
             budget_limit = strict_reference_limit if budget_limit is None else min(budget_limit, strict_reference_limit)
         selected: list[dict[str, Any]] = []
         covered: list[str] = []
-        coverage_matches: list[dict[str, str]] = []
+        coverage_matches: list[dict[str, Any]] = []
         total = Decimal("0")
         # Search combinations instead of greedily consuming the budget. Role
         # coverage remains primary; the verified refinement direction decides
         # whether cost or grounded relevance is the next objective.
-        beam: list[tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]] = [
+        beam: list[tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, Any]]]] = [
             ([], Decimal("0"), Decimal("0"), [])
         ]
         for category in state.get("required_categories", []):
@@ -181,20 +210,42 @@ class BundleOptimizerAgent:
                 current_ids = {str(item["id"]) for item in current_products}
                 for choice in options:
                     product_id = str(choice["id"])
-                    price = Decimal("0") if product_id in current_ids else self._price(choice)
-                    if price is None or (budget_limit is not None and current_total + price > budget_limit):
+                    unit_price = self._price(choice)
+                    required_units = self._required_quantity(state, str(category))
+                    package_units = units_per_package(choice, str(category))
+                    purchase_quantity = (required_units + package_units - 1) // package_units
+                    prior_quantity = max(
+                        (
+                            int(item.get("purchase_quantity", 1)) for item in assignments
+                            if str(item.get("product_id")) == product_id
+                        ),
+                        default=0,
+                    )
+                    effective_quantity = max(prior_quantity, purchase_quantity)
+                    if unit_price is None or int(choice.get("inventory_quantity", 0)) < effective_quantity:
+                        continue
+                    price = unit_price * (effective_quantity - prior_quantity)
+                    if budget_limit is not None and current_total + price > budget_limit:
                         continue
                     expanded.append((
                         current_products if product_id in current_ids else [*current_products, choice],
                         current_total + price,
                         current_score + self._score(choice, state, plan),
-                        [*assignments, {"requirement": str(category), "product_id": product_id}],
+                        [*assignments, {
+                            "requirement": str(category), "product_id": product_id,
+                            "required_quantity": required_units,
+                            "package_units": package_units,
+                            "purchase_quantity": effective_quantity,
+                        }],
                     ))
-            deduped: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]] = {}
+            deduped: dict[tuple[tuple[str, ...], tuple[str, ...]], tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, Any]]]] = {}
             for candidate in expanded:
                 signature = (
                     tuple(sorted(str(item["id"]) for item in candidate[0])),
-                    tuple(item["requirement"] for item in candidate[3]),
+                    tuple(
+                        f"{item['requirement']}:{item['product_id']}:{item.get('purchase_quantity', 1)}"
+                        for item in candidate[3]
+                    ),
                 )
                 previous = deduped.get(signature)
                 candidate_quality = (-candidate[1], candidate[2]) if prefer_lower_total else (candidate[2], candidate[1])
@@ -204,12 +255,12 @@ class BundleOptimizerAgent:
                 previous_quality = (-previous[1], previous[2]) if prefer_lower_total else (previous[2], previous[1])
                 if candidate_quality > previous_quality:
                     deduped[signature] = candidate
-            def beam_key(item: tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]) -> tuple[Any, ...]:
+            def beam_key(item: tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, Any]]]) -> tuple[Any, ...]:
                 return (len(item[3]), -item[1], item[2]) if prefer_lower_total else (len(item[3]), item[2], item[1])
             beam = sorted(
                 deduped.values(), key=beam_key, reverse=True
             )[:max(1, settings.agent_bundle_beam_width)]
-        def final_key(item: tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, str]]]) -> tuple[Any, ...]:
+        def final_key(item: tuple[list[dict[str, Any]], Decimal, Decimal, list[dict[str, Any]]]) -> tuple[Any, ...]:
             return (len(item[3]), -item[1], item[2]) if prefer_lower_total else (len(item[3]), item[2], item[1])
         selected, total, _, coverage_matches = max(beam, key=final_key)
         covered = [item["requirement"] for item in coverage_matches]
@@ -222,6 +273,11 @@ class BundleOptimizerAgent:
             choice = next((item for item in options if (price := self._price(item)) is not None and (budget_limit is None or total + price <= budget_limit)), None)
             if choice is not None:
                 selected.append(choice); total += self._price(choice) or Decimal("0"); covered.append(category)
+                coverage_matches.append({
+                    "requirement": str(category), "product_id": str(choice["id"]),
+                    "required_quantity": 1, "package_units": units_per_package(choice, str(category)),
+                    "purchase_quantity": 1,
+                })
         # With explicit roles, an arbitrary affordable product is not a valid
         # fallback: it creates a recommendation unrelated to the planned need.
         # The empty selection plus verified gaps is the honest result. Retain
@@ -236,8 +292,21 @@ class BundleOptimizerAgent:
                     selected.append(product); total += price
                     break
         missing = [category for category in state.get("required_categories", []) if category not in covered]
+        selected_quantities = {
+            str(product["id"]): max(
+                (
+                    int(match.get("purchase_quantity", 1)) for match in coverage_matches
+                    if str(match.get("product_id")) == str(product["id"])
+                ),
+                default=1,
+            )
+            for product in selected
+        }
         bundle = {
-            "mode": plan.mode, "selected_products": [{"product_id": str(product["id"]), "quantity": 1} for product in selected],
+            "mode": plan.mode, "selected_products": [
+                {"product_id": str(product["id"]), "quantity": selected_quantities[str(product["id"])]}
+                for product in selected
+            ],
             "total": str(total), "currency": str(selected[0].get("currency", "MYR")) if selected else "MYR",
             "budget_remaining": str(budget - total) if budget is not None else None,
             "product_count": len(selected), "categories_covered": covered,
@@ -251,6 +320,9 @@ class BundleOptimizerAgent:
         }
         return {
             "bundle": bundle,
-            "selected_products": [{"id": str(product["id"]), "quantity": 1} for product in selected],
+            "selected_products": [
+                {"id": str(product["id"]), "quantity": selected_quantities[str(product["id"])]}
+                for product in selected
+            ],
             "fulfillment_gaps": [f"No verified candidate covered: {category}" for category in missing],
         }
