@@ -12,8 +12,6 @@ import {
   resolveAvatarUrl,
 } from "@/lib/auth";
 import {
-  Bell,
-  CheckCircle2,
   ChevronRight,
   CreditCard,
   PackageCheck,
@@ -254,7 +252,6 @@ function ProfileContent() {
             </div>
           )}
         </div>
-        <div className={styles.alertCard}><div className={styles.alertIcon}><Bell size={20} /></div><div><div className={styles.alertTitle}>Stay in the loop</div><div className={styles.alertCopy}>Smart alerts are enabled for delivery milestones, price drops, and wallet activity.</div></div><CheckCircle2 size={20} className={styles.alertCheck} /></div>
       </section>
 
       <section className={styles.sectionHeader}><div><div className={styles.sectionKicker}>Your shortcuts</div><div className={styles.sectionTitle}>Everything you need, in one place</div></div><div className={styles.sectionNote}>Personalised for your account</div></section>

@@ -1,10 +1,10 @@
-import { CircleDollarSign, PackageCheck, Tag, X } from "lucide-react";
+import { CircleDollarSign, PackageCheck, SlidersHorizontal, Tag, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { MissionData } from "./types";
 import styles from "./mission-studio.module.css";
 
 type Props = { mission: MissionData; onRemoveOwned: (item: string) => void };
-type Chip = { icon: typeof Tag; label: string };
+type Chip = { icon: typeof Tag; label: string; tone: "budget" | "goal" | "preference" };
 
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
@@ -15,9 +15,9 @@ export default function ExtractedChips({ mission, onRemoveOwned }: Props) {
     .filter((value) => !requirementKeys.has(normalize(value)))
     .slice(0, Math.max(0, 6 - keyRequirements.length));
   const rows: Chip[] = [
-    mission.budget ? { icon: CircleDollarSign, label: `Budget · RM ${Number(mission.budget).toLocaleString()}` } : null,
-    ...keyRequirements.map((label) => ({ icon: Tag, label })),
-    ...supportingPreferences.map((label) => ({ icon: Tag, label })),
+    mission.budget ? { icon: CircleDollarSign, label: `Budget RM ${Number(mission.budget).toLocaleString()}`, tone: "budget" } : null,
+    ...keyRequirements.map((label) => ({ icon: Tag, label, tone: "goal" as const })),
+    ...supportingPreferences.map((label) => ({ icon: SlidersHorizontal, label: `Preference: ${label}`, tone: "preference" as const })),
   ].filter((item): item is Chip => item !== null);
 
   return (
@@ -25,7 +25,7 @@ export default function ExtractedChips({ mission, onRemoveOwned }: Props) {
       <span className={styles.chipLabel}>AI READS YOUR MISSION</span>
       <div className={styles.chips}>
         <AnimatePresence initial={false} mode="popLayout">
-          {rows.map(({ icon: Icon, label }) => <motion.span className={styles.chip} key={label} initial={{ opacity: 0, scale: 0.84, y: 5 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.84, y: -4 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}><Icon size={13} />{label}</motion.span>)}
+          {rows.map(({ icon: Icon, label, tone }, index) => <motion.span className={`${styles.chip} ${styles[`chip${tone[0].toUpperCase()}${tone.slice(1)}`]} ${tone === "goal" ? styles[`chipTone${index % 3}`] : ""}`} key={label} initial={{ opacity: 0, scale: 0.84, y: 5 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.84, y: -4 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}><Icon size={13} />{label}</motion.span>)}
           {(mission.owned_items ?? []).map((item) => (
             <motion.button type="button" className={`${styles.chip} ${styles.ownedChip}`} key={item} onClick={() => onRemoveOwned(item)} initial={{ opacity: 0, scale: 0.84, y: 5 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.84, y: -4 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}>
               <PackageCheck size={13} />Already own: {item}<X size={12} />

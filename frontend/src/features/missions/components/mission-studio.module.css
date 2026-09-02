@@ -945,6 +945,120 @@ button.chip {
   }
 }
 
+/* Mission workspace colour system: semantic accents make separate stages easier
+   to scan without binding the UI to a single purple brand colour. */
+.heroCopy > span,
+.sectionIntro > span,
+.resultHeading > span,
+.optimizations > span {
+  color: #54d7cb;
+}
+
+.heroCopy h1 em {
+  background-image: linear-gradient(105deg, #6ee7dc 5%, #6db5ff 48%, #ffc66d 96%);
+}
+
+.heroSignals span:nth-child(1) svg { color: #61d8b6; }
+.heroSignals span:nth-child(2) svg { color: #72b9ff; }
+.heroSignals span:nth-child(3) svg { color: #ffbb63; }
+.liveStatus { border-color: rgba(84, 215, 203, 0.25); }
+.liveStatus i { background: #52d8b3; box-shadow: 0 0 10px rgba(82, 216, 179, 0.48); }
+.orb { background: radial-gradient(circle at 40% 35%, rgba(58, 196, 190, 0.2), rgba(57, 131, 189, 0.1) 42%, transparent 68%); }
+
+.inputPanel {
+  border-color: rgba(87, 184, 203, 0.27);
+  background:
+    linear-gradient(90deg, #49d1c6, #68aef7 47%, #f2b45e) top / 100% 2px no-repeat,
+    linear-gradient(150deg, rgba(10, 21, 34, 0.99), rgba(14, 23, 38, 0.98));
+}
+
+.inputComposer {
+  margin-top: 25px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 174, 247, 0.26);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(15, 37, 52, 0.78), rgba(10, 18, 34, 0.96) 46%, rgba(38, 30, 35, 0.68));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.055), 0 16px 32px rgba(2, 8, 20, 0.18);
+}
+
+.inputComposer .inputSurface {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 14px 15px 10px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.inputComposer .inputSurface:focus-within {
+  background: rgba(10, 32, 48, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(80, 219, 200, 0.44);
+}
+
+.inputComposer .inputSurface textarea {
+  min-height: 58px;
+  padding: 16px 0;
+  box-sizing: border-box;
+  font-size: 17px;
+  line-height: 1.55;
+  text-align: left;
+  scrollbar-width: none;
+}
+
+.inputComposer .inputSurface textarea::-webkit-scrollbar { display: none; }
+.inputComposer .launchButton {
+  width: 54px;
+  height: 54px;
+  border-color: rgba(108, 203, 221, 0.7);
+  border-radius: 15px;
+  background: linear-gradient(135deg, #20bfae, #438ce4 60%, #e59f57);
+  box-shadow: 0 10px 22px rgba(29, 127, 162, 0.32);
+}
+.inputComposer .launchButton:hover:not(:disabled) { border-color: #a2f1e5; background: linear-gradient(135deg, #29ccba, #549cf0 60%, #efae62); box-shadow: 0 13px 26px rgba(29, 142, 165, 0.4); }
+
+.chipLabel { color: #72cfc9; }
+.chip { border-color: rgba(99, 160, 189, 0.24); background: rgba(15, 39, 54, 0.72); }
+.chipBudget { border-color: rgba(248, 185, 85, 0.38); background: rgba(105, 69, 22, 0.22); color: #f7d08a; }
+.chipBudget svg { color: #f4b856; }
+.chipGoal { border-color: rgba(91, 189, 183, 0.3); background: rgba(18, 75, 77, 0.28); }
+.chipPreference { border-color: rgba(109, 159, 239, 0.32); background: rgba(43, 64, 112, 0.28); color: #c7d9fa; }
+.chipPreference svg { color: #84b8ff; }
+.chipTone0 { border-color: rgba(91, 189, 183, 0.32); background: rgba(18, 75, 77, 0.28); }
+.chipTone1 { border-color: rgba(116, 173, 240, 0.32); background: rgba(42, 61, 109, 0.28); }
+.chipTone2 { border-color: rgba(232, 157, 92, 0.32); background: rgba(91, 51, 30, 0.25); }
+.chipTone0 svg { color: #69d5c8; }.chipTone1 svg { color: #8dbfff; }.chipTone2 svg { color: #f0ac71; }
+.ownedChip { border-color: rgba(88, 206, 149, 0.32); background: rgba(22, 91, 62, 0.28); }
+.ownedChip svg { color: #79dcad; }
+.addOwned { color: #76d6c6; }
+
+.results { border-color: rgba(83, 180, 196, 0.22); background: linear-gradient(145deg, rgba(9, 20, 32, 0.98), rgba(15, 22, 39, 0.97)); }
+.resultHeading > strong { color: #ffc96d; }
+.optimizations { border-color: rgba(83, 180, 196, 0.2); background: rgba(7, 23, 34, 0.58); }
+.optimizations button { border-color: rgba(117, 177, 210, 0.28); background: rgba(26, 48, 69, 0.7); }
+.optimizations button:hover { border-color: rgba(99, 220, 201, 0.68); background: rgba(24, 73, 82, 0.72); }
+.actionTone0 svg { color: #6fe0cf; }.actionTone1 svg { color: #7fb9ff; }.actionTone2 svg { color: #f2bd70; }.actionTone3 svg { color: #f197a7; }.actionTone4 svg { color: #9ddc90; }
+.feedbackForm input:focus { border-color: rgba(82, 215, 196, 0.75); box-shadow: 0 0 0 3px rgba(74, 204, 190, 0.1); }
+.feedbackForm button { background: linear-gradient(135deg, #22bba9, #438de0); }
+
+.briefPreview { border-color: rgba(90, 190, 193, 0.28); background: linear-gradient(145deg, rgba(11, 31, 43, 0.98), rgba(18, 25, 42, 0.98)); }
+.briefPreview::after { background: radial-gradient(circle, rgba(243, 173, 85, 0.14), rgba(74, 180, 205, 0.1) 47%, transparent 70%); }
+.previewTopline b { background: rgba(61, 195, 174, 0.13); color: #79dccb; }
+.previewMeta strong { color: #78d8ca; }
+.previewMeta span:nth-child(2) strong { color: #ffc674; }
+
+.progressHeading > span { color: #f1bb68; }
+.progressPanel { border-color: rgba(105, 172, 207, 0.24); background: linear-gradient(150deg, rgba(13, 25, 38, 0.99), rgba(17, 22, 42, 0.98)); }
+.progressPanel li.done i { background: rgba(55, 184, 163, 0.12); color: #76dac4; }
+.progressPanel li.active { border-color: rgba(77, 196, 186, 0.58); background: rgba(24, 90, 86, 0.22); box-shadow: inset 3px 0 #51d3c0; }
+.progressPanel li.active i { border-color: rgba(77, 196, 186, 0.58); background: rgba(52, 190, 174, 0.13); color: #8ee5d7; }
+.progressTone0.done i { border-color: rgba(77, 210, 186, 0.4); color: #72dec9; }.progressTone1.done i { border-color: rgba(99, 170, 239, 0.4); color: #8cbfff; }.progressTone2.done i { border-color: rgba(244, 183, 97, 0.4); color: #f3c272; }.progressTone3.done i { border-color: rgba(236, 139, 155, 0.4); color: #f1a4b2; }.progressTone4.done i { border-color: rgba(151, 209, 119, 0.4); color: #a9df8c; }.progressTone5.done i { border-color: rgba(197, 151, 238, 0.4); color: #d7b7f5; }
+
+@media (max-width: 700px) {
+  .inputComposer .inputSurface { grid-template-columns: minmax(0, 1fr) auto; }
+  .inputComposer .inputSurface textarea,
+  .inputComposer .launchButton { grid-column: auto; }
+}
+
 @media (max-width: 1050px) {
   .hero,
   .studioGrid {

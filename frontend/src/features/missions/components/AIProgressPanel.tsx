@@ -59,7 +59,7 @@ export default function AIProgressPanel({ busy, complete, activeStep, focus = fa
             const isDone = complete || (busy && index < active);
             const isActive = busy && index === active;
             return (
-              <motion.li layout key={step} className={isDone ? styles.done : isActive ? styles.active : ""}>
+              <motion.li layout key={step} className={`${styles[`progressTone${index % 6}`]} ${isDone ? styles.done : isActive ? styles.active : ""}`}>
                 <i>{isDone ? <Check size={15} /> : index + 1}</i>
                 <span>{step}</span>
               </motion.li>

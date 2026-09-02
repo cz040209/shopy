@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowLeft, CircleCheck, RefreshCw, WandSparkles } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, apiFetch } from "@/lib/api";
 import { useCart } from "@/features/cart/cart-context";
 import AIProgressPanel from "./AIProgressPanel";
@@ -80,34 +80,45 @@ function readStoredWorkspace(): StoredMissionWorkspace | null {
   }
 }
 
+const uniquePhrases = (values: string[]) => Array.from(new Map(
+  values
+    .map((value) => value.replace(/\s+/g, " ").replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, "").trim())
+    .filter((value) => value.length > 1)
+    .map((value) => [value.toLocaleLowerCase(), value] as const),
+).values());
+
+/**
+ * Provides immediate feedback while the customer types. This intentionally
+ * identifies language structure (budget, ownership, goals, and qualifiers),
+ * rather than maintaining a brittle list of product categories or adjectives.
+ * The server remains the authoritative interpreter when the mission is run.
+ */
 function draftMission(text: string): MissionData {
-  const budget = text.match(/(?:under|below|budget(?:\s+of)?|within)\s*(?:rm)?\s*([\d,]+)/i)?.[1];
-  const budgetValue = budget ? Number(budget.replaceAll(",", "")) : null;
-  const normalized = text.toLowerCase();
-  const owned = text.match(/(?:already own|i have|with my)\s+([^.,]+)/i)?.[1]
-    ?.split(/,| and /i)
-    .map((item) => item.trim())
-    .filter(Boolean) ?? [];
-  const preferenceTerms = ["minimal", "comfortable", "wireless", "warm", "ergonomic", "best value", "smart casual", "premium", "budget-friendly", "portable", "quiet", "durable"]
-    .filter((term) => normalized.includes(term));
-  const categoryMatchers: Array<{ pattern: RegExp; label: string }> = [
-    { pattern: /\b(clothes?|outfit|shirt|dress|jacket|fashion)\b/, label: "Clothes" },
-    { pattern: /\b(shoes?|sneakers?|boots?)\b/, label: "Shoes" },
-    { pattern: /\b(gaming|game|pc|computer)\b/, label: "Gaming setup" },
-    { pattern: /\b(work|wfh|desk|office)\b/, label: "Workspace" },
-    { pattern: /\b(phone|laptop|tablet|headphones?|keyboard|mouse)\b/, label: "Tech" },
-    { pattern: /\b(room|bedroom|living room|furniture|sofa)\b/, label: "Home" },
-    { pattern: /\b(car|vehicle|wash)\b/, label: "Car care" },
-    { pattern: /\b(travel|trip|holiday|pack)\b/, label: "Travel" },
-  ];
-  const categories = categoryMatchers.flatMap(({ pattern, label }) => pattern.test(normalized) ? [label] : []);
-  const keyRequirements = [...new Set(categories)].map((category) => (
-    budgetValue ? `${category} under RM ${budgetValue.toLocaleString("en-MY")}` : category
-  ));
+  const request = text.replace(/\s+/g, " ").trim();
+  const budgetMatch = request.match(/(?:\b(?:rm|myr)\s*|\b(?:under|below|within|around|budget(?:\s+of)?)\s*(?:rm|myr)?\s*)([\d][\d,]*(?:\.\d{1,2})?)/i);
+  const budgetValue = budgetMatch ? Number(budgetMatch[1].replaceAll(",", "")) : null;
+  const ownedMatches = Array.from(request.matchAll(/\b(?:already\s+own|i\s+own|i\s+have|with\s+my)\s+(.+?)(?=\s+(?:and\s+)?(?:prefer(?:ably)?|need|want|must|should|with|without|but)\b|[.!?;]|$)/gi));
+  const owned = uniquePhrases(ownedMatches.flatMap((match) => match[1].split(/\s*,\s*|\s+and\s+/i)));
+  const withoutMetadata = request
+    .replace(/\b(?:already\s+own|i\s+own|i\s+have|with\s+my)\s+.+?(?=\s+(?:and\s+)?(?:prefer(?:ably)?|need|want|must|should|with|without|but)\b|[.!?;]|$)/gi, "")
+    .replace(/(?:\b(?:rm|myr)\s*|\b(?:under|below|within|around|budget(?:\s+of)?)\s*(?:rm|myr)?\s*)[\d][\d,]*(?:\.\d{1,2})?/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .trim();
+
+  const goal = withoutMetadata
+    .replace(/^\s*(?:can\s+you\s+)?(?:please\s+)?(?:help\s+me\s+)?(?:i\s+(?:need|want|would\s+like)\s+to\s+|(?:find|build|create|plan|prepare|recommend)\s+(?:me\s+)?)/i, "")
+    .replace(/\b(?:for|with|without|prefer(?:ably)?|but)\b[\s\S]*$/i, "")
+    .replace(/^\s*(?:a|an|the)\s+/i, "")
+    .trim();
+
+  const qualifiers = Array.from(withoutMetadata.matchAll(/\b(?:for|with|without|prefer(?:ably)?|must|should|but)\s+([^.!?;]+)/gi))
+    .map((match) => match[1]);
+  const keyRequirements = uniquePhrases([goal, ...qualifiers]).slice(0, 6);
 
   return {
-    budget: budgetValue,
-    preferences: preferenceTerms,
+    budget: Number.isFinite(budgetValue) ? budgetValue : null,
+    preferences: uniquePhrases(qualifiers).slice(0, 6),
     key_requirements: keyRequirements,
     owned_items: owned,
   };
@@ -117,6 +128,7 @@ export default function MissionWorkspace() {
   const search = useSearchParams();
   const reduceMotion = useReducedMotion();
   const initialRequest = search.get("mission") ?? "";
+  const autoRunId = search.get("autorun") ?? "";
   const [request, setRequest] = useState(initialRequest);
   const [mission, setMission] = useState<MissionData>(() => draftMission(initialRequest));
   const [busy, setBusy] = useState(false);
@@ -131,6 +143,7 @@ export default function MissionWorkspace() {
   const [feedback, setFeedback] = useState("");
   const [showBundleReady, setShowBundleReady] = useState(false);
   const resultsRef = useRef<HTMLElement>(null);
+  const autoRunStartedRef = useRef(false);
   const { refreshCart } = useCart();
   const complete = Boolean(analysis);
   const priceSummary = useMemo(
@@ -147,6 +160,13 @@ export default function MissionWorkspace() {
   }, [busy]);
 
   useEffect(() => {
+    if (autoRunId) {
+      try {
+        if (window.sessionStorage.getItem(`shopy:auto-mission:${autoRunId}`) !== "started") return;
+      } catch {
+        return;
+      }
+    }
     const stored = readStoredWorkspace();
     // A mission supplied in the URL represents a new brief unless it matches
     // the saved workspace (as it does when returning from a product page).
@@ -161,7 +181,7 @@ export default function MissionWorkspace() {
       setProgressStep(progressStepCount);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [initialRequest]);
+  }, [autoRunId, initialRequest]);
 
   useEffect(() => {
     if (!analysis.trim()) return;
@@ -193,8 +213,9 @@ export default function MissionWorkspace() {
     resultsRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
   };
 
-  const runMission = async (nextRequest = request) => {
-    if (!nextRequest.trim()) return;
+  const runMission = useCallback(async (nextRequest?: string) => {
+    const missionRequest = (nextRequest ?? request).trim();
+    if (!missionRequest) return;
     const startedAt = performance.now();
     setBusy(true);
     setProgressStep(0);
@@ -209,7 +230,7 @@ export default function MissionWorkspace() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: nextRequest.trim() }] }),
+        body: JSON.stringify({ messages: [{ role: "user", content: missionRequest }] }),
       });
       const data = await response.json() as {
         reply?: string;
@@ -238,7 +259,7 @@ export default function MissionWorkspace() {
       setShowBundleReady(nextItems.length > 0);
       setHistory((previous) => [{
         id: crypto.randomUUID(),
-        label: data.mission?.goal || nextRequest,
+        label: data.mission?.goal || missionRequest,
         price_label: recommendationPriceSummary(
           nextItems,
           data.mission?.recommendation_mode,
@@ -250,7 +271,20 @@ export default function MissionWorkspace() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [request]);
+
+  useEffect(() => {
+    if (!autoRunId || !initialRequest.trim() || autoRunStartedRef.current) return;
+    const launchKey = `shopy:auto-mission:${autoRunId}`;
+    try {
+      if (window.sessionStorage.getItem(launchKey) === "started") return;
+      window.sessionStorage.setItem(launchKey, "started");
+    } catch {
+      // The in-memory guard still prevents duplicate launches when storage is unavailable.
+    }
+    autoRunStartedRef.current = true;
+    window.queueMicrotask(() => void runMission(initialRequest));
+  }, [autoRunId, initialRequest, runMission]);
 
   const removeOwned = (item: string) => {
     setMission((current) => ({

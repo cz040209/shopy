@@ -33,7 +33,8 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
         <h2 id="mission-input-title">Set the brief. We’ll handle the details.</h2>
         <p>Describe the outcome, budget, what you already own, and the priorities that should guide the recommendation.</p>
       </div>
-      <div className={styles.inputSurface}>
+      <div className={styles.inputComposer}>
+        <div className={styles.inputSurface}>
         <textarea
           ref={textareaRef}
           value={request}
@@ -56,6 +57,7 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
         >
           {busy ? <LoaderCircle size={19} /> : <Send size={19} />}
         </motion.button>
+        </div>
       </div>
       <ExtractedChips mission={mission} onRemoveOwned={onRemoveOwned} />
       <button className={styles.addOwned} type="button" onClick={() => onRequestChange(`${request}${request ? " " : ""}I already own `)}>

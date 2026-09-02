@@ -140,6 +140,97 @@ def test_intent_normalization_does_not_invent_bundle_quantities():
     assert explicit.fulfillment_requirements[0].quantity == 2
 
 
+def test_intent_normalization_builds_ui_signals_from_dynamic_mission_data():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="weekly wash kit",
+        budget=300, owned_items=["garden hose"],
+        preferences=["safe for matte paint"],
+        constraints=["small storage space"],
+        key_requirements=["Budget under RM 300", "weekly wash"],
+        bundle_items=[{"query": "car shampoo"}, {"query": "drying towel"}],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(mission, None)
+
+    assert normalized.key_requirements == [
+        "weekly wash kit", "weekly wash", "safe for matte paint", "small storage space", "car shampoo", "drying towel",
+    ]
+
+
+def test_object_photo_targets_stay_shoppable_without_inventing_a_bundle_or_hard_visual_attributes():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle", goal="complete a workstation",
+        budget=762, owned_items=["computer mouse"],
+        bundle_items=[{"query": "ergonomic computer mouse"}, {"query": "mouse pad"}, {"query": "keyboard"}],
+        fulfillment_requirements=[
+            {"kind": "attribute", "field": "color", "value": "black"},
+            {"kind": "category", "value": "computer mouse"},
+            {"kind": "category", "value": "mouse pad"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(mission, {"vision_context": {
+        "mode": "shop_object", "shopping_targets": ["computer mouse"],
+        "existing_items": ["computer mouse"], "detected_objects": ["computer mouse"],
+    }}, user_request="Shop this object image.")
+
+    assert normalized.owned_items == []
+    assert normalized.recommendation_mode == "single"
+    assert normalized.budget is None
+    assert [item.query for item in normalized.bundle_items] == ["ergonomic computer mouse"]
+    assert [item.value for item in normalized.fulfillment_requirements] == ["computer mouse"]
+
+
+def test_room_photo_does_not_inherit_budget_or_recommend_visible_items_again():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="Decorate the room with a modern, minimalist style.",
+        budget=2000, continues_context=True, requires_catalog=True,
+        requested_actions=["search_products"],
+        preferences=["comfortable", "modern", "minimalist"],
+        owned_items=["brown leather accent chair", "woven rug", "potted plants"],
+        bundle_items=[
+            {"query": "blue accent chair"}, {"query": "modern rug"},
+            {"query": "minimalist plants"}, {"query": "gold lighting fixture"},
+            {"query": "modern side table"}, {"query": "additional seating"},
+        ],
+        catalog_queries=["blue accent chair", "modern rug", "minimalist plants", "gold lighting fixture"],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "lighting fixture"},
+            {"kind": "category", "value": "additional seating"},
+            {"kind": "category", "value": "area rug for living room"},
+            {"kind": "category", "value": "indoor plants for home decor"},
+            {"kind": "category", "value": "side table for living room"},
+        ],
+    )
+    runtime_context = {"vision_context": {
+        "mode": "shop_room", "style": ["modern", "minimalist"],
+        "colors": ["blue", "brown", "white", "green", "gold"],
+        "existing_items": [
+            "brown leather accent chair", "woven rug", "potted plants",
+            "multi-bulb pendant light", "small side table with decorative items",
+        ],
+        "detected_objects": ["chair", "rug", "plants", "lighting fixture", "side table"],
+        "possible_shopping_needs": [
+            "additional seating", "area rug for living room",
+            "decorative lighting for living room", "indoor plants for home decor",
+            "side table for living room",
+        ],
+    }}
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, runtime_context, user_request="Shop this shop room image."
+    )
+
+    assert normalized.budget is None
+    assert normalized.continues_context is False
+    assert normalized.preferences == ["modern", "minimalist"]
+    assert "comfortable" not in normalized.key_requirements
+    assert [item.query for item in normalized.bundle_items] == ["additional seating"]
+    assert [item.value for item in normalized.fulfillment_requirements] == ["additional seating"]
+    assert normalized.catalog_queries == ["additional seating"]
+
+
 def test_intent_normalization_preserves_audited_quantity_during_refinement():
     mission = MissionInterpretation(
         mission_type="product_search", recommendation_mode="bundle", goal="make it cheaper",

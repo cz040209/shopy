@@ -233,13 +233,21 @@ class ShoppingOrchestrator:
     async def _intent_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         request = state["user_request"]
         runtime_context: dict[str, Any] = {}
-        if state.get("vision_context"):
+        has_vision_context = bool(state.get("vision_context"))
+        if has_vision_context:
             runtime_context["vision_context"] = state["vision_context"]
-        if state.get("memory_context"):
+        elif state.get("memory_context"):
+            # A camera submission starts a new, image-grounded mission. The
+            # generated camera caption has no customer-authored reference to a
+            # previous mission, so prior budgets and preferences must not leak
+            # into it. Text follow-ups continue to receive session memory.
             runtime_context["short_term_memory"] = state["memory_context"]
         mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
         memory_context = state.get("memory_context") or {}
-        mission = self._merge_continuation_mission(mission, memory_context)
+        if has_vision_context:
+            mission = mission.model_copy(update={"continues_context": False})
+        else:
+            mission = self._merge_continuation_mission(mission, memory_context)
         output = {
             **self._event(state, "intent_agent"),
             "mission_type": mission.mission_type, "recommendation_mode": mission.recommendation_mode, "goal": mission.goal,

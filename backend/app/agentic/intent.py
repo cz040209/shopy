@@ -71,6 +71,12 @@ Return only valid JSON, without Markdown.
   candidate complementary roles when they support the customer's requested
   outcome. Do not turn detected objects into purchase requirements unless the
   customer explicitly asks to replace or duplicate them.
+* Exception: when vision_context.mode is "shop_object", shopping_targets are
+  the object the customer wants to shop, not items they own. Make that target
+  the primary shopping role, usually with recommendation_mode="single". Do not
+  expand one object photo into an inferred room, desk, or accessory bundle.
+  Treat image-derived colours and style as soft preferences only; create a hard
+  attribute requirement only when the customer explicitly writes that attribute.
 
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
@@ -83,6 +89,7 @@ Return only valid JSON, without Markdown.
 * Extract the 3–6 most decision-relevant facts explicitly stated or clearly implied by the customer. These are shown back to the customer as their AI-read mission brief.
 * Write each as a short, human-readable chip (2–7 words), such as "Wireless keyboard and mouse", "Warm wood finish", "Fits a MacBook Air", or "Weekend trip to Penang".
 * Prioritize concrete shopping needs, compatibility, intended use, style, performance, comfort, fit, timing, and non-budget constraints. Let the request determine what matters; do not use a fixed feature list.
+* Preserve the customer's distinct wording when it carries meaning. A broad request can still contain multiple detectable signals (outcome, use case, item role, constraint, preference); surface each only once instead of collapsing them into a generic department label.
 * Do not invent product specifications, personal details, or catalog facts. Do not repeat the numeric budget or an owned item because those are displayed separately. Return [] only when the request contains no meaningful requirement beyond a broad product search.
 
 ### Available Runtime Tools
@@ -251,6 +258,97 @@ class IntentMissionAgent:
         return bool(requested) and any(requested.issubset(cls._terms(item)) for item in owned_items)
 
     @classmethod
+    def _matches_visual_target(cls, role: str, targets: list[str]) -> bool:
+        """Keep an object-photo mission tied to the photographed product role."""
+        role_terms = cls._terms(role)
+        if not role_terms:
+            return False
+        def product_head(value: str) -> str:
+            tokens = re.findall(r"[\w]+", value.casefold())
+            if not tokens:
+                return ""
+            head = tokens[-1]
+            return head[:-1] if len(head) > 3 and head.endswith("s") else head
+
+        role_head = product_head(role)
+        for target in targets:
+            target_terms = cls._terms(target)
+            if not target_terms:
+                continue
+            if target_terms.issubset(role_terms) or role_terms.issubset(target_terms):
+                return True
+            # The final meaningful word is the generic product form; sharing it
+            # permits a close alternative such as one lamp form for another,
+            # while keeping unrelated accessories out of the mission.
+            if role_head and role_head == product_head(target):
+                return True
+        return False
+
+    @classmethod
+    def _overlaps_visible_role(cls, role: str, visible_roles: list[str]) -> bool:
+        """Detect scene roles that restate a visible product with modifiers."""
+        role_terms = cls._terms(role)
+        if not role_terms:
+            return False
+        for visible_role in visible_roles:
+            visible_terms = cls._terms(visible_role)
+            if not visible_terms:
+                continue
+            overlap = role_terms & visible_terms
+            if (
+                role_terms.issubset(visible_terms)
+                or visible_terms.issubset(role_terms)
+                # A shared descriptive product word catches phrasing changes
+                # such as "decorative lighting" versus "lighting fixture".
+                # Short generic heads alone (for example two different table
+                # types) are intentionally not enough to prove duplication.
+                or any(len(term) >= 6 for term in overlap)
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _request_explicitly_mentions(cls, value: str, user_request: str | None) -> bool:
+        requested = cls._terms(value)
+        return bool(requested) and requested.issubset(cls._terms(user_request or ""))
+
+    @classmethod
+    def _ui_requirements(
+        cls, mission: MissionInterpretation, bundle_items: list[BundleItemPlan], owned_items: list[str],
+        *, include_model_requirements: bool = True,
+    ) -> list[str]:
+        """Build resilient, customer-facing mission signals from structured output.
+
+        This is a generic fallback for imperfect model extraction. It only uses
+        phrases already present in the mission contract, so it does not encode
+        any department- or product-specific vocabulary.
+        """
+        candidates = [
+            mission.goal,
+            *(mission.key_requirements if include_model_requirements else []),
+            *mission.preferences,
+            *mission.constraints,
+            *(item.query for item in bundle_items),
+        ]
+        seen: set[str] = set()
+        result: list[str] = []
+        budget_pattern = re.compile(r"\b(?:budget|under|below|within|around)\b|\b(?:rm|myr)\s*\d", re.I)
+        for candidate in candidates:
+            label = candidate.strip()
+            if not label or budget_pattern.search(label) or cls._covered_by_owned(label, owned_items):
+                continue
+            key = " ".join(label.casefold().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(label)
+            if len(result) == 6:
+                break
+        if not result and mission.goal.strip() and not budget_pattern.search(mission.goal):
+            result.append(mission.goal.strip())
+        return result
+
+    @classmethod
     def _normalize_mission(
         cls, mission: MissionInterpretation, runtime_context: dict[str, Any] | None,
         *, user_request: str | None = None,
@@ -262,11 +360,55 @@ class IntentMissionAgent:
         """
         data = mission.model_dump()
         vision = runtime_context.get("vision_context", {}) if isinstance(runtime_context, dict) else {}
+        vision_mode = str(vision.get("mode", "")).casefold()
+        photo_mission = bool(vision_mode)
+        object_photo = vision_mode == "shop_object"
+        scene_photo = vision_mode in {"shop_room", "complete_look"}
         existing = [
             str(item).strip() for item in vision.get("existing_items", [])
             if isinstance(item, str) and item.strip()
+        ] if isinstance(vision, dict) and not object_photo else []
+        visual_targets = [
+            str(item).strip() for item in vision.get("shopping_targets", [])
+            if isinstance(item, str) and item.strip()
         ] if isinstance(vision, dict) else []
-        owned = list(dict.fromkeys([*mission.owned_items, *existing]))
+        visible_roles = [
+            str(item).strip() for item in vision.get("detected_objects", [])
+            if isinstance(item, str) and item.strip()
+        ] if isinstance(vision, dict) else []
+        if object_photo and not visual_targets:
+            # Older or partially-compliant vision responses remain useful: the
+            # visible-object list is safer fallback evidence than inventing a
+            # shopping category from the surrounding scene.
+            visual_targets = [
+                str(item).strip() for item in vision.get("detected_objects", [])
+                if isinstance(item, str) and item.strip()
+            ]
+        inferred_owned = [] if scene_photo else [
+            item for item in mission.owned_items
+            if not object_photo or not cls._matches_visual_target(item, visual_targets)
+        ]
+        owned = list(dict.fromkeys([*inferred_owned, *existing]))
+
+        visual_preferences = [
+            str(item).strip()
+            for field in ("style", "colors")
+            for item in vision.get(field, [])
+            if isinstance(item, str) and item.strip()
+        ] if isinstance(vision, dict) else []
+        preferences = [
+            preference for preference in mission.preferences
+            if not photo_mission
+            or cls._request_explicitly_mentions(preference, user_request)
+            or cls._matches_visual_target(preference, visual_preferences)
+        ]
+
+        vision_needs = [
+            str(item).strip() for item in vision.get("possible_shopping_needs", [])
+            if isinstance(item, str) and item.strip()
+            and not cls._covered_by_owned(item, owned)
+            and (not scene_photo or not cls._overlaps_visible_role(item, visible_roles))
+        ] if isinstance(vision, dict) and mission.requires_catalog else []
 
         bundle_items = [
             item.model_copy(update={
@@ -276,14 +418,22 @@ class IntentMissionAgent:
                 ),
             }) for item in mission.bundle_items
             if not cls._covered_by_owned(item.query, owned)
+            and (not object_photo or cls._matches_visual_target(item.query, visual_targets))
+            and (not scene_photo or cls._matches_visual_target(item.query, vision_needs))
         ]
-        vision_needs = [
-            str(item).strip() for item in vision.get("possible_shopping_needs", [])
-            if isinstance(item, str) and item.strip() and not cls._covered_by_owned(item, owned)
-        ] if isinstance(vision, dict) and mission.requires_catalog else []
+        if object_photo:
+            # Preserve a richer model-provided target (for example,
+            # "ergonomic mouse") instead of adding a second generic version
+            # of the same photographed role.
+            vision_needs = [] if any(
+                cls._matches_visual_target(item.query, visual_targets)
+                for item in bundle_items
+            ) else visual_targets
         existing_queries = {item.query.casefold() for item in bundle_items}
         for need in vision_needs:
-            if need.casefold() not in existing_queries:
+            if need.casefold() not in existing_queries and not cls._matches_visual_target(
+                need, [item.query for item in bundle_items]
+            ):
                 bundle_items.append(BundleItemPlan(query=need, quantity=1))
                 existing_queries.add(need.casefold())
 
@@ -298,6 +448,12 @@ class IntentMissionAgent:
             if cls._covered_by_owned(requirement.value, owned):
                 continue
             kind = requirement.kind.casefold().strip()
+            if object_photo and kind == "category" and not cls._matches_visual_target(requirement.value, visual_targets):
+                continue
+            if scene_photo and kind == "category" and not cls._matches_visual_target(requirement.value, vision_needs):
+                continue
+            if photo_mission and kind in {"attribute", "feature"} and not cls._request_explicitly_mentions(requirement.value, user_request):
+                continue
             field = requirement.field.casefold().strip() if requirement.field else None
             # Category is the requirement kind, not an attribute field. Generic
             # feature-container labels are metadata rather than product roles.
@@ -353,14 +509,29 @@ class IntentMissionAgent:
         catalog_queries = [
             query for query in mission.catalog_queries
             if not cls._covered_by_owned(query, owned)
+            and (not scene_photo or cls._matches_visual_target(query, vision_needs))
         ]
         catalog_queries.extend(item.query for item in bundle_items)
         data.update({
             "owned_items": owned[:30],
+            "preferences": preferences[:20],
             "bundle_items": [item.model_dump() for item in bundle_items[:20]],
             "catalog_queries": list(dict.fromkeys(catalog_queries))[:4],
             "fulfillment_requirements": [item.model_dump() for item in requirements[:30]],
+            "key_requirements": cls._ui_requirements(
+                mission.model_copy(update={"preferences": preferences}), bundle_items, owned,
+                include_model_requirements=not photo_mission,
+            ),
+            # A photo does not reliably communicate a customer budget. Only a
+            # written amount is allowed to become a budget constraint.
+            "budget": mission.budget if not photo_mission or cls._request_explicitly_mentions(str(mission.budget), user_request) else None,
+            "continues_context": False if photo_mission else mission.continues_context,
+            "recommendation_mode": "single" if object_photo and len(visual_targets) <= 1 else mission.recommendation_mode,
         })
+        if photo_mission:
+            # The generated camera caption is workflow text, not a meaningful
+            # product query. Retrieval should use the image-derived role list.
+            data["catalog_query"] = bundle_items[0].query if object_photo and bundle_items else None
         if mission.catalog_query and cls._covered_by_owned(mission.catalog_query, owned):
             data["catalog_query"] = None
         if len(bundle_items) > 1:

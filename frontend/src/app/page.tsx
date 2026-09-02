@@ -25,10 +25,18 @@ export default function Home() {
   const [mission, setMission] = useState("Build me a comfortable WFH setup under RM2,000");
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceMessage, setVoiceMessage] = useState("");
+  const [launchingMission, setLaunchingMission] = useState(false);
   const missionInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const beginMission = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (mission.trim()) router.push(`/build?mission=${encodeURIComponent(mission.trim())}`); };
+  const beginMission = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const brief = mission.trim();
+    if (!brief || launchingMission) return;
+    setLaunchingMission(true);
+    const launchId = crypto.randomUUID();
+    router.push(`/build?mission=${encodeURIComponent(brief)}&autorun=${encodeURIComponent(launchId)}`);
+  };
 
   const stopStream = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -114,7 +122,9 @@ export default function Home() {
           {voiceState === "transcribing" ? <LoaderCircle className="home-voice-spinner" size={19} /> : voiceState === "recording" ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}
         </button>
         <AIShoppingCamera compact />
-        <button className={styles.buildButton} type="submit">Build for me <ArrowRight size={17} /></button>
+        <button className={styles.buildButton} type="submit" disabled={launchingMission}>
+          {launchingMission ? "Opening workspace…" : "Build for me"} <ArrowRight size={17} />
+        </button>
       </form>
       {voiceMessage && <p className="home-voice-hint" role="status">{voiceMessage}</p>}
       <div className={styles.quickActions}><span>Try a mission</span>{popular.slice(0, 4).map(([Icon, label, prompt]) => <Link key={label} href={`/build?mission=${encodeURIComponent(prompt)}`}><Icon size={15} />{label}</Link>)}</div>

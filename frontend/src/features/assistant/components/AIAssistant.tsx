@@ -60,7 +60,7 @@ export default function AIAssistant() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [isLoading, messages]);
 
   useEffect(() => {
     if (voiceState !== "recording") return;
@@ -433,15 +433,17 @@ export default function AIAssistant() {
               })}
 
               {isLoading && (
-                <div className={styles.messageRow}>
-                  <div className={`${styles.messageAvatar} ${styles.botAvatar}`} aria-label="Shopy Assistant is typing">
+                <div className={styles.messageRow} role="status" aria-label="Shopy Assistant is thinking">
+                  <div className={`${styles.messageAvatar} ${styles.botAvatar} ${styles.thinkingAvatar}`} aria-hidden="true">
                     <Bot size={18} strokeWidth={2.1} />
                   </div>
-                  <div className={styles.typingBubble}>
-                    <div className="flex items-center gap-2">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400 [animation-delay:120ms]" />
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400 [animation-delay:240ms]" />
+                  <div className={styles.typingBubble} aria-hidden="true">
+                    <div className={styles.thinkingCopy}>
+                      <strong>Shopy is thinking</strong>
+                      <small>Understanding your request</small>
+                    </div>
+                    <div className={styles.thinkingDots}>
+                      <i /><i /><i />
                     </div>
                   </div>
                 </div>
@@ -502,14 +504,6 @@ export default function AIAssistant() {
                       className="h-10 min-w-0 flex-1 !border-0 !bg-transparent !shadow-none px-3 text-base leading-6 text-slate-900 placeholder:text-slate-500 outline-none"
                       disabled={isLoading}
                     />
-                    <span className={styles.cameraButton}>
-                      <AIShoppingCamera compact disabled={isLoading} onAnalysisComplete={(analysis, attachments) => {
-                        setMessages((previous) => [
-                          ...previous,
-                          { id: `assistant-${previous.length + 1}`, role: "assistant", content: analysis, timestamp: new Date(), attachments },
-                        ]);
-                      }} />
-                    </span>
                     <button
                       type="button"
                       onClick={startRecording}
@@ -519,6 +513,14 @@ export default function AIAssistant() {
                     >
                       <Mic size={19} strokeWidth={2} />
                     </button>
+                    <span className={styles.cameraButton}>
+                      <AIShoppingCamera compact disabled={isLoading} onAnalysisComplete={(analysis, attachments) => {
+                        setMessages((previous) => [
+                          ...previous,
+                          { id: `assistant-${previous.length + 1}`, role: "assistant", content: analysis, timestamp: new Date(), attachments },
+                        ]);
+                      }} />
+                    </span>
                     <button
                       type="submit"
                       disabled={isLoading || !input.trim()}

@@ -9,6 +9,7 @@ from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.compatibility import CompatibilityAgent
 from app.agentic.product_search import ProductSearchAgent
+from app.agentic.schemas import MissionInterpretation
 from app.agentic.state import initial_shopping_state
 from app.agentic.tools import CommerceToolRegistry
 from app.agentic.vision import VisionAgent
@@ -146,6 +147,9 @@ async def test_vision_agent_returns_structured_context_and_rejects_missing_image
     agent = VisionAgent(VisionGenerator())
     context = await agent.analyze(image_bytes=b"image", mime_type="image/png", mode="shop_room")
     assert context.possible_shopping_needs == ["floor lamp"]
+    state = initial_shopping_state("Shop this room")
+    state["vision_input"] = {"image_bytes": b"image", "mime_type": "image/png", "mode": "shop_room"}
+    assert (await agent.run(state))["vision_context"]["mode"] == "shop_room"
     with pytest.raises(ValueError, match="image is required"):
         await agent.analyze(image_bytes=b"", mime_type="image/png", mode="shop_room")
     with pytest.raises(ValueError, match="Unsupported"):
@@ -169,6 +173,39 @@ async def test_image_mode_routes_vision_before_intent():
     result = await ShoppingOrchestrator(GraphModel(), vision_agent=GraphVisionAgent()).ainvoke("Shop this room", state_overrides={"vision_input": {"image_bytes": b"x", "mime_type": "image/png", "mode": "shop_room"}})
     assert result["vision_context"]["detected_objects"] == ["desk"]
     assert result["graph_iterations"] == 8
+
+
+@pytest.mark.anyio
+async def test_image_intent_is_isolated_from_previous_session_memory():
+    class CapturingIntentAgent:
+        def __init__(self):
+            self.runtime_context = None
+
+        async def interpret(self, user_request, runtime_context=None):
+            self.runtime_context = runtime_context
+            return MissionInterpretation(
+                mission_type="product_search", goal="Shop the photographed room",
+                continues_context=True,
+            )
+
+    intent_agent = CapturingIntentAgent()
+    orchestrator = ShoppingOrchestrator(GraphModel())
+    orchestrator.intent_agent = intent_agent
+    state = initial_shopping_state("Shop this shop room image.")
+    state.update({
+        "vision_context": {"mode": "shop_room", "detected_objects": ["chair"]},
+        "memory_context": {
+            "budget": 2000,
+            "preferences": ["comfortable"],
+            "current_mission": {"goal": "Build a WFH setup", "budget": 2000},
+        },
+    })
+
+    result = await orchestrator._intent_node(state)
+
+    assert intent_agent.runtime_context == {"vision_context": state["vision_context"]}
+    assert result["continues_context"] is False
+    assert result["budget"] is None
 
 
 @pytest.mark.anyio

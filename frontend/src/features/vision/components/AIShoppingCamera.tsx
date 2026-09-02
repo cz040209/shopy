@@ -225,8 +225,22 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       data.append("mode", activeMode);
       if (styleDirection) data.append("style", styleDirection);
       const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", credentials: "include", body: data });
-      const result = await response.json() as { analysis?: string; detail?: string; attachments?: VisionProductAttachment[]; vision_context?: VisionContext };
-      if (!response.ok || !result.analysis) throw new Error(result.detail ?? "AI analysis could not be completed.");
+      const responseText = await response.text();
+      let result: { analysis?: string; detail?: string; attachments?: VisionProductAttachment[]; vision_context?: VisionContext } = {};
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText) as typeof result;
+        } catch {
+          if (response.ok) throw new Error("The image assistant returned an unreadable response. Please try again.");
+        }
+      }
+      if (!response.ok) {
+        const retryMessage = response.status >= 500
+          ? "The image assistant had a temporary server problem. Please try the photo again."
+          : "AI analysis could not be completed.";
+        throw new Error(result.detail ?? retryMessage);
+      }
+      if (!result.analysis) throw new Error("AI analysis could not be completed.");
       setAnalysis(result.analysis);
       setAttachments(result.attachments ?? []);
       setVisionContext(result.vision_context ?? {});
