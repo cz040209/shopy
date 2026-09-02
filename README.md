@@ -138,7 +138,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | Variable | Purpose | Local default |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Gemini API credential | required |
-| `GEMINI_MODEL` | Gemini model | `gemini-2.5-flash-lite` |
+| `GEMINI_MODEL` | Gemini model | `gemini-3.7-flash` |
 | `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:3002` |
 | `DATABASE_URL` | PostgreSQL connection URL | Postgres on `5433` |
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
@@ -148,6 +148,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `SHOPPING_MEMORY_RECENT_TURNS` | Recent turns retained | `8` |
 | `TRANSCRIPTION_DEFAULT_LANGUAGE`, `TRANSCRIPTION_TIMEOUT_SECONDS` | Voice settings | `en`, `60` |
 | `AI_LOG_CUSTOMER_INPUT` | Log customer text locally | `true` |
+| `AI_LOG_AGENT_NODE_PAYLOADS` | Log each agent node's safe input/output payload in the terminal | `true` |
 
 Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`.
 
@@ -201,7 +202,7 @@ The vision endpoint accepts JPEG, PNG, and WebP images up to 10 MB for room shop
 
 Each request has a short request ID. `orchestration_runs` and `orchestration_run_events` store observable node transitions, tool activity, audits, repairs, and outputs. Hidden chain-of-thought is not stored.
 
-Set `AI_LOG_CUSTOMER_INPUT=false` to redact customer text from terminal logs.
+Set `AI_LOG_CUSTOMER_INPUT=false` to redact customer text from terminal logs. Set `AI_LOG_AGENT_NODE_PAYLOADS=false` to disable the per-node terminal payload trace.
 
 ```sql
 SELECT r.request_id, r.status, e.sequence, e.event_type, e.node_name,

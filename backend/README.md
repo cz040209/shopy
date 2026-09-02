@@ -111,7 +111,7 @@ TRANSCRIPTION_DEFAULT_LANGUAGE=en
 TRANSCRIPTION_TIMEOUT_SECONDS=60
 ```
 
-Gemini is selected through the existing `GEMINI_MODEL` setting, which defaults to `gemini-2.5-flash-lite`.
+Gemini is selected through the existing `GEMINI_MODEL` setting, which defaults to `gemini-3.7-flash`.
 
 To test once the server is running:
 
@@ -129,6 +129,8 @@ poetry run uvicorn app.main:app --reload --port 8000
 ```
 
 Each text, voice, and camera request receives a short `request_id` and logs its received input, processing stages, high-level execution trace, outcome, and final output. Camera logs record safe metadata and the selected analysis mode rather than image bytes.
+
+For agentic shopping runs, each graph node also emits `agent.graph.node.started` and `agent.graph.node.completed` JSON events with its safe input and output payloads. This is enabled by default; set `AI_LOG_AGENT_NODE_PAYLOADS=false` to disable this terminal trace. Payloads keep the same secret redaction, binary omission, and size limits as the persisted orchestration log.
 
 Customer input is logged by default for local development. To retain only its character count in a shared or production terminal, set:
 

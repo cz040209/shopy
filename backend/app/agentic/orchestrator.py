@@ -21,7 +21,7 @@ from .manager import WorkflowManager
 from .memory import MemoryUnavailableError, ShoppingMemoryStore, ShoppingSessionMemory, memory_from_state
 from .planner import NeedPlannerAgent
 from .planning import PlanningAgent
-from .observability import OrchestrationRecorder, active_recorder
+from .observability import OrchestrationRecorder, active_recorder, safe_audit_data
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
 from .schemas import MissionInterpretation
@@ -70,22 +70,25 @@ class ShoppingOrchestrator:
 
     def _build_graph(self):
         workflow = StateGraph(ShoppingAgentState)
-        workflow.add_node("memory_load", self._memory_load_node)
-        workflow.add_node("vision", self._vision_node)
-        workflow.add_node("intent_agent", self._intent_node)
-        workflow.add_node("need_planner", self._need_planner_node)
-        workflow.add_node("planning", self._planning_node)
-        workflow.add_node("manager", self._manager_node)
-        workflow.add_node("product_search", self._product_search_node)
-        workflow.add_node("compatibility", self._compatibility_node)
-        workflow.add_node("bundle_optimizer", self._bundle_optimizer_node)
-        workflow.add_node("response_draft", self._response_draft_node)
-        workflow.add_node("audit", self._audit_node)
-        workflow.add_node("brand_voice", self._brand_voice_node)
-        workflow.add_node("final_audit", self._final_audit_node)
-        workflow.add_node("restore_audited_draft", self._restore_audited_draft_node)
-        workflow.add_node("repair", self._repair_node)
-        workflow.add_node("memory_update", self._memory_update_node)
+        def add_node(name: str, handler: Any) -> None:
+            workflow.add_node(name, self._instrument_node(name, handler))
+
+        add_node("memory_load", self._memory_load_node)
+        add_node("vision", self._vision_node)
+        add_node("intent_agent", self._intent_node)
+        add_node("need_planner", self._need_planner_node)
+        add_node("planning", self._planning_node)
+        add_node("manager", self._manager_node)
+        add_node("product_search", self._product_search_node)
+        add_node("compatibility", self._compatibility_node)
+        add_node("bundle_optimizer", self._bundle_optimizer_node)
+        add_node("response_draft", self._response_draft_node)
+        add_node("audit", self._audit_node)
+        add_node("brand_voice", self._brand_voice_node)
+        add_node("final_audit", self._final_audit_node)
+        add_node("restore_audited_draft", self._restore_audited_draft_node)
+        add_node("repair", self._repair_node)
+        add_node("memory_update", self._memory_update_node)
         workflow.add_edge(START, "memory_load")
         workflow.add_conditional_edges("memory_load", self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
         workflow.add_edge("vision", "intent_agent")
@@ -128,12 +131,9 @@ class ShoppingOrchestrator:
         return workflow.compile()
 
     def _event(self, state: ShoppingAgentState, node: str) -> dict[str, int]:
-        log_ai_event("agent.graph.node", request_id=state["run_id"], node=node, iteration=state["graph_iterations"] + 1)
         return {"graph_iterations": state["graph_iterations"] + 1}
 
-    def _record_node(self, state: ShoppingAgentState, node: str, output: dict[str, Any]) -> None:
-        if self.recorder is None:
-            return
+    def _node_inputs(self, state: ShoppingAgentState, node: str) -> dict[str, Any]:
         inputs: dict[str, Any] = {"graph_iteration": state["graph_iterations"] + 1}
         if node == "intent_agent":
             inputs["user_request"] = state["user_request"]
@@ -161,6 +161,45 @@ class ShoppingOrchestrator:
             inputs["audit_result"] = state.get("audit_result")
         elif node == "memory_update":
             inputs["memory_session_scope"] = bool(state.get("memory_session_scope"))
+        return inputs
+
+    def _instrument_node(self, node: str, handler: Any):
+        """Emit safe, inspectable terminal logs around every graph node."""
+        async def instrumented(state: ShoppingAgentState) -> dict[str, Any]:
+            inputs = self._node_inputs(state, node)
+            fields = {
+                "node": node,
+                "iteration": state["graph_iterations"] + 1,
+                "input_payload": safe_audit_data(inputs),
+            }
+            if settings.ai_log_agent_node_payloads:
+                log_ai_event("agent.graph.node.started", request_id=state["run_id"], **fields)
+            try:
+                output = await handler(state)
+            except Exception as error:
+                if settings.ai_log_agent_node_payloads:
+                    log_ai_event(
+                        "agent.graph.node.failed",
+                        request_id=state["run_id"],
+                        **fields,
+                        error_type=type(error).__name__,
+                        error_message=str(error)[:1_000],
+                    )
+                raise
+            if settings.ai_log_agent_node_payloads:
+                log_ai_event(
+                    "agent.graph.node.completed",
+                    request_id=state["run_id"],
+                    **fields,
+                    output_payload=safe_audit_data(output),
+                )
+            return output
+        return instrumented
+
+    def _record_node(self, state: ShoppingAgentState, node: str, output: dict[str, Any]) -> None:
+        if self.recorder is None:
+            return
+        inputs = self._node_inputs(state, node)
         self.recorder.record("node_completed", node_name=node, input_data=inputs, output_data=output)
 
     def _after_manager(self, state: ShoppingAgentState) -> str:

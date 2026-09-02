@@ -18,11 +18,12 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_model: str = "gemini-3.7-flash"
     frontend_origin: str = "http://localhost:3002"
     transcription_default_language: str = "en"
     transcription_timeout_seconds: float = 60
     ai_log_customer_input: bool = True
+    ai_log_agent_node_payloads: bool = True
     auth_cookie_secure: bool = False
     auth_session_days: int = 7
     # A catalog run uses ten graph nodes before a retry. Leave room for two

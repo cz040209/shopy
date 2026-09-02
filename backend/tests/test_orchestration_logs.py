@@ -30,7 +30,13 @@ class FakeChatModel:
 
 
 @pytest.mark.anyio
-async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
+async def test_orchestration_run_and_ordered_events_are_persisted(db_session, monkeypatch):
+    terminal_events: list[tuple[str, dict]] = []
+
+    def capture_terminal_event(event: str, *, request_id: str, **fields):
+        terminal_events.append((event, {"request_id": request_id, **fields}))
+
+    monkeypatch.setattr("app.agentic.orchestrator.log_ai_event", capture_terminal_event)
     user = User(email="agent-log@example.com", full_name="Agent Logger")
     seller = Seller(name="Log Seller", slug="log-seller", status=SellerStatus.ACTIVE)
     category = Category(name="Gaming", slug="gaming")
@@ -56,6 +62,10 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session):
         "response_draft", "audit", "brand_voice", "final_audit",
     ]
     assert run.events[-1].output_data["audit_result"]["status"] == "pass"
+    intent_start = next(fields for event, fields in terminal_events if event == "agent.graph.node.started" and fields["node"] == "intent_agent")
+    intent_complete = next(fields for event, fields in terminal_events if event == "agent.graph.node.completed" and fields["node"] == "intent_agent")
+    assert intent_start["input_payload"]["user_request"] == "Build a gaming setup"
+    assert intent_complete["output_payload"]["mission"]["goal"] == "gaming setup"
 
 
 def test_sensitive_audit_fields_are_redacted():
