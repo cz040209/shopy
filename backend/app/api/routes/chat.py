@@ -119,7 +119,7 @@ def get_or_create_conversation(
             user=user,
             session_token=token,
             title=first_message[:220],
-            model=settings.gemini_model,
+            model=getattr(settings, "active_llm_model", settings.gemini_model),
             context={"channel": "web_chat"},
         )
         db.add(conversation)
@@ -153,7 +153,7 @@ def persist_exchange(
             AIMessage(
                 role=MessageRole.ASSISTANT,
                 content=assistant_reply,
-                model=settings.gemini_model,
+                model=getattr(settings, "active_llm_model", settings.gemini_model),
                 processing_metadata={"request_id": request_id, "response_source": "audited_orchestrator"},
                 extra_data={"request_id": request_id, "attachments": attachments},
             ),
@@ -192,9 +192,9 @@ async def chat(
         customer_input=customer_input_for_log(latest_customer_input),
         conversation_messages=len(payload.messages),
     )
-    if not settings.gemini_api_key:
-        log_ai_event("text.failed", request_id=request_id, reason="gemini_api_key_missing")
-        raise HTTPException(status_code=503, detail="The Gemini API key is not configured.")
+    if not (getattr(settings, "qwen_api_key", "") or settings.gemini_api_key):
+        log_ai_event("text.failed", request_id=request_id, reason="llm_api_key_missing")
+        raise HTTPException(status_code=503, detail="No LLM API key is configured.")
 
     conversation, active_conversation_token = get_or_create_conversation(
         db=db,

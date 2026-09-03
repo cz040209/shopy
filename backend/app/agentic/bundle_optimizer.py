@@ -1,6 +1,7 @@
 """Deterministic multi-product bundle selection and arithmetic."""
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -8,6 +9,7 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from app.ai_logging import log_ai_event
 from app.config import settings
 
 from .budgeting import recommendation_budget_limit
@@ -54,18 +56,47 @@ class BundleOptimizerAgent:
         self.model = model
 
     async def _plan(self, products: list[dict[str, Any]], state: ShoppingAgentState) -> BundlePlan:
-        if self.model is None:
-            return BundlePlan(mode="best_value")
-        payload = {"mission": state.get("mission", {}), "required_categories": state.get("required_categories", []), "priorities": state.get("priorities", []), "preferences": state.get("preferences", []), "vision_context": state.get("vision_context"), "compatibility": state.get("compatibility_results", []), "products": [{"id": str(item["id"]), "name": item.get("name"), "category": item.get("category"), "price": str(item.get("price")), "rating_average": item.get("rating_average"), "review_count": item.get("review_count"), "specs": item.get("specs", []), "attributes": item.get("attributes", {})} for item in products]}
+        default_mode = str(
+            state.get("optimization_mode")
+            or state.get("recommendation_mode")
+            or "best_value"
+        )
+        required = [str(need).strip() for need in state.get("required_categories", []) if str(need).strip()]
+        deterministic_matches = {
+            need: [str(product["id"]) for product in products if self._matches(product, need)]
+            for need in required
+        }
+
+        # When structured catalog facts already establish every product role,
+        # semantic remapping cannot improve correctness. The deterministic
+        # scores below still rank alternatives, so avoid a redundant provider
+        # call on the normal bundle path.
+        if not self.model or all(deterministic_matches.values()):
+            return BundlePlan(
+                mode=default_mode,
+                need_matches=[
+                    BundleNeedMatch(need=need, product_ids=product_ids)
+                    for need, product_ids in deterministic_matches.items()
+                ],
+            )
+
+        unresolved = [need for need, product_ids in deterministic_matches.items() if not product_ids]
+        payload = {"mission": state.get("mission", {}), "required_categories": unresolved, "priorities": state.get("priorities", []), "preferences": state.get("preferences", []), "vision_context": state.get("vision_context"), "compatibility": state.get("compatibility_results", []), "products": [{"id": str(item["id"]), "name": item.get("name"), "category": item.get("category"), "price": str(item.get("price")), "rating_average": item.get("rating_average"), "review_count": item.get("review_count"), "specs": item.get("specs", []), "attributes": item.get("attributes", {})} for item in products]}
         valid_ids = {str(product["id"]) for product in products}
-        valid_needs = {str(need).strip() for need in state.get("required_categories", [])}
+        valid_needs = set(unresolved)
         messages = [SystemMessage(content=PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str))]
         last_plan: BundlePlan | None = None
         for attempt in range(2):
             try:
-                response = await self.model.ainvoke(messages)
+                async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                    response = await self.model.ainvoke(messages, enable_thinking=False)
                 plan = BundlePlan.model_validate(_json_object(response.content))
-            except (ValidationError, ValueError):
+            except Exception as error:
+                log_ai_event(
+                    "agent.bundle_optimizer.semantic_plan_skipped",
+                    request_id=str(state.get("run_id", "")),
+                    reason=type(error).__name__,
+                )
                 break
             normalized = BundlePlan(
                 mode=plan.mode,
@@ -77,7 +108,12 @@ class BundleOptimizerAgent:
             )
             last_plan = normalized
             if not valid_needs or valid_needs.issubset({match.need for match in normalized.need_matches}):
-                return normalized
+                return normalized.model_copy(update={
+                    "need_matches": [
+                        *(BundleNeedMatch(need=need, product_ids=product_ids) for need, product_ids in deterministic_matches.items() if product_ids),
+                        *normalized.need_matches,
+                    ]
+                })
             if attempt == 0:
                 messages = [
                     SystemMessage(content=PROMPT),
@@ -93,9 +129,19 @@ class BundleOptimizerAgent:
             return BundlePlan(
                 mode=last_plan.mode,
                 rankings=last_plan.rankings,
-                need_matches=[*last_plan.need_matches, *(BundleNeedMatch(need=need) for need in sorted(missing))],
+                need_matches=[
+                    *(BundleNeedMatch(need=need, product_ids=product_ids) for need, product_ids in deterministic_matches.items() if product_ids),
+                    *last_plan.need_matches,
+                    *(BundleNeedMatch(need=need) for need in sorted(missing)),
+                ],
             )
-        return BundlePlan(mode="best_value")
+        return BundlePlan(
+            mode=default_mode,
+            need_matches=[
+                BundleNeedMatch(need=need, product_ids=product_ids)
+                for need, product_ids in deterministic_matches.items()
+            ],
+        )
 
     @staticmethod
     def _matches(product: dict[str, Any], category: str) -> bool:

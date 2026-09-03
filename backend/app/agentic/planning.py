@@ -1,6 +1,7 @@
 """General-purpose planning for broad, pre-shopping customer requests."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -157,7 +158,8 @@ class PlanningAgent:
         expected_catalog_plan = bool(state.get("requires_catalog"))
         for attempt in range(self.max_format_attempts):
             try:
-                response = await self.model.ainvoke(messages)
+                async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                    response = await self.model.ainvoke(messages, enable_thinking=False)
                 candidate = PlanningOutput.model_validate(_json_object(response.content))
                 last_candidate = candidate
                 # A catalog-bound planning request needs retrieval terms that
@@ -194,7 +196,7 @@ class PlanningAgent:
                     continue
                 plan = candidate
                 break
-            except (StructuredOutputError, ValidationError, ValueError):
+            except Exception:
                 messages = [
                     SystemMessage(content=PLANNING_SYSTEM_PROMPT),
                     HumanMessage(
@@ -202,6 +204,7 @@ class PlanningAgent:
                         + json.dumps(payload, ensure_ascii=False, default=str)
                     ),
                 ]
+                break
         if plan is None and last_candidate is not None:
             plan = self._sanitized_catalog_plan(last_candidate, state["user_request"])
         if plan is None:

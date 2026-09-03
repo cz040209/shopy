@@ -10,7 +10,7 @@ from app.agentic.observability import OrchestrationRecorder
 from app.agentic.memory import build_memory_scope, get_shopping_memory_store
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.tools import CommerceToolRegistry
-from app.ai.gemini import GeminiConnectionError, GeminiResponseError
+from app.ai.primary import AIConnectionError, AIResponseError
 from app.config import settings
 from app.database import get_db
 from app.models import AIMessage, MessageRole, User
@@ -47,9 +47,9 @@ async def analyze_shopping_photo(
         mode=mode,
         customer_input=f"[image submitted for {mode}]",
     )
-    if not settings.gemini_api_key:
-        log_ai_event("camera.failed", request_id=request_id, reason="gemini_api_key_missing")
-        raise HTTPException(status_code=503, detail="The Gemini API key is not configured.")
+    if not settings.llm_provider_configured:
+        log_ai_event("camera.failed", request_id=request_id, reason="llm_api_key_missing")
+        raise HTTPException(status_code=503, detail="No LLM API key is configured.")
     if image.content_type not in {"image/jpeg", "image/png", "image/webp"}:
         log_ai_event("camera.rejected", request_id=request_id, reason="unsupported_image_format")
         raise HTTPException(status_code=415, detail="Use a JPEG, PNG, or WebP image.")
@@ -69,7 +69,7 @@ async def analyze_shopping_photo(
             request_id=request_id,
             stage="preparing_vision_analysis",
             bytes=len(image_bytes),
-            model=settings.gemini_model,
+            model=settings.active_llm_model,
             vision_goal=VISION_PROMPTS[mode],
             reasoning_trace="The selected shopping mode determines the image-analysis goal and product recommendation format.",
         )
@@ -99,27 +99,27 @@ async def analyze_shopping_photo(
             },
             defer_finish=True,
         )
-    except GeminiConnectionError as error:
+    except AIConnectionError as error:
         log_ai_event(
             "camera.failed",
             request_id=request_id,
-            reason="gemini_connection_error",
+            reason="llm_connection_error",
             error_type=type(error).__name__,
             error_message=str(error)[:500],
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
-        raise HTTPException(status_code=502, detail="Unable to reach Gemini right now. Please try again.") from error
+        raise HTTPException(status_code=502, detail="Unable to reach an AI provider right now. Please try again.") from error
 
-    except GeminiResponseError as error:
+    except AIResponseError as error:
         log_ai_event(
             "camera.failed",
             request_id=request_id,
-            reason="gemini_response_error",
+            reason="llm_response_error",
             error_type=type(error).__name__,
             error_message=str(error)[:500],
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
-        raise HTTPException(status_code=502, detail="Gemini could not analyze this photo. Please try again.")
+        raise HTTPException(status_code=502, detail="The AI provider could not analyze this photo. Please try again.")
     except Exception as error:
         if recorder is not None and recorder.run is not None and recorder.run.status == "running":
             recorder.fail(error)
@@ -157,7 +157,7 @@ async def analyze_shopping_photo(
                 AIMessage(
                     role=MessageRole.ASSISTANT,
                     content=analysis,
-                    model=settings.gemini_model,
+                    model=settings.active_llm_model,
                     processing_metadata={"request_id": request_id, "response_source": "vision_orchestrator"},
                     extra_data={"request_id": request_id, "attachments": attachments, "vision_context": state.get("vision_context", {})},
                 ),
@@ -186,7 +186,7 @@ async def analyze_shopping_photo(
         request_id=request_id,
         input_type="camera",
         mode=mode,
-        ai_process="Gemini analyzed the submitted image according to the selected shopping mode.",
+        ai_process="The configured primary AI provider analyzed the submitted image according to the selected shopping mode.",
         final_output=analysis,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )

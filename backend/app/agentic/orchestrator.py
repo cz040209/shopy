@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
@@ -16,7 +17,7 @@ from .brand_voice import BrandVoiceAgent
 from .bundle_optimizer import BundleOptimizerAgent
 from .compatibility import CompatibilityAgent
 from .intent import AsyncChatModel, IntentMissionAgent
-from .llm import GeminiLangChainChatModel
+from .llm import PrimaryLangChainChatModel
 from .manager import WorkflowManager
 from .memory import MemoryUnavailableError, ShoppingMemoryStore, ShoppingSessionMemory, memory_from_state
 from .planner import NeedPlannerAgent
@@ -49,7 +50,7 @@ class ShoppingOrchestrator:
         vision_agent: VisionAgent | None = None,
         memory_store: ShoppingMemoryStore | None = None,
     ) -> None:
-        shared_model = model or GeminiLangChainChatModel(timeout_seconds=settings.agent_model_timeout_seconds)
+        shared_model = model or PrimaryLangChainChatModel(timeout_seconds=settings.agent_model_timeout_seconds)
         self.tool_registry = tool_registry
         self.intent_agent = IntentMissionAgent(shared_model, tools=tool_registry.tools if tool_registry else ())
         self.need_planner = NeedPlannerAgent()
@@ -65,6 +66,7 @@ class ShoppingOrchestrator:
         self.auditor = auditor or ShoppingAuditor(shared_model)
         self.max_repairs = max_repairs
         self.max_graph_iterations = max_graph_iterations
+        self._started_at: float | None = None
         self.recorder = recorder
         self.graph = self._build_graph()
 
@@ -119,7 +121,11 @@ class ShoppingOrchestrator:
             {"compatibility": "compatibility", "response_draft": "response_draft"},
         )
         workflow.add_edge("response_draft", "audit")
-        workflow.add_conditional_edges("audit", self._after_audit, {"repair": "repair", "brand_voice": "brand_voice", "end": END})
+        workflow.add_conditional_edges(
+            "audit",
+            self._after_audit,
+            {"repair": "repair", "brand_voice": "brand_voice", "memory_update": "memory_update", "end": END},
+        )
         workflow.add_edge("brand_voice", "final_audit")
         workflow.add_conditional_edges(
             "final_audit", self._after_final_audit,
@@ -847,8 +853,21 @@ class ShoppingOrchestrator:
 
     def _after_audit(self, state: ShoppingAgentState) -> str:
         if state["audit_result"] and state["audit_result"].get("status") == "pass":
+            if self._past_response_soft_deadline():
+                log_ai_event(
+                    "agent.optional_polish.skipped",
+                    request_id=state["run_id"],
+                    reason="response_soft_deadline",
+                )
+                return "memory_update" if self.memory_store is not None and state.get("memory_session_scope") else "end"
             return "brand_voice"
         return "repair" if state["repair_count"] < self.max_repairs else "end"
+
+    def _past_response_soft_deadline(self) -> bool:
+        return bool(
+            self._started_at is not None
+            and time.monotonic() - self._started_at >= settings.agent_response_soft_deadline_seconds
+        )
 
     async def _final_audit_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         audit = await self.auditor.audit(state, self.tool_registry)
@@ -960,6 +979,7 @@ class ShoppingOrchestrator:
         if not user_request.strip():
             raise ValueError("A shopping request is required.")
         state = initial_shopping_state(user_request)
+        self._started_at = time.monotonic()
         state["run_id"] = uuid4().hex[:12]
         if state_overrides:
             state.update(state_overrides)

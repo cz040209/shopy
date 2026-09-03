@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from decimal import Decimal
@@ -646,10 +647,11 @@ class ShoppingAuditor:
             ),
         }
         try:
-            response = await self.model.ainvoke([
-                SystemMessage(content=AUDITOR_SYSTEM_PROMPT),
-                HumanMessage(content=json.dumps({"final_response": state["final_response"], "verified_evidence": evidence}, default=str)),
-            ])
+            async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                response = await self.model.ainvoke([
+                    SystemMessage(content=AUDITOR_SYSTEM_PROMPT),
+                    HumanMessage(content=json.dumps({"final_response": state["final_response"], "verified_evidence": evidence}, default=str)),
+                ], enable_thinking=False)
             return LlmAuditReview.model_validate(_json_object(response.content))
         except Exception:
             # This review is additive to deterministic verification. A model

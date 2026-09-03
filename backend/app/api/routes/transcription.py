@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.ai.gemini import GeminiClient, GeminiConnectionError, GeminiResponseError
+from app.ai.qwen import QwenClient, QwenConnectionError, QwenResponseError
 from app.ai_logging import customer_input_for_log, log_ai_event
 from app.config import settings
 
@@ -14,8 +15,8 @@ from ..schemas import TranscriptionResponse
 
 
 router = APIRouter(tags=["transcription"])
-# Gemini inline media requests allow 20 MB in total. Base64 expands audio by
-# roughly one third, so this leaves room for the prompt and request metadata.
+# Inline media requests expand audio by roughly one third when Base64-encoded,
+# so this leaves room for the prompt and request metadata.
 MAX_AUDIO_BYTES = 14 * 1024 * 1024
 ALLOWED_AUDIO_TYPES = {
     "audio/webm",
@@ -68,12 +69,43 @@ async def transcribe_with_gemini(
     return TranscriptionResponse(transcript=transcript, language=language, duration_seconds=None)
 
 
+async def transcribe_with_qwen(
+    *, audio_bytes: bytes, mime_type: str, requested_language: str
+) -> TranscriptionResponse:
+    """Transcribe with the configured Qwen Omni Captioner model."""
+    language_instruction = (
+        f"The caller requested {requested_language}."
+        if requested_language != "auto"
+        else "Identify the spoken language."
+    )
+    prompt = (
+        "Transcribe this audio exactly. Do not summarize, translate, add speaker labels, "
+        "or include commentary. Return valid JSON only with this shape: "
+        '{"transcript":"...","language":"ISO 639-1 code or null"}. '
+        f"{language_instruction}"
+    )
+    response = await QwenClient(timeout_seconds=settings.transcription_timeout_seconds).caption_audio(
+        audio_bytes=audio_bytes,
+        mime_type=mime_type,
+        prompt=prompt,
+        max_output_tokens=2048,
+    )
+    try:
+        data = json.loads(response)
+        transcript = str(data.get("transcript", "")).strip()
+        language = data.get("language")
+        language = str(language).strip().lower() if language else None
+    except (TypeError, ValueError) as error:
+        raise QwenResponseError("Qwen returned an invalid transcription response.") from error
+    return TranscriptionResponse(transcript=transcript, language=language, duration_seconds=None)
+
+
 @router.post("/api/v1/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio(
     audio: UploadFile = File(...),
     language: str | None = Form(default=None, max_length=12),
 ) -> TranscriptionResponse:
-    """Transcribe confirmed audio with Gemini without persisting it locally."""
+    """Transcribe confirmed audio with Qwen and fall back to Gemini if needed."""
     request_id = uuid4().hex[:12]
     started_at = time.perf_counter()
     requested_language = (language or settings.transcription_default_language).strip().lower()
@@ -107,33 +139,51 @@ async def transcribe_audio(
         log_ai_event(
             "voice.processing",
             request_id=request_id,
-            stage="sending_audio_to_gemini",
+            stage="sending_audio_to_primary_provider",
             bytes=len(audio_bytes),
-            gemini_model=settings.gemini_model,
+            provider="qwen" if settings.qwen_api_key else "gemini",
+            model=settings.qwen_audio_model if settings.qwen_api_key else settings.gemini_model,
             requested_language=requested_language,
-            reasoning_trace="Audio is validated and sent inline to the configured Gemini model for transcription.",
+            reasoning_trace="Audio is validated and sent inline to the configured speech model for transcription.",
         )
-        result = await transcribe_with_gemini(
-            audio_bytes=audio_bytes,
-            mime_type=audio.content_type or "audio/webm",
-            requested_language=requested_language,
-        )
-    except GeminiConnectionError as error:
+        if settings.qwen_api_key:
+            try:
+                result = await transcribe_with_qwen(
+                    audio_bytes=audio_bytes,
+                    mime_type=audio.content_type or "audio/webm",
+                    requested_language=requested_language,
+                )
+            except (QwenConnectionError, QwenResponseError):
+                if not settings.gemini_api_key:
+                    raise
+                log_ai_event("voice.fallback", request_id=request_id, from_provider="qwen", to_provider="gemini")
+                result = await transcribe_with_gemini(
+                    audio_bytes=audio_bytes,
+                    mime_type=audio.content_type or "audio/webm",
+                    requested_language=requested_language,
+                )
+        else:
+            result = await transcribe_with_gemini(
+                audio_bytes=audio_bytes,
+                mime_type=audio.content_type or "audio/webm",
+                requested_language=requested_language,
+            )
+    except (QwenConnectionError, GeminiConnectionError) as error:
         log_ai_event(
             "voice.failed",
             request_id=request_id,
-            reason="gemini_unavailable",
+            reason="speech_provider_unavailable",
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(
             status_code=503,
-            detail="Gemini is unavailable. Check the API key and try again.",
+            detail="The speech provider is unavailable. Check the API configuration and try again.",
         ) from error
-    except GeminiResponseError as error:
+    except (QwenResponseError, GeminiResponseError) as error:
         log_ai_event(
             "voice.failed",
             request_id=request_id,
-            reason="gemini_transcription_failed",
+            reason="speech_transcription_failed",
             elapsed_ms=round((time.perf_counter() - started_at) * 1000),
         )
         raise HTTPException(status_code=422, detail="We could not transcribe that recording. Please try again.") from error

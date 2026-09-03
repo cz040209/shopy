@@ -8,7 +8,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from app.ai_logging import log_ai_event
-from app.ai.gemini import GeminiClient
+from app.ai.primary import PrimaryLLMClient
 from app.config import settings
 
 from .intent import _json_object
@@ -58,7 +58,7 @@ class VisionAgent:
     name = "vision"
 
     def __init__(self, generator: VisionGenerator | None = None) -> None:
-        self.generator = generator or GeminiClient(timeout_seconds=45.0)
+        self.generator = generator or PrimaryLLMClient(timeout_seconds=45.0)
 
     async def analyze(self, *, image_bytes: bytes, mime_type: str, mode: str) -> VisionContext:
         if mode not in {"shop_room", "complete_look", "shop_object"}:

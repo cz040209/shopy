@@ -1,12 +1,15 @@
 """LLM-planned, deterministically enforced compatibility checks."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
+
+from app.config import settings
 
 from .intent import AsyncChatModel, _json_object
 from .state import ShoppingAgentState
@@ -57,9 +60,10 @@ class CompatibilityAgent:
             "products": [{"id": str(product["id"]), "name": product.get("name"), "fields": {key: sorted(values) for key, values in self._facts(product).items()}} for product in products],
         }
         try:
-            response = await self.model.ainvoke([SystemMessage(content=PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False))])
+            async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                response = await self.model.ainvoke([SystemMessage(content=PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False))], enable_thinking=False)
             plan = CompatibilityPlan.model_validate(_json_object(response.content))
-        except (ValidationError, ValueError):
+        except Exception:
             return CompatibilityPlan()
         available = set.intersection(*(set(self._facts(product)) for product in products)) if products else set()
         return CompatibilityPlan(fields=[item for item in plan.fields if item.field in available])

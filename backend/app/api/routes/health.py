@@ -10,7 +10,7 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "model": settings.gemini_model}
+    return {"status": "ok", "model": settings.active_llm_model}
 
 
 @router.get("/health/database")

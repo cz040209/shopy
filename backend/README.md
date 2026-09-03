@@ -1,6 +1,6 @@
 # Shopy AI backend
 
-The FastAPI server keeps `GEMINI_API_KEY` on the server, provides chat and vision endpoints, and transcribes user-confirmed voice recordings with Gemini.
+The FastAPI server keeps provider API keys on the server, uses Qwen as the primary provider for chat and vision, and falls back to Gemini when Qwen is unavailable.
 
 ```bash
 cp backend/.env.example backend/.env
@@ -100,9 +100,9 @@ poetry run pytest
 
 Copy `.env.example` to `.env` and set the required values before running in a new environment. The local `.env` is ignored by Git.
 
-## Gemini speech-to-text
+## Qwen speech-to-text
 
-`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. Recordings up to 14 MB are sent inline to the configured Gemini model and are not persisted by this application.
+`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. Recordings up to 14 MB are sent inline to `qwen3-omni-30b-a3b-captioner` and are not persisted by this application. Gemini is used only as a fallback when configured.
 
 Configure transcription in `.env`:
 
@@ -111,7 +111,7 @@ TRANSCRIPTION_DEFAULT_LANGUAGE=en
 TRANSCRIPTION_TIMEOUT_SECONDS=60
 ```
 
-Gemini is selected through the existing `GEMINI_MODEL` setting, which defaults to `gemini-3.7-flash`.
+Qwen uses the OpenAI-compatible Model Studio endpoint configured by `QWEN_BASE_URL`. The primary thinking model defaults to `qwen3.6-flash`; `GEMINI_MODEL` (`gemini-3.7-flash` by default) is the fallback model.
 
 To test once the server is running:
 
@@ -131,6 +131,8 @@ poetry run uvicorn app.main:app --reload --port 8000
 Each text, voice, and camera request receives a short `request_id` and logs its received input, processing stages, high-level execution trace, outcome, and final output. Camera logs record safe metadata and the selected analysis mode rather than image bytes.
 
 For agentic shopping runs, each graph node also emits `agent.graph.node.started` and `agent.graph.node.completed` JSON events with its safe input and output payloads. This is enabled by default; set `AI_LOG_AGENT_NODE_PAYLOADS=false` to disable this terminal trace. Payloads keep the same secret redaction, binary omission, and size limits as the persisted orchestration log.
+
+Catalog semantic shortlisting uses bounded concurrent batches and direct, non-thinking responses for latency-sensitive structured work. `QWEN_ENABLE_THINKING` remains the provider default, while schema extraction and optional workflow enrichments explicitly disable thinking for predictable latency. Optional semantic calls are capped by `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS` and fall back to verified deterministic behavior. When catalog facts already cover every bundle role, the optimizer skips semantic remapping entirely. Qwen-to-Gemini fallback shares the single `AGENT_MODEL_TIMEOUT_SECONDS` deadline, and optional brand polishing is skipped once the workflow reaches `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`.
 
 Customer input is logged by default for local development. To retain only its character count in a shared or production terminal, set:
 

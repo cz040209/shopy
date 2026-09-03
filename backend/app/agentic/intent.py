@@ -191,7 +191,7 @@ class IntentMissionAgent:
         request_payload = user_request if not runtime_context else json.dumps(
             {"customer_request": user_request, "runtime_context": runtime_context}, ensure_ascii=False
         )
-        last_error: StructuredOutputError | None = None
+        last_error: Exception | None = None
         last_data: dict[str, object] = {}
         for attempt in range(max(1, settings.agent_response_format_attempts)):
             correction = "" if attempt == 0 else (
@@ -199,11 +199,11 @@ class IntentMissionAgent:
                 "the output schema and uses only the listed runtime tool names. A catalog-backed "
                 "optimization continuation must include at least one verifiable selection_criteria entry."
             )
-            response = await self.model.ainvoke([
-                SystemMessage(content=self.system_prompt + correction),
-                HumanMessage(content=request_payload),
-            ])
             try:
+                response = await self.model.ainvoke([
+                    SystemMessage(content=self.system_prompt + correction),
+                    HumanMessage(content=request_payload),
+                ], enable_thinking=False)
                 last_data = _json_object(response.content)
                 mission = MissionInterpretation.model_validate(last_data)
                 unknown_actions = set(mission.requested_actions) - self.tool_names
@@ -224,6 +224,11 @@ class IntentMissionAgent:
                 last_error.__cause__ = error
             except StructuredOutputError as error:
                 last_error = error
+            except Exception as error:
+                # Intent extraction has a conservative runtime fallback below.
+                # Provider errors must not make the storefront unavailable.
+                last_error = error
+                break
         assert last_error is not None
         # A provider-formatting failure must not make the storefront unavailable.
         # Salvage only schema-validated fields and otherwise use the customer's

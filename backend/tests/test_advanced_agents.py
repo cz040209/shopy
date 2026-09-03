@@ -287,6 +287,52 @@ async def test_exact_catalog_role_overrides_an_incorrect_semantic_mapping():
 
 
 @pytest.mark.anyio
+async def test_bundle_optimizer_skips_optional_model_when_catalog_roles_are_verified():
+    class FailingIfCalledModel:
+        async def ainvoke(self, messages, **kwargs):
+            raise AssertionError("verified catalog roles must not invoke semantic planning")
+
+    state = initial_shopping_state("Build a formal work outfit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": ["blazer", "dress shirt", "dress shoes"],
+        "candidate_products": [
+            {"id": "blazer", "name": "Tailored Blazer", "brand": "Test", "category": "Blazers", "price": "349", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "shirt", "name": "Formal Dress Shirt", "brand": "Test", "category": "Shirts", "price": "109", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "shoes", "name": "Leather Dress Shoes", "brand": "Test", "category": "Shoes", "price": "239", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+        ],
+    })
+
+    result = await BundleOptimizerAgent(FailingIfCalledModel()).run(state)
+
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
+    assert {item["id"] for item in result["selected_products"]} == {"blazer", "shirt", "shoes"}
+
+
+@pytest.mark.anyio
+async def test_bundle_optimizer_falls_back_when_optional_semantic_plan_fails():
+    class UnavailableModel:
+        async def ainvoke(self, messages, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    state = initial_shopping_state("Build a specialist kit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": ["specialist device"],
+        "candidate_products": [{
+            "id": "candidate", "name": "General Device", "brand": "Test",
+            "category": "Equipment", "price": "100", "currency": "MYR",
+            "inventory_quantity": 2, "specs": [], "attributes": {},
+        }],
+    })
+
+    result = await BundleOptimizerAgent(UnavailableModel()).run(state)
+
+    assert result["selected_products"] == []
+    assert result["bundle"]["required_category_coverage"]["missing"] == ["specialist device"]
+
+
+@pytest.mark.anyio
 async def test_bundle_optimizer_does_not_fallback_to_an_unrelated_affordable_product():
     state = initial_shopping_state("Build a kit within my budget")
     state.update({

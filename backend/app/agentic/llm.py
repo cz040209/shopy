@@ -6,10 +6,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from app.ai.gemini import GeminiClient
+from app.ai.primary import PrimaryLLMClient
 
 
-def _gemini_contents(messages: list[BaseMessage]) -> tuple[str, list[dict[str, Any]]]:
+def _provider_contents(messages: list[BaseMessage]) -> tuple[str, list[dict[str, Any]]]:
     system_parts: list[str] = []
     contents: list[dict[str, Any]] = []
     for message in messages:
@@ -21,8 +21,8 @@ def _gemini_contents(messages: list[BaseMessage]) -> tuple[str, list[dict[str, A
     return "\n\n".join(system_parts), contents
 
 
-class GeminiLangChainChatModel(BaseChatModel):
-    """LangChain chat-model adapter backed by the existing Gemini HTTP client."""
+class PrimaryLangChainChatModel(BaseChatModel):
+    """LangChain adapter backed by Qwen with Gemini fallback."""
 
     timeout_seconds: float = 30.0
     max_output_tokens: int = 700
@@ -30,7 +30,7 @@ class GeminiLangChainChatModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
-        return "shopy-gemini"
+        return "shopy-primary-llm"
 
     @property
     def _identifying_params(self) -> dict[str, Any]:
@@ -41,14 +41,15 @@ class GeminiLangChainChatModel(BaseChatModel):
         }
 
     def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
-        raise RuntimeError("GeminiLangChainChatModel is async-only; call ainvoke().")
+        raise RuntimeError("PrimaryLangChainChatModel is async-only; call ainvoke().")
 
     async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None, **kwargs: Any) -> ChatResult:
-        system_instruction, contents = _gemini_contents(messages)
-        generation = await GeminiClient(timeout_seconds=self.timeout_seconds).generate_with_usage(
+        system_instruction, contents = _provider_contents(messages)
+        generation = await PrimaryLLMClient(timeout_seconds=self.timeout_seconds).generate_with_usage(
             system_instruction=system_instruction,
             contents=contents,
             max_output_tokens=self.max_output_tokens,
             response_mime_type=self.response_mime_type,
+            enable_thinking=kwargs.get("enable_thinking"),
         )
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=generation.text))])

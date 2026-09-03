@@ -19,6 +19,11 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.7-flash"
+    qwen_api_key: str = ""
+    qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen3.6-flash"
+    qwen_audio_model: str = "qwen3-omni-30b-a3b-captioner"
+    qwen_enable_thinking: bool = True
     frontend_origin: str = "http://localhost:3002"
     transcription_default_language: str = "en"
     transcription_timeout_seconds: float = 60
@@ -34,6 +39,7 @@ class Settings(BaseSettings):
     # a verified semantic shortlist to downstream response agents.
     agent_catalog_context_limit: int = 500
     agent_catalog_batch_size: int = 80
+    agent_catalog_batch_concurrency: int = 4
     agent_catalog_batch_shortlist_limit: int = 12
     agent_catalog_shortlist_limit: int = 48
     agent_catalog_role_matches_per_need: int = 6
@@ -49,6 +55,12 @@ class Settings(BaseSettings):
     # to the shopper; the customer budget remains the primary target.
     agent_recommendation_budget_tolerance_percent: float = 30
     agent_model_timeout_seconds: float = 30
+    # Optional semantic enrichments must never hold the verified deterministic
+    # workflow open for a full provider timeout.
+    agent_optional_model_timeout_seconds: float = 8
+    # Optional rewriting is skipped once the verified draft approaches common
+    # reverse-proxy request limits. The already-audited answer remains valid.
+    agent_response_soft_deadline_seconds: float = 75
     agent_tool_timeout_seconds: float = 5
     database_url: str = "postgresql+psycopg://shopy@localhost:5433/shopy"
     redis_url: str = "redis://localhost:6379/0"
@@ -66,6 +78,15 @@ class Settings(BaseSettings):
     @property
     def receipt_email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_from_email)
+
+    @property
+    def active_llm_model(self) -> str:
+        """Report the provider that will receive the next text or vision request."""
+        return self.qwen_model if self.qwen_api_key else self.gemini_model
+
+    @property
+    def llm_provider_configured(self) -> bool:
+        return bool(self.qwen_api_key or self.gemini_api_key)
 
 
 settings = Settings()

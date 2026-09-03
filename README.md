@@ -24,8 +24,9 @@ Next.js storefront :3002
 FastAPI API :8000
   ├── PostgreSQL :5433  — catalog, users, commerce, conversations, run logs
   ├── Redis :6380       — expiring short-term shopping memory
-  ├── Gemini            — intent, planning, vision, writing, semantic audit
-  └── Gemini            — speech-to-text
+  ├── Qwen             — primary intent, planning, vision, writing, and semantic audit
+  ├── Qwen Omni Captioner — primary speech-to-text
+  └── Gemini           — fallback provider
 ```
 
 ### Agent workflow
@@ -57,7 +58,8 @@ docker-compose.yml        Local PostgreSQL and Redis
 - Python 3.11–3.14
 - [Poetry](https://python-poetry.org/)
 - Docker Desktop / Docker Compose
-- Gemini API key
+- Alibaba Cloud Model Studio API key (Qwen primary)
+- Gemini API key (fallback)
 
 ## Quick start
 
@@ -72,6 +74,7 @@ Set these values in `backend/.env`:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
+QWEN_API_KEY=your_alibaba_cloud_model_studio_api_key
 POSTGRES_PASSWORD=choose_a_local_password
 DATABASE_URL=postgresql+psycopg://shopy:choose_a_local_password@localhost:5433/shopy
 REDIS_PORT=6380
@@ -139,6 +142,10 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Gemini API credential | required |
 | `GEMINI_MODEL` | Gemini model | `gemini-3.7-flash` |
+| `QWEN_API_KEY` | Alibaba Cloud Model Studio credential | required for the primary provider |
+| `QWEN_BASE_URL` | Qwen OpenAI-compatible endpoint | Singapore DashScope endpoint |
+| `QWEN_MODEL` | Primary Qwen thinking model | `qwen3.6-flash` |
+| `QWEN_AUDIO_MODEL` | Qwen audio caption/transcription model | `qwen3-omni-30b-a3b-captioner` |
 | `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:3002` |
 | `DATABASE_URL` | PostgreSQL connection URL | Postgres on `5433` |
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
@@ -150,7 +157,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `AI_LOG_CUSTOMER_INPUT` | Log customer text locally | `true` |
 | `AI_LOG_AGENT_NODE_PAYLOADS` | Log each agent node's safe input/output payload in the terminal | `true` |
 
-Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`.
+Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS`, `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`. Catalog semantic batches run concurrently according to `AGENT_CATALOG_BATCH_CONCURRENCY`. Optional semantic ranking, resolution, wording, and audit calls are bounded and fall back to verified deterministic behavior; Qwen-to-Gemini fallback shares one total per-call deadline.
 
 ## Redis short-term memory
 
@@ -189,7 +196,7 @@ The browser frontend manages cookies automatically. Preserve login cookies when 
 
 ## Voice and vision
 
-`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG up to 14 MB. The recording is sent inline to the configured Gemini model and is not stored by this application.
+`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG up to 14 MB. The recording is sent inline to Qwen Omni Captioner and is not stored by this application. Gemini is used only if Qwen fails and a Gemini API key is configured.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/transcribe \

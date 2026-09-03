@@ -1,12 +1,15 @@
 """Catalog-grounded product resolution for tool actions."""
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
+
+from app.config import settings
 
 from .intent import AsyncChatModel, StructuredOutputError, _json_object
 
@@ -51,13 +54,14 @@ class ProductResolutionAgent:
                 for product in candidates
             ],
         }
-        response = await self.model.ainvoke([
-            SystemMessage(content=PRODUCT_RESOLUTION_SYSTEM_PROMPT),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
-        ])
         try:
+            async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                response = await self.model.ainvoke([
+                    SystemMessage(content=PRODUCT_RESOLUTION_SYSTEM_PROMPT),
+                    HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+                ], enable_thinking=False)
             resolution = ProductResolution.model_validate(_json_object(response.content))
-        except (StructuredOutputError, ValidationError):
+        except Exception:
             return []
         allowed = {str(product["id"]) for product in candidates}
         selected = [str(product_id) for product_id in resolution.product_ids]

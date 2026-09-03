@@ -1,6 +1,7 @@
 """Structured, catalog-grounded brand-voice response generation."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from decimal import Decimal, InvalidOperation
@@ -226,11 +227,12 @@ class BrandVoiceAgent:
         drafted_ids: list[str] = []
         response_source = self.source
         try:
-            draft = (
-                await self._draft_with_catalog_selection(messages, payload, state, expected_ids)
-                if catalog_selection_required
-                else await self._draft_with_product_coverage(messages, payload, state, expected_ids)
-            )
+            async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                draft = (
+                    await self._draft_with_catalog_selection(messages, payload, state, expected_ids)
+                    if catalog_selection_required
+                    else await self._draft_with_product_coverage(messages, payload, state, expected_ids)
+                )
             drafted_ids = [str(product_id) for product_id in draft.product_ids]
             # Tool-information responses (seller, reviews, details, comparisons,
             # and bundle totals) intentionally have no recommendation cards. The
@@ -408,10 +410,11 @@ class BrandVoiceAgent:
             "variation": self._variation_guidance(state),
         }
         try:
-            response = await self.model.ainvoke([
-                SystemMessage(content=BRAND_VOICE_POLISH_SYSTEM_PROMPT),
-                HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
-            ])
+            async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
+                response = await self.model.ainvoke([
+                    SystemMessage(content=BRAND_VOICE_POLISH_SYSTEM_PROMPT),
+                    HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+                ], enable_thinking=False)
             polished = PolishedResponseDraft.model_validate(_json_object(response.content))
         except Exception:
             # The audited draft is safer than retrying with an unconstrained
@@ -450,7 +453,7 @@ class BrandVoiceAgent:
         draft: ResponseDraft | None = None
         last_error: Exception | None = None
         for attempt in range(1, self.max_format_attempts + 1):
-            response = await self.model.ainvoke(messages)
+            response = await self.model.ainvoke(messages, enable_thinking=False)
             try:
                 draft = ResponseDraft.model_validate(_json_object(response.content))
                 break
