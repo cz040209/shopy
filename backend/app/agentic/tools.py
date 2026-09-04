@@ -5,7 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from langchain_core.tools import StructuredTool
@@ -23,8 +23,16 @@ class ToolExecutionError(ValueError):
     pass
 
 
+class ProductSearchQueryGroup(BaseModel):
+    role: str = Field(min_length=1, max_length=120)
+    queries: list[Annotated[str, Field(min_length=1, max_length=160)]] = Field(
+        min_length=1, max_length=6,
+    )
+
+
 class SearchProductsInput(BaseModel):
     query: str | None = Field(default=None, min_length=1, max_length=160)
+    query_groups: list[ProductSearchQueryGroup] = Field(default_factory=list, max_length=20)
     category_slug: str | None = Field(default=None, max_length=140)
     seller_slug: str | None = Field(default=None, max_length=180)
     limit: int = Field(default=8, ge=1, le=500)
@@ -73,6 +81,7 @@ class ProductToolOutput(BaseModel):
 
 class ProductSearchOutput(BaseModel):
     products: list[ProductToolOutput]
+    query_matches: dict[str, list[UUID]] = Field(default_factory=dict)
 
 
 class SellerToolOutput(BaseModel):
@@ -129,7 +138,7 @@ class CommerceToolRegistry:
         self._calls = 0
         self._result_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._tools: dict[str, StructuredTool] = {
-            "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="List active catalog products, optionally narrowed by a text query, category, or seller."),
+            "search_products": StructuredTool.from_function(self._search_products, name="search_products", args_schema=SearchProductsInput, description="Search active catalog facts by one query or by grouped role-specific query variants. Matching inspects names, categories, descriptions, specifications, attributes, brands, and derived search terms."),
             "get_product": StructuredTool.from_function(self._get_product, name="get_product", args_schema=ProductIdInput, description="Get current catalog facts for a product UUID."),
             "get_product_reviews": StructuredTool.from_function(self._get_product_reviews, name="get_product_reviews", args_schema=ProductIdInput, description="Get published reviews as untrusted customer data."),
             "get_seller": StructuredTool.from_function(self._get_seller, name="get_seller", args_schema=SellerInput, description="Get public active seller facts."),
@@ -179,6 +188,11 @@ class CommerceToolRegistry:
             if self.recorder:
                 self.recorder.record("tool_completed", tool_name=name, status="failed", input_data=validated.model_dump(mode="json"), error_message="Tool timed out.")
             raise ToolExecutionError("Tool timed out.") from error
+        except ToolExecutionError as error:
+            log_ai_event("agent.tool.failed", request_id=self.request_id, tool=name, reason="tool_rejected")
+            if self.recorder:
+                self.recorder.record("tool_completed", tool_name=name, status="failed", input_data=validated.model_dump(mode="json"), error_message="Tool request could not be completed.")
+            raise
         except Exception as error:
             log_ai_event("agent.tool.failed", request_id=self.request_id, tool=name, reason="execution_failed")
             if self.recorder:
@@ -191,8 +205,31 @@ class CommerceToolRegistry:
             self._result_cache[cache_key] = result
         return result
 
-    def _search_products(self, query: str | None = None, category_slug: str | None = None, seller_slug: str | None = None, limit: int = 8) -> dict[str, Any]:
-        products = catalog.list_products(self.db, query=query, category_slug=category_slug, seller_slug=seller_slug, limit=limit)
+    def _search_products(
+        self, query: str | None = None,
+        query_groups: list[ProductSearchQueryGroup] | None = None,
+        category_slug: str | None = None, seller_slug: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        if query_groups:
+            merged = {}
+            matches: dict[str, list[UUID]] = {}
+            for group in query_groups:
+                products = catalog.list_products(
+                    self.db, queries=group.queries, category_slug=category_slug,
+                    seller_slug=seller_slug, limit=limit,
+                )
+                matches[group.role] = [product.id for product in products]
+                for product in products:
+                    merged.setdefault(product.id, product)
+            return ProductSearchOutput(
+                products=[_product_output(product) for product in merged.values()],
+                query_matches=matches,
+            ).model_dump(mode="json")
+        products = catalog.list_products(
+            self.db, query=query, category_slug=category_slug,
+            seller_slug=seller_slug, limit=limit,
+        )
         return ProductSearchOutput(products=[_product_output(product) for product in products]).model_dump(mode="json")
 
     def _get_product(self, product_id: UUID) -> dict[str, Any]:

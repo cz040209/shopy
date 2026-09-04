@@ -39,6 +39,26 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def clear_missing_avatar_reference(user: User, db: Session) -> None:
+    """Remove a database URL when its locally managed avatar no longer exists.
+
+    The image bytes and URL are intentionally stored separately. A file can be
+    lost after an earlier temporary-storage deployment, so returning its stale
+    URL would make every client render a 404 indefinitely.
+    """
+    avatar_url = user.avatar_url
+    prefix = "/uploads/avatars/"
+    if not avatar_url or not avatar_url.startswith(prefix):
+        return
+    filename = Path(avatar_url).name
+    avatar_path = settings.upload_directory / "avatars" / filename
+    if avatar_path.is_file():
+        return
+    user.avatar_url = None
+    db.commit()
+    db.refresh(user)
+
+
 def set_session_cookie(response: Response, token: str) -> None:
     max_age = settings.auth_session_days * 24 * 60 * 60
     response.set_cookie(
@@ -89,6 +109,7 @@ def get_current_user(
     if session.user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is not active.")
 
+    clear_missing_avatar_reference(session.user, db)
     session.last_seen_at = now
     db.commit()
     return session.user

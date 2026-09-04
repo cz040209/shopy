@@ -9,7 +9,7 @@ from app.agentic.intent import IntentMissionAgent, StructuredOutputError, build_
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.planner import NeedPlannerAgent
 from app.agentic.brand_voice import BrandVoiceAgent
-from app.agentic.auditor import AuditFinding, ShoppingAuditor
+from app.agentic.auditor import ShoppingAuditor
 from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.manager import WorkflowManager
@@ -589,119 +589,6 @@ def test_product_role_matching_rejects_accessories_that_only_mention_the_role():
         monitor_arm, {"kind": "category", "value": "monitor", "field": None}
     )
     assert BundleOptimizerAgent._matches(monitor_arm, "monitor arm")
-
-
-def test_auditor_allows_llm_objection_that_only_repeats_a_verified_disclosed_gap():
-    finding = AuditFinding(
-        code="missing_requirement_coverage",
-        message="The standing desk was not included.",
-        excerpt="A standing desk could not be included in this selection.",
-    )
-    state = {
-        "unfulfilled_requirements": ["standing desk"],
-        "fulfillment_gaps": ["No verified candidate covered: standing desk"],
-    }
-
-    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
-
-
-def test_auditor_recognizes_verified_gap_named_in_finding_message_not_excerpt():
-    finding = AuditFinding(
-        code="missing_requirement_coverage",
-        message="The portable charger requirement is not covered.",
-        excerpt="I can help with your request.",
-    )
-    state = {
-        "unfulfilled_requirements": ["portable charger"],
-        "fulfillment_gaps": ["No verified candidate covered: portable charger"],
-    }
-
-    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
-
-
-def test_auditor_allows_exact_writer_disclosure_when_review_mislabels_it_as_unsupported():
-    missing_role = "travel toiletries kit"
-    finding = AuditFinding(
-        code="unsupported_prose_claim",
-        message="The response says the item was not found, but the bundle only marks it missing.",
-        excerpt=BrandVoiceAgent._gap_disclosure(missing_role),
-    )
-    state = {
-        "unfulfilled_requirements": [missing_role],
-        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
-    }
-
-    assert ShoppingAuditor._is_transparent_verified_gap(finding, state)
-
-
-def test_auditor_keeps_a_different_unsupported_claim_about_a_missing_role():
-    missing_role = "travel toiletries kit"
-    finding = AuditFinding(
-        code="unsupported_prose_claim",
-        message="The waterproof claim is not in verified evidence.",
-        excerpt="The travel toiletries kit is completely waterproof.",
-    )
-    state = {
-        "unfulfilled_requirements": [missing_role],
-        "fulfillment_gaps": [f"No verified candidate covered: {missing_role}"],
-    }
-
-    assert not ShoppingAuditor._is_transparent_verified_gap(finding, state)
-
-
-def test_auditor_allows_exact_verified_over_budget_disclosure():
-    finding = AuditFinding(
-        code="unsupported_prose_claim",
-        message="The overage is within the configured recommendation tolerance.",
-        excerpt="The total is RM 417.00, which is RM 17.00 over your budget of RM 400.00.",
-    )
-    state = {
-        "budget": 400,
-        "recommendation_mode": "bundle",
-        "bundle": {"total": "417.00"},
-    }
-
-    assert ShoppingAuditor._is_verified_budget_disclosure(finding, state)
-
-
-def test_semantic_audit_arithmetic_keeps_single_recommendations_as_alternatives():
-    state = {
-        "recommendation_mode": "single",
-        "budget": 3800,
-        "selected_products": [
-            {"id": "pixel", "quantity": 1},
-            {"id": "xiaomi", "quantity": 1},
-            {"id": "nova", "quantity": 1},
-        ],
-    }
-    products = {
-        "pixel": {"id": "pixel", "price": "3799.00"},
-        "xiaomi": {"id": "xiaomi", "price": "3499.00"},
-        "nova": {"id": "nova", "price": "2190.00"},
-    }
-
-    arithmetic = ShoppingAuditor._verified_arithmetic(
-        state, products, Decimal("9488.00")
-    )
-
-    assert arithmetic["budget_scope"] == "per_option"
-    assert arithmetic["selected_total"] is None
-    assert [item["option_total"] for item in arithmetic["option_totals"]] == [
-        "3799.00", "3499.00", "2190.00",
-    ]
-    assert all(item["within_target"] for item in arithmetic["option_totals"])
-
-
-def test_semantic_audit_arithmetic_combines_products_only_for_bundles():
-    arithmetic = ShoppingAuditor._verified_arithmetic(
-        {"recommendation_mode": "bundle", "budget": 400},
-        {},
-        Decimal("417.00"),
-    )
-
-    assert arithmetic["budget_scope"] == "combined_bundle"
-    assert arithmetic["selected_total"] == "417.00"
-    assert arithmetic["over_target_by"] == "17.00"
 
 
 def test_response_writer_rejects_unverified_availability_language_dynamically():

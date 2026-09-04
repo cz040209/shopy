@@ -24,7 +24,7 @@ Next.js storefront :3002
 FastAPI API :8000
   ├── PostgreSQL :5433  — catalog, users, commerce, conversations, run logs
   ├── Redis :6380       — expiring short-term shopping memory
-  ├── Qwen             — primary intent, planning, vision, writing, and semantic audit
+  ├── Qwen             — primary intent, planning, vision, and response writing
   ├── Qwen Omni Captioner — primary speech-to-text
   └── Gemini           — fallback provider
 ```
@@ -37,7 +37,7 @@ Request → Redis memory load → intent → planning/manager → catalog tools
         → Redis memory update → response
 ```
 
-Catalog tools are the source of truth for product facts. The auditor validates selected products, stock, pricing, constraints, fulfillment, and unsupported claims before delivery.
+Catalog tools are the source of truth for product facts. The deterministic auditor validates selected products, stock, pricing, constraints, fulfillment, structured response claims, and attachments before delivery without making an LLM call.
 
 ## Repository layout
 
@@ -157,7 +157,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `AI_LOG_CUSTOMER_INPUT` | Log customer text locally | `true` |
 | `AI_LOG_AGENT_NODE_PAYLOADS` | Log each agent node's safe input/output payload in the terminal | `true` |
 
-Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS`, `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`. Catalog semantic batches run concurrently according to `AGENT_CATALOG_BATCH_CONCURRENCY`. Optional semantic ranking, resolution, wording, and audit calls are bounded and fall back to verified deterministic behavior; Qwen-to-Gemini fallback shares one total per-call deadline.
+Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_CATALOG_ROLE_MATCHES_PER_NEED`, `AGENT_CATALOG_SHORTLIST_LIMIT`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS`, `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`. Catalog retrieval uses one grouped tool call with intent-derived query variants and bounded database results for every product role; it does not send the complete catalog to an LLM. Optional semantic ranking, resolution, and wording calls are bounded and fall back to verified deterministic behavior; Qwen-to-Gemini fallback shares one total per-call deadline. Audit nodes never call an LLM.
 
 ## Redis short-term memory
 

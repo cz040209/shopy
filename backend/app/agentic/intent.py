@@ -11,7 +11,13 @@ from pydantic import ValidationError
 from app.config import settings
 from app.ai_logging import log_ai_event
 
-from .schemas import BundleItemPlan, FulfillmentRequirement, MissionInterpretation, SelectionCriterion
+from .schemas import (
+    BundleItemPlan,
+    FulfillmentRequirement,
+    MissionInterpretation,
+    SearchRequirement,
+    SelectionCriterion,
+)
 
 
 class StructuredOutputError(ValueError):
@@ -39,6 +45,15 @@ Return only valid JSON, without Markdown.
   "requested_actions": [string],
   "budget": number|null,
   "bundle_items": [{"query": string, "quantity": integer}],
+  "search_requirements": [
+    {
+      "original_text": string,
+      "canonical_role": string,
+      "required_features": [string],
+      "preferred_features": [string],
+      "search_queries": [string]
+    }
+  ],
   "preferences": [string],
   "key_requirements": [string],
   "constraints": [string],
@@ -139,6 +154,10 @@ Available runtime tools (the source of truth for requested_actions):
 ### Catalog Queries & Fulfillment Requirements
 * Set catalog_query to null, requested_actions to [], and bundle_items to [] when the request does not need a catalog lookup.
 * For a comparison, catalog_queries should contain one search phrase per product when possible. For other catalog tasks, include the one or more product phrases needed to resolve the request. Never put tool arguments, SQL, or invented product IDs in the plan.
+* For every product role in a catalog-backed mission, add one search_requirements entry. `original_text` preserves the customer's wording and `canonical_role` is the concise product type, not a specific product name.
+* Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
+* Put an explicitly mandatory capability in `required_features`. Put desired but negotiable qualities in `preferred_features`. A query variant is retrieval vocabulary, not proof that a returned product has that feature; later stages verify facts from the product record.
+* Keep search requirements distinct by product role. For example, a broad lighting role may search `lighting`, `desk light`, `ambient lighting`, `RGB light`, and `LED light`; a retrieved light does not need every optional term in its name.
 * For every explicit shopping need that can be checked against catalog facts, add a fulfillment_requirement:
   - Use **category** for a requested item type. A category value must contain only the normalized product-type phrase: keep quality, price, budget, and preference words in their dedicated fields. Do not use field "category" for an item-type requirement.
   - Use **feature** for a capability such as wireless. In a multi-product
@@ -443,6 +462,16 @@ class IntentMissionAgent:
                 existing_queries.add(need.casefold())
 
         role_phrases = [item.query for item in bundle_items]
+        if not role_phrases:
+            role_phrases.extend(
+                requirement.value for requirement in mission.fulfillment_requirements
+                if requirement.kind.casefold().strip() == "category"
+            )
+        if not role_phrases and mission.catalog_query:
+            role_phrases.append(mission.catalog_query)
+        search_requirements = cls._normalized_search_requirements(
+            mission.search_requirements, role_phrases,
+        )
         requirements: list[FulfillmentRequirement] = []
         seen_requirements: set[tuple[str, str, str, int]] = set()
         generic_feature_fields = {
@@ -502,6 +531,30 @@ class IntentMissionAgent:
                 requirements.append(normalized)
                 seen_requirements.add(key)
 
+        # Required search features come from explicit customer constraints in
+        # the intent contract. Mirror them into the auditable requirement set;
+        # query expansion alone is never treated as proof of a product fact.
+        for search_requirement in search_requirements:
+            matching_item = next((
+                item for item in bundle_items
+                if cls._terms(search_requirement.original_text) == cls._terms(item.query)
+                or cls._terms(search_requirement.canonical_role) <= cls._terms(item.query)
+            ), None)
+            for feature in search_requirement.required_features:
+                normalized = FulfillmentRequirement(
+                    kind="feature",
+                    value=feature,
+                    field=search_requirement.canonical_role,
+                    quantity=matching_item.quantity if matching_item is not None else 1,
+                )
+                key = (
+                    normalized.kind, normalized.value.casefold(),
+                    normalized.field.casefold(), normalized.quantity,
+                )
+                if key not in seen_requirements:
+                    requirements.append(normalized)
+                    seen_requirements.add(key)
+
         # Vision shopping needs are runtime-derived roles. Adding them here keeps
         # retrieval, optimization, response disclosure, and audit on one contract.
         for need in vision_needs:
@@ -521,6 +574,7 @@ class IntentMissionAgent:
             "owned_items": owned[:30],
             "preferences": preferences[:20],
             "bundle_items": [item.model_dump() for item in bundle_items[:20]],
+            "search_requirements": [item.model_dump() for item in search_requirements[:20]],
             "catalog_queries": list(dict.fromkeys(catalog_queries))[:4],
             "fulfillment_requirements": [item.model_dump() for item in requirements[:30]],
             "key_requirements": cls._ui_requirements(
@@ -542,6 +596,44 @@ class IntentMissionAgent:
         if len(bundle_items) > 1:
             data["recommendation_mode"] = "bundle"
         return MissionInterpretation.model_validate(data)
+
+    @classmethod
+    def _normalized_search_requirements(
+        cls, requirements: list[SearchRequirement], roles: list[str]
+    ) -> list[SearchRequirement]:
+        """Keep model expansions role-bound and supply a safe dynamic fallback."""
+        normalized: list[SearchRequirement] = []
+        unique_roles = list(dict.fromkeys(item.strip() for item in roles if item.strip()))
+        for index, role in enumerate(unique_roles):
+            matching = next((
+                item for item in requirements
+                if cls._terms(item.canonical_role) <= cls._terms(role)
+                or cls._terms(role) <= cls._terms(item.canonical_role)
+                or cls._terms(item.original_text) <= cls._terms(role)
+                or cls._terms(role) <= cls._terms(item.original_text)
+            ), None)
+            if matching is None and len(requirements) == len(unique_roles):
+                # Structured outputs are ordered by product role. This handles
+                # genuine lexical variants (for example "light"/"lighting")
+                # without embedding a product-specific synonym dictionary.
+                matching = requirements[index]
+            if matching is None:
+                normalized.append(SearchRequirement(
+                    original_text=role,
+                    canonical_role=role,
+                    search_queries=[role],
+                ))
+                continue
+            queries = list(dict.fromkeys(
+                query.strip() for query in [
+                    matching.canonical_role, *matching.search_queries, role,
+                ] if query.strip()
+            ))[:6]
+            normalized.append(matching.model_copy(update={
+                "original_text": role,
+                "search_queries": queries,
+            }))
+        return normalized
 
     _QUANTITY_WORDS = {
         "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -672,4 +764,15 @@ class IntentMissionAgent:
             priorities=strings("priorities", 10),
             selection_criteria=criteria[:10],
             fulfillment_requirements=requirements[:30],
+            search_requirements=[
+                SearchRequirement(
+                    original_text=item.query,
+                    canonical_role=item.query,
+                    search_queries=[item.query],
+                ) for item in bundle_items[:20]
+            ] or ([SearchRequirement(
+                original_text=catalog_query,
+                canonical_role=catalog_query,
+                search_queries=[catalog_query],
+            )] if catalog_query else []),
         )

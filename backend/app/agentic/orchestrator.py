@@ -57,13 +57,16 @@ class ShoppingOrchestrator:
         self.planning_agent = PlanningAgent(shared_model)
         self.manager = WorkflowManager()
         self.product_resolver = ProductResolutionAgent(shared_model)
-        self.product_search_agent = ProductSearchAgent(tool_registry, shared_model)
+        self.product_search_agent = ProductSearchAgent(tool_registry)
         self.compatibility_agent = CompatibilityAgent(shared_model)
         self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
         self.memory_store = memory_store
         self.brand_voice = BrandVoiceAgent(shared_model)
-        self.auditor = auditor or ShoppingAuditor(shared_model)
+        # Auditing is intentionally deterministic: catalog existence, stock,
+        # pricing, totals, constraints, response claims, and attachments are
+        # verified without another provider call.
+        self.auditor = auditor or ShoppingAuditor()
         self.max_repairs = max_repairs
         self.max_graph_iterations = max_graph_iterations
         self._started_at: float | None = None
@@ -303,6 +306,7 @@ class ShoppingOrchestrator:
             "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions,
             "budget": mission.budget,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
+            "search_requirements": [item.model_dump() for item in mission.search_requirements],
             "preferences": mission.preferences,
             "key_requirements": mission.key_requirements,
             "constraints": mission.constraints,
@@ -327,7 +331,7 @@ class ShoppingOrchestrator:
         data = mission.model_dump()
         refinement = bool(mission.optimization_mode or mission.selection_criteria)
         list_fields = (
-            "catalog_queries", "requested_actions", "bundle_items", "preferences",
+            "catalog_queries", "requested_actions", "bundle_items", "search_requirements", "preferences",
             "key_requirements", "constraints", "owned_items", "priorities",
             "fulfillment_requirements",
         )
@@ -361,7 +365,8 @@ class ShoppingOrchestrator:
             if previous.get("recommendation_mode") == "bundle":
                 for field in (
                     "catalog_query", "catalog_queries", "requested_actions",
-                    "bundle_items", "key_requirements", "fulfillment_requirements",
+                    "bundle_items", "search_requirements", "key_requirements",
+                    "fulfillment_requirements",
                 ):
                     if previous.get(field):
                         data[field] = previous[field]
@@ -399,17 +404,16 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
-        if "check_stock" in actions:
-            search_output = await self.product_search_agent.run_many(
-                state,
-                queries=self._catalog_queries(state),
-                limit=self._stock_search_limit(),
-                include_out_of_stock=True,
-            )
-        else:
-            search_output = await self.product_search_agent.run_catalog(
-                state, limit=settings.agent_catalog_context_limit
-            )
+        search_output = await self.product_search_agent.run_requirements(
+            state,
+            requirements=self._search_requirements(state),
+            per_role_limit=(
+                self._stock_search_limit()
+                if "check_stock" in actions
+                else settings.agent_catalog_role_matches_per_need
+            ),
+            include_out_of_stock="check_stock" in actions,
+        )
         if search_output["errors"]:
             output = {**result, "errors": [*state["errors"], *search_output["errors"]]}
             self._record_node(state, "product_search", output)
@@ -688,9 +692,13 @@ class ShoppingOrchestrator:
             return []
         context: list[dict[str, Any]] = []
         selected = candidates[:4]
+        verification_reserve = self._verification_call_reserve(state)
 
         async def execute(name: str, arguments: dict[str, Any]) -> None:
-            if self.tool_registry is None or self.tool_registry.remaining_calls < 1:
+            # Product facts used in the final answer must always be fetched by
+            # the auditor. Optional enrichment is useful only while enough
+            # request-scoped capacity remains for that verification.
+            if self.tool_registry is None or self.tool_registry.remaining_calls <= verification_reserve:
                 return
             try:
                 context.append({"tool": name, "result": await self.tool_registry.execute(name, arguments)})
@@ -712,7 +720,7 @@ class ShoppingOrchestrator:
             bundle_items = state.get("bundle_items", [])
             resolved_items: list[dict[str, Any]] = []
             for item in bundle_items:
-                if self.tool_registry.remaining_calls < 2:
+                if self.tool_registry.remaining_calls <= verification_reserve:
                     break
                 try:
                     search = await self.tool_registry.execute("search_products", {"query": str(item["query"]), "limit": 8})
@@ -732,6 +740,19 @@ class ShoppingOrchestrator:
                 # Preserve the previous useful fallback for an underspecified bundle.
                 await execute("calculate_bundle_total", {"items": [{"product_id": str(product["id"]), "quantity": 1} for product in selected[:3]]})
         return context
+
+    @staticmethod
+    def _verification_call_reserve(state: ShoppingAgentState) -> int:
+        """Reserve current-catalog reads for the dynamically selected products."""
+        if state.get("recommendation_mode") == "bundle":
+            required_roles = {
+                str(role).strip()
+                for role in state.get("required_categories", [])
+                if str(role).strip()
+            }
+            # The response layer caps visible selections at four products.
+            return min(4, max(1, len(required_roles)))
+        return 1
 
     async def _resolve_action_candidates(
         self, state: ShoppingAgentState, actions: list[str], candidates: list[dict[str, Any]]
@@ -812,6 +833,27 @@ class ShoppingOrchestrator:
             if not any(terms(query) < terms(other) for other in unique if other != query)
         ]
         return filtered or [ShoppingOrchestrator._catalog_query(state)]
+
+    @staticmethod
+    def _search_requirements(state: ShoppingAgentState) -> list[dict[str, Any]]:
+        requirements = [
+            item for item in state.get("search_requirements", [])
+            if isinstance(item, dict)
+            and str(item.get("canonical_role", "")).strip()
+            and isinstance(item.get("search_queries"), list)
+        ]
+        if requirements:
+            return requirements
+        return [
+            {
+                "original_text": query,
+                "canonical_role": query,
+                "required_features": [],
+                "preferred_features": [],
+                "search_queries": [query],
+            }
+            for query in ShoppingOrchestrator._catalog_queries(state)
+        ]
 
     def _stock_search_limit(self) -> int:
         if self.tool_registry is None:

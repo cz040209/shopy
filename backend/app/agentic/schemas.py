@@ -10,6 +10,16 @@ class BundleItemPlan(BaseModel):
     quantity: int = Field(default=1, ge=1, le=99)
 
 
+class SearchRequirement(BaseModel):
+    """Retrieval vocabulary for one product role, without changing its meaning."""
+
+    original_text: str = Field(min_length=1, max_length=160)
+    canonical_role: str = Field(min_length=1, max_length=120)
+    required_features: list[str] = Field(default_factory=list, max_length=8)
+    preferred_features: list[str] = Field(default_factory=list, max_length=8)
+    search_queries: list[str] = Field(default_factory=list, min_length=1, max_length=6)
+
+
 class FulfillmentRequirement(BaseModel):
     """A user-stated need that can be tested against verified catalog facts."""
 
@@ -43,6 +53,7 @@ class MissionInterpretation(BaseModel):
     catalog_queries: list[str] = Field(default_factory=list, max_length=4)
     requested_actions: list[str] = Field(default_factory=list, max_length=7)
     bundle_items: list[BundleItemPlan] = Field(default_factory=list, max_length=20)
+    search_requirements: list[SearchRequirement] = Field(default_factory=list, max_length=20)
     budget: float | None = Field(default=None, ge=0)
     preferences: list[str] = Field(default_factory=list, max_length=20)
     key_requirements: list[str] = Field(default_factory=list, max_length=6)

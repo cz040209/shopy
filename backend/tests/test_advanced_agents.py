@@ -8,8 +8,9 @@ from sqlalchemy import select
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.compatibility import CompatibilityAgent
+from app.agentic.intent import IntentMissionAgent
 from app.agentic.product_search import ProductSearchAgent
-from app.agentic.schemas import MissionInterpretation
+from app.agentic.schemas import BundleItemPlan, MissionInterpretation, SearchRequirement
 from app.agentic.state import initial_shopping_state
 from app.agentic.tools import CommerceToolRegistry
 from app.agentic.vision import VisionAgent
@@ -57,84 +58,76 @@ def test_product_ranking_uses_whole_terms_not_substrings():
     assert ranked[1]["reasons"] == ["in stock"]
 
 
-class CatalogBatchModel:
-    def __init__(self) -> None:
-        self.seen_ids: list[str] = []
+def test_search_requirement_keeps_dynamic_aliases_for_lexical_role_variant():
+    requirement = SearchRequirement(
+        original_text="light",
+        canonical_role="lighting",
+        preferred_features=["RGB", "ambient"],
+        search_queries=["lighting", "desk light", "ambient lighting", "RGB light", "LED light"],
+    )
 
-    async def ainvoke(self, messages, **kwargs):
-        payload = json.loads(str(messages[1].content))
-        self.seen_ids.extend(product["id"] for product in payload["catalog_index"])
-        matches = [
-            product["id"] for product in payload["catalog_index"]
-            if product["attributes"].get("department") == "requested-department"
-        ]
-        return AIMessage(content=json.dumps({"product_ids": matches}))
+    result = IntentMissionAgent._normalized_search_requirements([requirement], ["light"])
+
+    assert result[0].canonical_role == "lighting"
+    assert result[0].search_queries == [
+        "lighting", "desk light", "ambient lighting", "RGB light", "LED light", "light",
+    ]
+
+
+def test_required_search_feature_becomes_auditable_for_the_same_role():
+    mission = MissionInterpretation(
+        mission_type="product_search",
+        recommendation_mode="bundle",
+        goal="Add an RGB light",
+        requires_catalog=True,
+        catalog_query="lighting",
+        requested_actions=["search_products"],
+        bundle_items=[BundleItemPlan(query="lighting", quantity=1)],
+        search_requirements=[SearchRequirement(
+            original_text="RGB lights",
+            canonical_role="lighting",
+            required_features=["RGB"],
+            search_queries=["lighting", "RGB light", "LED light"],
+        )],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="I need an RGB light",
+    )
+
+    assert any(
+        requirement.kind == "feature"
+        and requirement.value == "RGB"
+        and requirement.field == "lighting"
+        and requirement.quantity == 1
+        for requirement in normalized.fulfillment_requirements
+    )
 
 
 @pytest.mark.anyio
-async def test_catalog_shortlisting_considers_products_beyond_first_batch():
-    model = CatalogBatchModel()
-    agent = ProductSearchAgent(None, model)
-    products = [
-        {
-            "id": f"product-{index}", "name": f"Product {index:03}", "brand": "Test",
-            "category": "General", "price": "10", "inventory_quantity": 1,
-            "rating_average": "0", "review_count": 0, "specs": [], "attributes": {},
-        }
-        for index in range(81)
-    ]
-    products[-1]["attributes"] = {"department": "requested-department"}
-    ranked = [{"product": product, "score": 20, "reasons": ["in stock"]} for product in products]
+async def test_role_expanded_search_uses_one_tool_call_and_json_catalog_evidence(db_session):
+    matching = add_product(
+        db_session, sku="ADV-RGB", name="Ambient Bar", price="90", inventory=3,
+    )
+    matching.description = "soft room illumination"
+    matching.attributes = {"lighting_mode": "RGB ambient"}
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "expanded-search")
+    state = initial_shopping_state("Add ambient lighting")
+    state["search_requirements"] = [{
+        "original_text": "ambient lighting",
+        "canonical_role": "lighting",
+        "required_features": [],
+        "preferred_features": ["RGB", "ambient"],
+        "search_queries": ["lighting", "ambient lighting", "RGB light"],
+    }]
 
-    result = await agent._shortlist_catalog(ranked, initial_shopping_state("show products"))
+    result = await ProductSearchAgent(registry).run_requirements(
+        state, requirements=state["search_requirements"], per_role_limit=6,
+    )
 
-    assert len(model.seen_ids) == 81
-    assert [item["product"]["id"] for item in result] == ["product-80"]
-
-
-@pytest.mark.anyio
-async def test_catalog_shortlist_preserves_exact_matches_for_each_planned_role():
-    model = CatalogBatchModel()
-    agent = ProductSearchAgent(None, model)
-    products = [
-        {
-            "id": f"generic-{index}", "name": f"Generic {index}", "brand": "Test",
-            "category": "General", "price": "10", "inventory_quantity": 1,
-            "rating_average": "0", "review_count": 0, "specs": [], "attributes": {},
-        }
-        for index in range(90)
-    ]
-    products[-1].update({"id": "mouse", "name": "Glide Wireless Mouse", "category": "Mice"})
-    ranked = [{"product": product, "score": 20, "reasons": ["in stock"]} for product in products]
-    state = initial_shopping_state("Build a setup")
-    state["required_categories"] = ["wireless mouse"]
-
-    result = await agent._shortlist_catalog(ranked, state)
-
-    assert "mouse" in [item["product"]["id"] for item in result]
-
-
-def test_grounded_role_ids_reject_products_that_only_mention_the_requested_role():
-    ranked = [
-        {"product": {
-            "id": "cable", "name": "USB-C Charging Cable", "brand": "Test",
-            "category": "Cables", "price": "49", "inventory_quantity": 2,
-            "search_terms": ["phone charging"],
-            "specs": [{"label": "Compatibility", "value": "phones and tablets"}],
-            "attributes": {},
-        }, "score": 50, "reasons": []},
-        {"product": {
-            "id": "phone", "name": "Value Smartphone", "brand": "Test",
-            "category": "Phones", "price": "999", "inventory_quantity": 2,
-            "search_terms": [], "specs": [], "attributes": {},
-        }, "score": 40, "reasons": []},
-    ]
-    state = initial_shopping_state("Find a phone")
-    state["required_categories"] = ["phone"]
-
-    grounded = ProductSearchAgent._grounded_role_ids(ranked, state)
-
-    assert grounded == ["phone"]
+    assert str(matching.id) in [item["id"] for item in result["candidate_products"]]
+    assert registry.remaining_calls == registry.max_calls - 1
 
 
 class VisionGenerator:

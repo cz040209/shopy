@@ -1,9 +1,12 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+BACKEND_DIRECTORY = ENV_FILE.parent
+DEFAULT_UPLOAD_DIRECTORY = BACKEND_DIRECTORY / "data" / "uploads"
 
 
 class Settings(BaseSettings):
@@ -35,22 +38,14 @@ class Settings(BaseSettings):
     # targeted repair cycles instead of failing with a graph recursion error.
     agent_max_graph_iterations: int = 24
     agent_max_tool_calls: int = 8
-    # Retrieval reads the catalog snapshot in compact batches, then sends only
-    # a verified semantic shortlist to downstream response agents.
-    agent_catalog_context_limit: int = 500
-    agent_catalog_batch_size: int = 80
-    agent_catalog_batch_concurrency: int = 4
-    agent_catalog_batch_shortlist_limit: int = 12
+    # Retrieval asks the database for a bounded set per intent-derived product
+    # role. The full catalog is never copied into an LLM prompt.
     agent_catalog_shortlist_limit: int = 48
     agent_catalog_role_matches_per_need: int = 6
     agent_bundle_options_per_need: int = 12
     agent_bundle_beam_width: int = 800
     agent_max_repair_attempts: int = 2
     agent_response_format_attempts: int = 2
-    # Semantic audit findings can be uncertain when the LLM is interpreting
-    # shopper intent or catalog taxonomy. Only high-confidence findings block
-    # a response; deterministic catalog facts remain strict.
-    agent_audit_block_confidence: float = 0.75
     # Near-budget alternatives can be shown when they are explicitly disclosed
     # to the shopper; the customer budget remains the primary target.
     agent_recommendation_budget_tolerance_percent: float = 30
@@ -67,13 +62,23 @@ class Settings(BaseSettings):
     shopping_memory_ttl_seconds: int = 1800
     shopping_memory_recent_turns: int = 8
     redis_socket_timeout_seconds: float = 1
-    upload_directory: Path = Path("/tmp/shopy-uploads")
+    # Keep uploaded account assets outside the OS temporary directory.  The
+    # default survives backend restarts; production should point this setting
+    # at a mounted persistent volume or object-storage-backed path.
+    upload_directory: Path = DEFAULT_UPLOAD_DIRECTORY
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_from_email: str = ""
     smtp_use_tls: bool = True
+
+    @field_validator("upload_directory", mode="before")
+    @classmethod
+    def resolve_upload_directory(cls, value: str | Path) -> Path:
+        """Resolve relative upload paths from ``backend``, not the launch CWD."""
+        path = Path(value)
+        return path if path.is_absolute() else BACKEND_DIRECTORY / path
 
     @property
     def receipt_email_enabled(self) -> bool:

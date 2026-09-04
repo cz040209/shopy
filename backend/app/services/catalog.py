@@ -4,7 +4,7 @@ from collections.abc import Sequence
 import re
 from uuid import UUID
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, Text, and_, case, cast, literal, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Category, Product, ProductStatus, Review, Seller, SellerStatus
@@ -30,37 +30,54 @@ def list_products(
     db: Session,
     *,
     query: str | None = None,
+    queries: Sequence[str] | None = None,
     category_slug: str | None = None,
     seller_slug: str | None = None,
     offset: int = 0,
     limit: int = 48,
 ) -> Sequence[Product]:
     statement = active_products_query()
+    query_values = list(dict.fromkeys(
+        value.strip() for value in [*(queries or []), query or ""] if value and value.strip()
+    ))
     strict_predicates = []
     fallback_predicates = []
-    if query:
-        # Search meaningful words independently and include category metadata.
+    relevance_parts = []
+    if query_values:
+        # Search meaningful words independently across all customer-visible
+        # catalog evidence. Each expanded phrase is an alternative route to
+        # the same product role, so phrases are ORed while terms inside a
+        # phrase are ANDed.
         # A shopper asking for "skincare facial product" should find a
         # "Facial Cleanser" in the "Skincare" category even when that exact
         # phrase does not occur in one database column.
-        terms = [
-            term for term in re.findall(r"[\w-]+", query.lower())
-            if len(term) > 2 and term not in SEARCH_STOP_WORDS and not term.startswith("rm") and not term.isdigit()
-        ]
-        for term in terms:
-            variant_predicates = []
-            pattern = f"%{term}%"
-            variant_predicates.extend(
-                [
-                    Product.name.ilike(pattern),
-                    Product.brand.ilike(pattern),
-                    Product.description.ilike(pattern),
-                    Category.name.ilike(pattern),
-                    Category.slug.ilike(pattern),
-                ]
-            )
-            strict_predicates.append(or_(*variant_predicates))
-            fallback_predicates.extend(variant_predicates)
+        for value in query_values:
+            terms = [
+                term for term in re.findall(r"[\w-]+", value.lower())
+                if len(term) > 2 and term not in SEARCH_STOP_WORDS
+                and not term.startswith("rm") and not term.isdigit()
+            ]
+            phrase_terms = []
+            for term in terms:
+                pattern = f"%{term}%"
+                weighted_fields = (
+                    (Product.name.ilike(pattern), 8),
+                    (Category.name.ilike(pattern), 7),
+                    (Category.slug.ilike(pattern), 6),
+                    (Product.brand.ilike(pattern), 4),
+                    (Product.description.ilike(pattern), 3),
+                    (cast(Product.specs, Text).ilike(pattern), 2),
+                    (cast(Product.attributes, Text).ilike(pattern), 2),
+                )
+                variants = [predicate for predicate, _ in weighted_fields]
+                phrase_terms.append(or_(*variants))
+                fallback_predicates.extend(variants)
+                relevance_parts.extend(
+                    case((predicate, weight), else_=0)
+                    for predicate, weight in weighted_fields
+                )
+            if phrase_terms:
+                strict_predicates.append(and_(*phrase_terms))
     if category_slug:
         statement = statement.join(Product.category).where(Category.slug == category_slug, Category.is_active.is_(True))
     elif strict_predicates:
@@ -68,16 +85,24 @@ def list_products(
     if seller_slug:
         statement = statement.join(Product.seller).where(Seller.slug == seller_slug, Seller.status == SellerStatus.ACTIVE)
     if strict_predicates:
+        relevance = sum(relevance_parts, literal(0))
         strict_results = db.scalars(
-            statement.where(and_(*strict_predicates)).order_by(Product.created_at.desc()).offset(offset).limit(limit)
+            statement.where(or_(*strict_predicates))
+            .order_by(relevance.desc(), Product.created_at.desc()).offset(offset).limit(limit)
         ).all()
         if strict_results:
             return strict_results
+        if len(query_values) > 1:
+            # Expanded role searches already contain alternative vocabulary.
+            # Falling back to any one word here would let incidental feature
+            # mentions crowd in products from a different role.
+            return []
         # Preserve typo tolerance for a query such as "Mirrorlesscamera", but
         # only after an all-concepts search found nothing. This prevents broad
         # partial matches from crowding out relevant bundle candidates.
         return db.scalars(
-            statement.where(or_(*fallback_predicates)).order_by(Product.created_at.desc()).offset(offset).limit(limit)
+            statement.where(or_(*fallback_predicates))
+            .order_by(relevance.desc(), Product.created_at.desc()).offset(offset).limit(limit)
         ).all()
     return db.scalars(statement.order_by(Product.created_at.desc()).offset(offset).limit(limit)).all()
 

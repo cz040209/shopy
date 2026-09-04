@@ -7,7 +7,10 @@ from app.models import Category, Product, ProductStatus, Seller, SellerStatus
 from app.services.catalog import list_products
 
 
-def _product(db_session, *, sku: str, name: str, category_name: str, description: str) -> Product:
+def _product(
+    db_session, *, sku: str, name: str, category_name: str, description: str,
+    specs: list[dict] | None = None, attributes: dict | None = None,
+) -> Product:
     seller = Seller(name=f"Seller {sku}", slug=f"seller-{sku.lower()}", status=SellerStatus.ACTIVE)
     category = Category(name=category_name, slug=category_name.lower().replace(" ", "-"))
     product = Product(
@@ -21,6 +24,8 @@ def _product(db_session, *, sku: str, name: str, category_name: str, description
         price=Decimal("20.00"),
         status=ProductStatus.ACTIVE,
         inventory_quantity=10,
+        specs=specs or [],
+        attributes=attributes or {},
     )
     db_session.add(product)
     return product
@@ -56,6 +61,29 @@ def test_catalog_listing_returns_all_active_products_without_a_query(db_session)
     db_session.commit()
 
     assert {product.id for product in list_products(db_session)} == {shampoo.id, mitt.id, towels.id, wheel_cleaner.id}
+
+
+def test_expanded_search_inspects_specs_attributes_and_treats_queries_as_alternatives(db_session):
+    rgb_bar = _product(
+        db_session, sku="LIGHT", name="Aura Bar", category_name="Home Accessories",
+        description="A slim accent fixture.",
+        specs=[{"label": "Output", "value": "dimmable LED"}],
+        attributes={"product_role": "lighting", "modes": ["RGB", "ambient"]},
+    )
+    unrelated = _product(
+        db_session, sku="CABLE", name="RGB Extension Cable", category_name="Cables",
+        description="Replacement cable.",
+    )
+    db_session.commit()
+
+    results = list_products(
+        db_session,
+        queries=["lighting", "ambient lighting", "RGB light", "LED light"],
+        limit=8,
+    )
+
+    assert results[0].id == rgb_bar.id
+    assert unrelated.id not in {product.id for product in results}
 
 
 @pytest.mark.anyio

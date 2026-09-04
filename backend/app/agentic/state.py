@@ -26,6 +26,7 @@ class ShoppingAgentState(TypedDict):
     unfulfilled_requirements: list[str]
     planning_context: dict[str, Any] | None
     bundle_items: list[dict[str, Any]]
+    search_requirements: list[dict[str, Any]]
     budget: float | None
     preferences: list[str]
     key_requirements: list[str]
@@ -84,6 +85,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "unfulfilled_requirements": [],
         "planning_context": None,
         "bundle_items": [],
+        "search_requirements": [],
         "budget": None,
         "preferences": [],
         "key_requirements": [],
