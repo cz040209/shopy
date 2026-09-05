@@ -15,7 +15,7 @@ from .intent import AsyncChatModel, StructuredOutputError, _json_object
 
 
 class ProductResolution(BaseModel):
-    product_ids: list[UUID] = Field(default_factory=list, max_length=4)
+    product_ids: list[UUID] = Field(default_factory=list, max_length=6)
 
 
 PRODUCT_RESOLUTION_SYSTEM_PROMPT = """You are Shopy's product-resolution agent.
@@ -29,8 +29,9 @@ Rules:
 - Select only IDs present in verified_candidates.
 - For seller, product-detail, review, and factual catalog questions (such as
   colors, size, specifications, or compatibility), choose the one best product.
-- For comparisons, choose the two to four intended products.
-- For browsing or recommendations, choose the one to four most relevant products.
+- For comparisons, choose the two to six intended products.
+- For browsing or recommendations, choose two to six relevant products when at
+  least two valid alternatives exist; choose one only when there is just one.
 - For a refinement, resolve against mission_context and selection_context as
   well as the short follow-up text. Preserve the active product role and choose
   candidates that satisfy the verified comparison or preference direction.

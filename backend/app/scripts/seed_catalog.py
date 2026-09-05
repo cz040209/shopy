@@ -1,8 +1,8 @@
-"""Import and replace the legacy frontend catalog in PostgreSQL.
+"""Import and update the legacy frontend catalog in PostgreSQL.
 
 The TypeScript file is deliberately treated as an import source during this
-transition. Running this command replaces previously imported LEGACY-* products,
-so PostgreSQL remains the storefront source of truth and can be reseeded safely.
+transition. Products are upserted by stable SKU so references from carts,
+wishlists, recommendations, and orders remain valid across repeated seeds.
 """
 from __future__ import annotations
 
@@ -63,11 +63,10 @@ def extract_seller_name(specs: object) -> str | None:
 def run() -> int:
     legacy_products = load_legacy_catalog()
     with SessionLocal() as db:
-        existing_legacy = db.scalars(select(Product).where(Product.sku.like("LEGACY-%"))).all()
-        removed = len(existing_legacy)
-        for product in existing_legacy:
-            db.delete(product)
-        db.flush()
+        existing_by_sku = {
+            product.sku: product
+            for product in db.scalars(select(Product).where(Product.sku.like("LEGACY-%"))).all()
+        }
 
         seller_cache: dict[str, Seller] = {}
 
@@ -89,7 +88,8 @@ def run() -> int:
             return seller
 
         categories: dict[str, Category] = {}
-        imported = 0
+        created = 0
+        updated = 0
         for position, entry in enumerate(legacy_products, start=1):
             category_name = str(entry["category"])
             category_slug = slugify(category_name)
@@ -115,10 +115,18 @@ def run() -> int:
                 "attributes": {"legacy_product_id": legacy_id}, "rating_average": Decimal(str(entry.get("rating", 0))),
                 "review_count": int(entry.get("reviews", 0)), "published_at": datetime.now(timezone.utc),
             }
-            product = Product(sku=sku, **values)
-            db.add(product)
+            product = existing_by_sku.get(sku)
+            if product is None:
+                product = Product(sku=sku, **values)
+                db.add(product)
+                created += 1
+            else:
+                # Never replace the row: its UUID may already be referenced by
+                # carts, orders, wishlists, reviews, and AI recommendations.
+                for field, value in values.items():
+                    setattr(product, field, value)
+                updated += 1
             db.flush()
-            imported += 1
 
             image_url = entry.get("image")
             if image_url:
@@ -128,7 +136,7 @@ def run() -> int:
                 else:
                     image.url, image.alt_text = str(image_url), product.name
         db.commit()
-    print(f"Catalog seed complete: {removed} legacy products replaced, {imported} imported.")
+    print(f"Catalog seed complete: {created} products created, {updated} updated.")
     return 0
 
 

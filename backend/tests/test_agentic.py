@@ -14,7 +14,11 @@ from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.manager import WorkflowManager
 from app.agentic.state import initial_shopping_state
-from app.agentic.product_roles import has_product_role_overlap, matches_product_role, role_alternatives
+from app.agentic.product_roles import (
+    has_product_role_overlap,
+    matches_product_role,
+    role_alternatives,
+)
 
 
 class FakeChatModel:
@@ -987,6 +991,53 @@ def test_single_recommendation_mode_returns_two_comparable_choices_when_availabl
     ]
 
 
+def test_phone_role_expands_catalog_wording_and_matches_phone_categories():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="single",
+        goal="Find a smartphone", requires_catalog=True,
+        bundle_items=[{"query": "smartphone"}],
+        search_requirements=[{
+            "original_text": "smartphone", "canonical_role": "smartphone",
+            "search_queries": ["smartphone", "mobile phone", "cell phone"],
+        }],
+        fulfillment_requirements=[{
+            "kind": "category", "value": "smartphone", "quantity": 1,
+        }],
+    )
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="Find a smartphone",
+    )
+    canonical_role = normalized.search_requirements[0].canonical_role
+
+    assert canonical_role == "phone"
+    assert normalized.fulfillment_requirements[0].value == "phone"
+    assert "phone" in normalized.search_requirements[0].search_queries
+    assert matches_product_role(
+        {"name": "Galaxy S25", "category": "Phones", "attributes": {}},
+        canonical_role,
+    )
+
+
+def test_single_recommendation_returns_up_to_six_comparable_choices():
+    state = initial_shopping_state("Recommend a phone")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "phone", "field": None, "quantity": 1},
+        ],
+        "candidate_products": [
+            {
+                "id": f"phone-{index}", "name": f"Phone {index}", "brand": "Shopy",
+                "category": "Phones", "price": "999", "inventory_quantity": 4,
+                "specs": [], "attributes": {},
+            }
+            for index in range(8)
+        ],
+    })
+
+    assert len(BrandVoiceAgent.select_catalog_products(state)) == 6
+
+
 def test_single_phone_request_keeps_multiple_llm_resolved_comparables():
     state = initial_shopping_state("I want to buy a phone under RM 5,000")
     state.update({
@@ -1003,7 +1054,9 @@ def test_single_phone_request_keeps_multiple_llm_resolved_comparables():
     })
 
     assert BrandVoiceAgent.select_catalog_products(state) == [
-        {"id": "iphone-16", "quantity": 1}, {"id": "iphone-16-pro", "quantity": 1},
+        {"id": "iphone-16", "quantity": 1},
+        {"id": "iphone-16-pro", "quantity": 1},
+        {"id": "galaxy-s25", "quantity": 1},
     ]
 
 
@@ -1041,6 +1094,28 @@ async def test_llm_selected_bundle_mode_receives_a_multi_product_bundle():
 
     assert result["bundle"]["product_count"] == 3
     assert {item["id"] for item in result["selected_products"]} == {"chair", "table", "lamp"}
+
+
+@pytest.mark.anyio
+async def test_bundle_recommendation_is_capped_at_six_products():
+    categories = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"]
+    state = initial_shopping_state("Build a complete kit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": categories,
+        "candidate_products": [
+            {
+                "id": category, "name": category, "category": category,
+                "price": "10", "inventory_quantity": 3,
+            }
+            for category in categories
+        ],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert result["bundle"]["product_count"] == 6
+    assert len(result["bundle"]["required_category_coverage"]["missing"]) == 1
 
 
 def test_auditor_allows_a_declared_gap_in_a_partially_fulfilled_bundle():
@@ -1102,20 +1177,38 @@ async def test_bundle_resolves_generic_product_form_terms_from_catalog_evidence(
         "category": "Wash Mitt", "price": "29", "inventory_quantity": 8,
         "specs": [], "attributes": {"department": "automotive", "car_care_category": "Wash Mitt"},
     }
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="Build a weekly wash kit", requires_catalog=True,
+        bundle_items=[{"query": "car wash soap"}],
+        search_requirements=[{
+            "original_text": "car wash soap", "canonical_role": "car wash soap",
+            "search_queries": ["car wash soap", "car cleaning shampoo", "car shampoo"],
+        }],
+        fulfillment_requirements=[{
+            "kind": "category", "value": "car wash soap", "quantity": 1,
+        }],
+    )
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="Build a weekly wash kit",
+    )
+    role = normalized.fulfillment_requirements[0].value
+    assert role == "car wash shampoo"
+
     state = initial_shopping_state("Build a weekly wash kit")
     state.update({
         "recommendation_mode": "bundle", "budget": 300,
-        "required_categories": ["car wash soap"],
-        "fulfillment_requirements": [{"kind": "category", "value": "car wash soap", "field": None, "quantity": 1}],
+        "required_categories": [role],
+        "fulfillment_requirements": [normalized.fulfillment_requirements[0].model_dump()],
         "candidate_products": [shampoo, mitt],
     })
 
     assert BrandVoiceAgent.fulfillment_gaps(state["candidate_products"], state) == []
     assert BrandVoiceAgent._matches_requirement(
-        shampoo, {"kind": "category", "value": "car wash soap", "field": None}
+        shampoo, {"kind": "category", "value": role, "field": None}
     )
     assert not BrandVoiceAgent._matches_requirement(
-        mitt, {"kind": "category", "value": "car wash soap", "field": None}
+        mitt, {"kind": "category", "value": role, "field": None}
     )
 
     result = await BundleOptimizerAgent().run(state)

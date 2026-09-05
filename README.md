@@ -23,7 +23,8 @@ Next.js storefront :8002
       ▼
 FastAPI API (internal Docker network)
   ├── PostgreSQL         — catalog, users, commerce, conversations, run logs
-  ├── Redis              — expiring short-term shopping memory
+  ├── Redis              — expiring short-term shopping memory and job queue
+  ├── Celery worker      — durable receipt email delivery
   ├── Qwen             — primary intent, planning, vision, and response writing
   ├── Qwen Omni Captioner — primary speech-to-text
   └── Gemini           — fallback provider
@@ -65,9 +66,9 @@ Run the entire application with one command:
 docker compose up --build
 ```
 
-Open [http://localhost:8002](http://localhost:8002). The first startup applies
-database migrations and seeds every catalog automatically. PostgreSQL, Redis,
-and the API remain private to the Docker network; the frontend proxies `/api`
+Open [http://localhost:8002](http://localhost:8002). Startup applies database
+migrations automatically but does not modify catalog data. PostgreSQL, Redis,
+the API, and the Celery worker remain private to the Docker network; the frontend proxies `/api`
 and `/uploads` to the API, so the browser has one origin.
 
 To enable AI features, supply a provider key when starting:

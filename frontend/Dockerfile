@@ -6,6 +6,9 @@ RUN npm ci
 
 FROM node:22-alpine AS build
 
+ARG BACKEND_ORIGIN=http://backend:8000
+ENV BACKEND_ORIGIN=$BACKEND_ORIGIN
+
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .

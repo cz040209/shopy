@@ -57,6 +57,7 @@ Do not calculate totals, enforce budgets, or invent product facts."""
 
 class BundleOptimizerAgent:
     name = "bundle_optimizer"
+    max_bundle_products = 6
     def __init__(self, model: AsyncChatModel | None = None) -> None:
         self.model = model
 
@@ -266,6 +267,8 @@ class BundleOptimizerAgent:
                 current_ids = {str(item["id"]) for item in current_products}
                 for choice in options:
                     product_id = str(choice["id"])
+                    if product_id not in current_ids and len(current_products) >= self.max_bundle_products:
+                        continue
                     unit_price = self._price(choice)
                     required_units = self._required_quantity(state, str(category))
                     package_units = units_per_package(choice, str(category))
@@ -321,6 +324,8 @@ class BundleOptimizerAgent:
         selected, total, _, coverage_matches = max(beam, key=final_key)
         covered = [item["requirement"] for item in coverage_matches]
         for category in state.get("optional_categories", []):
+            if len(selected) >= self.max_bundle_products:
+                break
             options = [product for product in products if str(product["id"]) not in {str(item["id"]) for item in selected} and self._matches(product, category)]
             options.sort(key=lambda item: (
                 (self._price(item) or Decimal("Infinity")) if prefer_lower_total else -self._score(item, state, plan),

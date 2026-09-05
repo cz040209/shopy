@@ -5,12 +5,6 @@ import re
 from typing import Any
 
 
-# These are product-form words, rather than catalog or department aliases.  They
-# let the matcher understand ordinary customer language (for example, soap vs
-# shampoo) without encoding any domain-specific category mapping.
-_ROLE_TERM_FAMILIES = (
-    frozenset({"cleaner", "cleanser", "detergent", "shampoo", "soap", "wash"}),
-)
 _GENERIC_TERMS = {"item", "items", "option", "options", "product", "products"}
 _ROLE_ANNOTATION_WORDS = {
     "alternative", "alternatives", "example", "examples", "optional",
@@ -79,19 +73,15 @@ def product_identity_parts(product: dict[str, Any]) -> list[str]:
 
 
 def _same_product_form(left: str, right: str) -> bool:
-    if left == right:
-        return True
-    return any(left in family and right in family for family in _ROLE_TERM_FAMILIES)
+    return left == right
 
 
 def _matches_simple_product_role(product: dict[str, Any], role: str) -> bool:
     """Match a product role against typed catalog identity evidence.
 
-    Exact normalized matching remains the normal path.  The fallback permits a
-    generic product-form equivalent only when every requested qualifier is
-    present in the catalog identity.  That prevents an unrelated cleaner from
-    matching a request such as ``wheel cleaner`` while allowing catalog-native
-    labels like ``car shampoo`` to satisfy ``car wash soap``.
+    Product-form vocabulary is supplied dynamically by the intent stage. This
+    matcher therefore validates normalized catalog identity without embedding
+    a product taxonomy or synonym dictionary.
     """
     requested = normalized_terms(role)
     if not requested:
@@ -111,7 +101,7 @@ def _matches_simple_product_role(product: dict[str, Any], role: str) -> bool:
         return True
 
     qualifiers, requested_head = requested[:-1], requested[-1]
-    return bool(qualifiers) and set(qualifiers).issubset(available) and any(
+    return set(qualifiers).issubset(available) and any(
         _same_product_form(requested_head, product_head) for product_head in heads
     )
 

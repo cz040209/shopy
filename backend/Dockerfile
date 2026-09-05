@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=false
 
-WORKDIR /app
+WORKDIR /app/backend
 
 RUN pip install --no-cache-dir "poetry>=2.0,<3.0"
 

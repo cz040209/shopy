@@ -44,8 +44,10 @@ Rules:
   order status, or capabilities.
 - When catalog_selection_required is false, include every listed product ID
   exactly once in product_ids and use only its supplied facts in the response.
-- When catalog_selection_required is true, choose 1–4 product_ids from the
-  supplied verified_catalog_products that best fit the customer request,
+- When catalog_selection_required is true, choose 2–6 product_ids from the
+  supplied verified_catalog_products when at least two exist. Choose one only
+  when exactly one verified product exists. Select the products that best fit
+  the customer request,
   preferences, constraints, and budget. Never return an ID outside that list.
   Explain the choice using only supplied product facts. Write the exact supplied
   catalog name for every selected product; do not abbreviate or rename it.
@@ -241,7 +243,7 @@ class BrandVoiceAgent:
             if not expected_ids:
                 drafted_ids = []
             elif catalog_selection_required and not self._is_valid_catalog_selection(drafted_ids, expected_ids):
-                raise ResponseDraftError("Response model must select one to four verified catalog products.")
+                raise ResponseDraftError("Response model must select two to six verified catalog products when alternatives exist.")
             elif not catalog_selection_required and not self._has_exact_product_coverage(drafted_ids, expected_ids):
                 raise ResponseDraftError("Response model must reference exactly the verified selected products.")
 
@@ -306,7 +308,7 @@ class BrandVoiceAgent:
             candidate_ids = set(products_by_id)
             if cls._is_valid_catalog_selection(preferred_ids, candidate_ids):
                 return preferred_ids
-            deterministic = cls.select_catalog_products(state, limit=4)
+            deterministic = cls.select_catalog_products(state, limit=6)
             return [
                 str(item["id"]) for item in deterministic
                 if str(item.get("id")) in candidate_ids
@@ -522,7 +524,8 @@ class BrandVoiceAgent:
 
     @staticmethod
     def _is_valid_catalog_selection(drafted_ids: list[str], candidate_ids: set[str]) -> bool:
-        return 1 <= len(drafted_ids) <= 4 and len(drafted_ids) == len(set(drafted_ids)) and set(drafted_ids).issubset(candidate_ids)
+        minimum = 2 if len(candidate_ids) >= 2 else 1
+        return minimum <= len(drafted_ids) <= 6 and len(drafted_ids) == len(set(drafted_ids)) and set(drafted_ids).issubset(candidate_ids)
 
     async def _draft_with_catalog_selection(
         self, messages: list[SystemMessage | HumanMessage], payload: dict[str, Any], state: dict[str, Any], candidate_ids: set[str]
@@ -535,8 +538,9 @@ class BrandVoiceAgent:
         for _ in range(self.max_format_attempts):
             corrected = await self._draft([
                 SystemMessage(content=BRAND_VOICE_SYSTEM_PROMPT + (
-                    "\nChoose one to four IDs only from allowed_product_ids and regenerate the response "
-                    "using the same verified facts and exact catalog product names."
+                    "\nChoose two to six IDs only from allowed_product_ids when at least two are supplied; "
+                    "choose one only when exactly one is supplied. Regenerate the response using the same "
+                    "verified facts and exact catalog product names."
                 )),
                 HumanMessage(content=json.dumps(correction_payload, ensure_ascii=False, default=str)),
             ], correction_payload, state)
@@ -612,7 +616,10 @@ class BrandVoiceAgent:
             and str(item.get("kind", "")).casefold().strip() in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
         ]
         single_recommendation = state.get("recommendation_mode", "single") == "single"
-        selection_limit = max(1, min(12, limit if limit is not None else max(2 if single_recommendation else 1, len(requirements) or 3)))
+        selection_limit = max(1, min(
+            12,
+            limit if limit is not None else (6 if single_recommendation else max(1, len(requirements) or 3)),
+        ))
         uncovered = set(range(len(requirements)))
         candidates = list(state.get("candidate_products", []))
         while candidates and len(selected) < selection_limit:

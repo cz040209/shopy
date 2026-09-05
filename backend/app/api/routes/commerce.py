@@ -3,7 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -13,7 +15,7 @@ from app.config import settings
 from app.models import Order, OrderItem, PaymentMethod, Review, User, Wallet, WalletTransaction
 from app.services.cart import add_cart_item, cart_subtotal, get_active_cart, remove_cart_item, update_cart_item
 from app.services.orders import create_order_from_cart
-from app.services.receipts import build_paid_receipt_pdf, send_paid_receipt_email
+from app.worker import send_paid_receipt
 from app.services.wallets import get_wallet, pay_order_with_wallet, top_up_wallet
 
 from ..schemas import (
@@ -26,6 +28,7 @@ from .catalog import product_response
 
 
 router = APIRouter(prefix="/api/v1", tags=["commerce"])
+logger = logging.getLogger(__name__)
 
 
 def cart_response(cart) -> CartResponse:
@@ -70,7 +73,7 @@ def delete_item(item_id: UUID, user: User = Depends(get_current_user), db: Sessi
 
 
 @router.post("/orders/checkout", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
-def checkout(payload: CheckoutRequest, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrderResponse:
+def checkout(payload: CheckoutRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> OrderResponse:
     order = create_order_from_cart(
         db, user, shipping_address=payload.shipping_address.model_dump(), notes=payload.notes,
         payment_method=payload.payment_method, shipping_fee=payload.shipping_fee,
@@ -81,14 +84,13 @@ def checkout(payload: CheckoutRequest, background_tasks: BackgroundTasks, user: 
     db.refresh(order)
     receipt_email_queued = order.payment_status.value == "paid" and settings.receipt_email_enabled
     if receipt_email_queued:
-        receipt_pdf = build_paid_receipt_pdf(order, customer_name=user.full_name)
-        background_tasks.add_task(
-            send_paid_receipt_email,
-            recipient_email=user.email,
-            recipient_name=user.full_name,
-            order_number=order.order_number,
-            receipt_pdf=receipt_pdf,
-        )
+        try:
+            send_paid_receipt.delay(str(order.id), user.email, user.full_name)
+        except Exception:
+            # A receipt outage must not turn an already-committed checkout into
+            # a failed purchase. The worker can be restored independently.
+            logger.exception("Unable to queue paid receipt for %s", order.order_number)
+            receipt_email_queued = False
     return order_response(order, receipt_email_queued=receipt_email_queued)
 
 

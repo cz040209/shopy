@@ -106,7 +106,7 @@ Return only valid JSON, without Markdown.
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
 * Be bundle-minded for commerce missions: when complementary product types would materially improve the customer’s stated outcome, return `"bundle"` and plan a practical kit. Consider the goal, use case, budget, owned items, and constraints; do not rely on a fixed list of add-ons or product categories.
-* Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–4 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
+* Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–6 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
 * A bundle must contain only complementary items that help achieve the requested outcome. Do not pad a basket with unrelated products, duplicate alternatives, or items the customer already owns.
 * This decision must come from the customer’s intent and requested outcome, not from matching a fixed list of words.
 
@@ -136,7 +136,7 @@ Available runtime tools (the source of truth for requested_actions):
 ### Mission Classification (`mission_type`)
 * **stock_check**: Classify requests that ask whether a product is available, in stock, sold out, or has inventory as mission_type "stock_check". For stock_check, set catalog_query to the product words to search (for example, "spf 50 sunscreen"), not "check stock".
 * **product_search**: Use mission_type "product_search" for finding or recommending products.
-* For an actionable shopping outcome, first decide whether a compact kit of different, complementary product types would make the answer more useful. If so, set `recommendation_mode` to **"bundle"** and expand the goal into 2–6 customer-relevant needs in `bundle_items`, matching category `fulfillment_requirement` entries and focused `catalog_queries`. A bundle is a coordinated set of different items, not a list of alternatives for one product.
+* For an actionable shopping outcome, first decide whether a compact kit of different, complementary product types would make the answer more useful. If so, set `recommendation_mode` to **"bundle"** and expand an open-ended kit into 3–6 customer-relevant needs in `bundle_items`, matching category `fulfillment_requirement` entries and focused `catalog_queries`. If the customer explicitly names fewer items, preserve those exact requested roles instead of inventing extras. A bundle is a coordinated set of different items, not a list of alternatives for one product.
 * Set `recommendation_mode` to **"single"** only when a kit is not justified by the customer’s outcome. For a single-product recommendation, provide a comparable shortlist from the available catalog; do not create artificial complementary needs just to increase item count.
 * **information_request**: Use "information_request" only for identity, capability, greeting, or questions that do not require catalog data. A request for catalog facts is not an information_request.
 * **planning_request**: Use mission_type "planning_request" for broad planning questions that need an action plan before product selection, such as moving preparation, room design, personal style, event planning, or a checklist. For planning_request, do not invent catalog items: leave requested_actions empty unless the user explicitly asks to find or buy products.
@@ -176,9 +176,9 @@ Available runtime tools (the source of truth for requested_actions):
 * Set catalog_query to null, requested_actions to [], and bundle_items to [] when the request does not need a catalog lookup.
 * For a comparison, catalog_queries should contain one search phrase per product when possible. For other catalog tasks, include the one or more product phrases needed to resolve the request. Never put tool arguments, SQL, or invented product IDs in the plan.
 * For every product role in a catalog-backed mission, add one search_requirements entry. `original_text` preserves the customer's wording and `canonical_role` is the concise product type, not a specific product name.
-* `canonical_role` must identify the product itself. Remove use-case modifiers that catalog products may not repeat. Do not map an accessory to the product it supports: keep the accessory as its own role.
+* `canonical_role` must identify the product itself using catalog-neutral wording. Remove use-case modifiers that catalog products may not repeat. Do not map an accessory to the product it supports: keep the accessory as its own role.
 * Return exactly one search_requirements entry per bundle_items entry, in the same order, with no duplicate canonical role for different requested product types.
-* Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
+* Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. At least two variants should end with the same broad catalog product noun, and `canonical_role` should use that shared noun. For example, derive the stable noun from the variants themselves instead of relying on a built-in product dictionary. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
 * Put an explicitly mandatory capability in `required_features`. Put desired but negotiable qualities in `preferred_features`. A query variant is retrieval vocabulary, not proof that a returned product has that feature; later stages verify facts from the product record.
 * Keep search requirements distinct by product role. For example, a broad lighting role may search `lighting`, `desk light`, `ambient lighting`, `RGB light`, and `LED light`; a retrieved light does not need every optional term in its name.
 * For every explicit shopping need that can be checked against catalog facts, add a fulfillment_requirement:
@@ -374,7 +374,12 @@ class IntentMissionAgent:
     @staticmethod
     def _terms(value: str) -> set[str]:
         """Normalize phrases for evidence-based owned-item reconciliation."""
-        terms: set[str] = set()
+        return set(IntentMissionAgent._ordered_terms(value))
+
+    @staticmethod
+    def _ordered_terms(value: str) -> list[str]:
+        """Normalize a phrase while preserving word order for role inference."""
+        terms: list[str] = []
         for token in re.findall(r"[\w]+", value.casefold()):
             if len(token) < 2:
                 continue
@@ -382,8 +387,35 @@ class IntentMissionAgent:
                 token = f"{token[:-3]}y"
             elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
                 token = token[:-1]
-            terms.add(token)
+            terms.append(token)
         return terms
+
+    @classmethod
+    def _consensus_canonical_role(cls, role: str, queries: list[str]) -> str:
+        """Infer catalog wording from repeated query heads, without a taxonomy."""
+        heads = [
+            terms[-1]
+            for query in dict.fromkeys(query.strip() for query in queries if query.strip())
+            if (terms := cls._ordered_terms(query))
+        ]
+        if not heads:
+            return role.strip()
+        counts = {head: heads.count(head) for head in dict.fromkeys(heads)}
+        role_terms = cls._ordered_terms(role)
+        if role_terms and counts.get(role_terms[-1], 0) >= 2:
+            return role.strip()
+        consensus = max(counts, key=lambda head: (counts[head], -heads.index(head)))
+        if counts[consensus] < 2:
+            return role.strip()
+        if not role_terms or role_terms[-1] == consensus:
+            return role.strip()
+        current_head = role_terms[-1]
+        if (
+            current_head.startswith(consensus)
+            or consensus.startswith(current_head)
+        ) and abs(len(current_head) - len(consensus)) <= 3:
+            return role.strip()
+        return " ".join([*role_terms[:-1], consensus])
 
     @classmethod
     def _split_invented_packaged_role(
@@ -634,6 +666,31 @@ class IntentMissionAgent:
         search_requirements = cls._normalized_search_requirements(
             mission.search_requirements, role_phrases,
         )
+
+        def canonical_category_value(value: str) -> str:
+            value_terms = cls._terms(value)
+            matching_search = next((
+                item for item in search_requirements
+                if value_terms
+                and (
+                    value_terms == cls._terms(item.original_text)
+                    or value_terms == cls._terms(item.canonical_role)
+                )
+            ), None)
+            if matching_search is None:
+                return value
+            source_search = next((
+                item for item in mission.search_requirements
+                if cls._terms(item.original_text) == cls._terms(matching_search.original_text)
+            ), None)
+            if (
+                source_search is None
+                or cls._terms(source_search.canonical_role)
+                == cls._terms(matching_search.canonical_role)
+            ):
+                return value
+            return matching_search.canonical_role
+
         requirements: list[FulfillmentRequirement] = []
         seen_requirements: set[tuple[str, str, str, int]] = set()
         generic_feature_fields = {
@@ -641,7 +698,11 @@ class IntentMissionAgent:
             "features", "spec", "specification", "specifications", "specs",
         }
         expanded_requirements = [
-            requirement.model_copy(update={"value": value})
+            requirement.model_copy(update={
+                "value": canonical_category_value(value)
+                if requirement.kind.casefold().strip() == "category"
+                else value,
+            })
             for requirement in mission.fulfillment_requirements
             for value in (
                 cls._split_invented_packaged_role(requirement.value, user_request)
@@ -800,7 +861,10 @@ class IntentMissionAgent:
                     search_queries=[role],
                 ))
                 continue
-            canonical_role = matching.canonical_role
+            canonical_role = cls._consensus_canonical_role(
+                matching.canonical_role,
+                matching.search_queries,
+            )
             canonical_key = " ".join(sorted(cls._terms(canonical_role)))
             is_invented_package = len(
                 cls._split_invented_packaged_role(canonical_role, None)

@@ -4,10 +4,10 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-shopy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shopy_local_password}
-      POSTGRES_DB: ${POSTGRES_DB:-shopy}
+    env_file:
+      - path: ./compose.defaults.env
+      - path: ./backend/.env
+        required: false
     volumes:
       - shopy_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -34,8 +34,11 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
+    env_file:
+      - path: ./compose.defaults.env
+      - path: ./backend/.env
+        required: false
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-shopy}:${POSTGRES_PASSWORD:-shopy_local_password}@postgres:5432/${POSTGRES_DB:-shopy}
       REDIS_URL: redis://redis:6379/0
       FRONTEND_ORIGIN: http://localhost:8002
       UPLOAD_DIRECTORY: /app/data/uploads
@@ -54,18 +57,12 @@ services:
       redis:
         condition: service_healthy
     command:
+      - python
+      - app/docker_entrypoint.py
       - /bin/sh
       - -c
       - >-
         poetry run alembic upgrade head &&
-        poetry run python -m app.scripts.seed_catalog &&
-        poetry run python -m app.scripts.seed_apparel_catalog &&
-        poetry run python -m app.scripts.seed_beauty_catalog &&
-        poetry run python -m app.scripts.seed_car_care_catalog &&
-        poetry run python -m app.scripts.seed_device_catalog &&
-        poetry run python -m app.scripts.seed_furniture_catalog &&
-        poetry run python -m app.scripts.seed_travel_catalog &&
-        poetry run python -m app.scripts.seed_working_kit_catalog &&
         poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -77,6 +74,8 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        BACKEND_ORIGIN: http://backend:8000
     restart: unless-stopped
     environment:
       BACKEND_ORIGIN: http://backend:8000
@@ -87,6 +86,26 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - path: ./compose.defaults.env
+      - path: ./backend/.env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIRECTORY: /app/data/uploads
+    volumes:
+      - shopy_uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python app/docker_entrypoint.py poetry run celery -A app.worker:celery_app worker --loglevel=INFO --uid=nobody --gid=nogroup
 
 volumes:
   shopy_postgres_data:
