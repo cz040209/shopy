@@ -1047,7 +1047,7 @@ button.chip {
 .previewMeta span:nth-child(2) strong { color: #ffc674; }
 
 .progressHeading > span { color: #f1bb68; }
-.progressPanel { border-color: rgba(105, 172, 207, 0.24); background: linear-gradient(150deg, rgba(13, 25, 38, 0.99), rgba(17, 22, 42, 0.98)); }
+.progressPanel:not(.progressPanelFocus) { border-color: rgba(105, 172, 207, 0.24); background: linear-gradient(150deg, rgba(13, 25, 38, 0.99), rgba(17, 22, 42, 0.98)); }
 .progressPanel li.done i { background: rgba(55, 184, 163, 0.12); color: #76dac4; }
 .progressPanel li.active { border-color: rgba(77, 196, 186, 0.58); background: rgba(24, 90, 86, 0.22); box-shadow: inset 3px 0 #51d3c0; }
 .progressPanel li.active i { border-color: rgba(77, 196, 186, 0.58); background: rgba(52, 190, 174, 0.13); color: #8ee5d7; }

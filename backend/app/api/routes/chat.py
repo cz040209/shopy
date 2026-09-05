@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Annotated
 from uuid import uuid4
@@ -30,6 +31,7 @@ from .auth import SESSION_COOKIE_NAME, get_optional_current_user
 router = APIRouter(tags=["assistant"])
 CONVERSATION_COOKIE_NAME = "shopy_ai_conversation"
 STREAM_WORD_DELAY_SECONDS = 0.030
+STREAM_HEARTBEAT_SECONDS = 10.0
 
 
 @dataclass
@@ -344,15 +346,25 @@ async def stream_chat(
 
     async def events():
         yield _stream_event("start")
+        chat_task = asyncio.create_task(chat(
+            payload=payload,
+            http_response=Response(),
+            conversation_token=active_conversation_token,
+            auth_session_token=auth_session_token,
+            current_user=current_user,
+            db=db,
+        ))
         try:
-            result = await chat(
-                payload=payload,
-                http_response=Response(),
-                conversation_token=active_conversation_token,
-                auth_session_token=auth_session_token,
-                current_user=current_user,
-                db=db,
-            )
+            # Long LLM/catalog runs can legitimately exceed a reverse proxy's
+            # idle timeout. Keep the NDJSON connection active without exposing
+            # internal reasoning or inventing progress from product taxonomy.
+            while not chat_task.done():
+                completed, _ = await asyncio.wait(
+                    {chat_task}, timeout=STREAM_HEARTBEAT_SECONDS,
+                )
+                if not completed:
+                    yield _stream_event("progress")
+            result = await chat_task
         except HTTPException as error:
             db.rollback()
             yield _stream_event("error", detail=str(error.detail))
@@ -364,6 +376,11 @@ async def stream_chat(
                 detail="The shopping assistant could not complete a response. Please try again.",
             )
             return
+        finally:
+            if not chat_task.done():
+                chat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await chat_task
 
         for word in re.findall(r"\S+\s*", result.reply):
             yield _stream_event("delta", delta=word)

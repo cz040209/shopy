@@ -76,10 +76,20 @@ class ProductSearchAgent:
         ranked_ids = [str(item["product"]["id"]) for item in ranked]
         chosen = list(dict.fromkeys([*role_ids, *reference_ids, *ranked_ids]))[:shortlist_limit]
         shortlisted = [by_id[product_id] for product_id in chosen]
-        return self._result(shortlisted, catalog_count=len(result["products"]))
+        return self._result(
+            shortlisted,
+            catalog_count=len(result["products"]),
+            retrieval_role_matches={
+                str(role): [str(product_id) for product_id in product_ids]
+                for role, product_ids in result.get("query_matches", {}).items()
+            },
+        )
 
     @staticmethod
-    def _result(ranked: list[dict[str, Any]], *, catalog_count: int) -> dict[str, Any]:
+    def _result(
+        ranked: list[dict[str, Any]], *, catalog_count: int,
+        retrieval_role_matches: dict[str, list[str]] | None = None,
+    ) -> dict[str, Any]:
         return {
             "candidate_products": [item["product"] for item in ranked],
             "product_rankings": [
@@ -87,6 +97,7 @@ class ProductSearchAgent:
                 for item in ranked
             ],
             "tool_results": [{"tool": "search_products", "catalog_count": catalog_count, "result_count": len(ranked)}],
+            "retrieval_role_matches": retrieval_role_matches or {},
             "errors": [],
         }
 

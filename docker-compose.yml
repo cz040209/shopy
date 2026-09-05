@@ -10,6 +10,9 @@ services:
         required: false
     volumes:
       - shopy_postgres_data:/var/lib/postgresql/data
+    ports:
+      # Host tools use localhost:5433; Compose services use postgres:5432.
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -42,13 +45,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       FRONTEND_ORIGIN: http://localhost:8002
       UPLOAD_DIRECTORY: /app/data/uploads
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.7-flash}
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
-      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
-      QWEN_MODEL: ${QWEN_MODEL:-qwen3.6-flash}
-      QWEN_VISION_MODEL: ${QWEN_VISION_MODEL:-qwen3.5-omni-plus}
-      QWEN_AUDIO_MODEL: ${QWEN_AUDIO_MODEL:-qwen3-omni-30b-a3b-captioner}
     volumes:
       - shopy_uploads:/app/data/uploads
     depends_on:
@@ -76,9 +72,11 @@ services:
       context: ./frontend
       args:
         BACKEND_ORIGIN: http://backend:8000
+        BACKEND_PROXY_TIMEOUT_MS: "120000"
     restart: unless-stopped
     environment:
       BACKEND_ORIGIN: http://backend:8000
+      BACKEND_PROXY_TIMEOUT_MS: "120000"
       NEXT_PUBLIC_BACKEND_API_URL: ""
       NEXT_PUBLIC_ASSISTANT_API_URL: ""
     ports:

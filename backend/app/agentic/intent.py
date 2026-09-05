@@ -100,8 +100,13 @@ Return only valid JSON, without Markdown.
   the object the customer wants to shop, not items they own. Make that target
   the primary shopping role, usually with recommendation_mode="single". Do not
   expand one object photo into an inferred room, desk, or accessory bundle.
-  Treat image-derived colours and style as soft preferences only; create a hard
-  attribute requirement only when the customer explicitly writes that attribute.
+  Treat image-derived colours, style, and apparent capabilities as soft
+  preferences only; create a hard feature or attribute requirement only when
+  the customer explicitly writes it.
+* A visual uncertainty or negative observation describes what the image did not
+  establish. Preserve it as context only. Never turn alternatives mentioned in
+  phrases such as "cannot determine X or Y" into preferences, selection criteria,
+  required features, or fulfillment requirements.
 
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
@@ -109,6 +114,12 @@ Return only valid JSON, without Markdown.
 * Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–6 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
 * A bundle must contain only complementary items that help achieve the requested outcome. Do not pad a basket with unrelated products, duplicate alternatives, or items the customer already owns.
 * This decision must come from the customer’s intent and requested outcome, not from matching a fixed list of words.
+* When you infer bundle components that the customer did not name, keep each
+  bundle role at the broadest independently purchasable product type supported
+  by the outcome. Do not make an inferred material, application method, format,
+  or feature part of the mandatory role; keep such distinctions in preferred
+  features or search-query variants. This prevents an optional planning choice
+  from becoming a false catalog requirement.
 
 ### Customer Requirements for the Mission UI (`key_requirements`)
 * Extract the 3–6 most decision-relevant facts explicitly stated or clearly implied by the customer. These are shown back to the customer as their AI-read mission brief.
@@ -179,6 +190,11 @@ Available runtime tools (the source of truth for requested_actions):
 * `canonical_role` must identify the product itself using catalog-neutral wording. Remove use-case modifiers that catalog products may not repeat. Do not map an accessory to the product it supports: keep the accessory as its own role.
 * Return exactly one search_requirements entry per bundle_items entry, in the same order, with no duplicate canonical role for different requested product types.
 * Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. At least two variants should end with the same broad catalog product noun, and `canonical_role` should use that shared noun. For example, derive the stable noun from the variants themselves instead of relying on a built-in product dictionary. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
+* For an image mission, use the runtime shopping target, detected-object wording,
+  and relevant category wording as alternate catalog vocabulary for the same
+  product role. Never use camera workflow text such as "shop this image" as a
+  canonical role or search query. Derive broader wording only from the supplied
+  runtime evidence; do not assume a fixed product taxonomy.
 * Put an explicitly mandatory capability in `required_features`. Put desired but negotiable qualities in `preferred_features`. A query variant is retrieval vocabulary, not proof that a returned product has that feature; later stages verify facts from the product record.
 * Keep search requirements distinct by product role. For example, a broad lighting role may search `lighting`, `desk light`, `ambient lighting`, `RGB light`, and `LED light`; a retrieved light does not need every optional term in its name.
 * For every explicit shopping need that can be checked against catalog facts, add a fulfillment_requirement:
@@ -224,6 +240,27 @@ def _json_object(content: object) -> dict[str, object]:
 
 class IntentMissionAgent:
     _PACKAGED_ROLE_WORDS = {"bundle", "combo", "kit", "pack", "set"}
+
+    @classmethod
+    def _is_structural_bundle_container(
+        cls, role: str, companion_roles: Iterable[str],
+    ) -> bool:
+        """Identify an outcome wrapper after the model has supplied components.
+
+        This is structural rather than domain-specific: a package phrase is an
+        umbrella once the model has also supplied at least two independently
+        selectable companion roles. A lone packaged product request is
+        therefore preserved.
+        """
+        role_terms = cls._terms(role)
+        companions = [
+            cls._terms(value) for value in companion_roles
+            if value.strip() and cls._terms(value) != role_terms
+        ]
+        return bool(
+            role_terms.intersection(cls._PACKAGED_ROLE_WORDS)
+            and len(companions) >= 2
+        )
 
     def __init__(self, model: AsyncChatModel, *, tools: Iterable[Any] = ()) -> None:
         self.model = model
@@ -391,31 +428,55 @@ class IntentMissionAgent:
         return terms
 
     @classmethod
-    def _consensus_canonical_role(cls, role: str, queries: list[str]) -> str:
-        """Infer catalog wording from repeated query heads, without a taxonomy."""
-        heads = [
-            terms[-1]
-            for query in dict.fromkeys(query.strip() for query in queries if query.strip())
-            if (terms := cls._ordered_terms(query))
+    def _consensus_canonical_role(
+        cls, role: str, queries: list[str], feature_values: list[str] | None = None,
+    ) -> str:
+        """Infer the stable product role from generated queries, without a taxonomy."""
+        feature_terms = {
+            term
+            for value in feature_values or []
+            for term in cls._ordered_terms(value)
+        }
+        original_role_terms = cls._ordered_terms(role)
+        role_terms = [
+            term for term in original_role_terms
+            if term not in feature_terms
         ]
-        if not heads:
-            return role.strip()
+        features_removed = role_terms != original_role_terms
+        query_terms = [
+            [term for term in cls._ordered_terms(query) if term not in feature_terms]
+            for query in dict.fromkeys(query.strip() for query in queries if query.strip())
+        ]
+        query_terms = [terms for terms in query_terms if terms]
+        if not role_terms:
+            role_terms = list(query_terms[0]) if query_terms else cls._ordered_terms(role)
+        if not query_terms:
+            return " ".join(role_terms) or role.strip()
+
+        heads = [terms[-1] for terms in query_terms]
         counts = {head: heads.count(head) for head in dict.fromkeys(heads)}
-        role_terms = cls._ordered_terms(role)
-        if role_terms and counts.get(role_terms[-1], 0) >= 2:
-            return role.strip()
-        consensus = max(counts, key=lambda head: (counts[head], -heads.index(head)))
-        if counts[consensus] < 2:
-            return role.strip()
-        if not role_terms or role_terms[-1] == consensus:
-            return role.strip()
         current_head = role_terms[-1]
-        if (
+        consensus = max(counts, key=lambda head: (counts[head], -heads.index(head)))
+        if counts.get(current_head, 0) >= 2:
+            if not features_removed:
+                return role.strip()
+            chosen_head = current_head
+        elif counts[consensus] < 2:
+            return " ".join(role_terms) if features_removed else role.strip()
+        elif (
             current_head.startswith(consensus)
             or consensus.startswith(current_head)
         ) and abs(len(current_head) - len(consensus)) <= 3:
-            return role.strip()
-        return " ".join([*role_terms[:-1], consensus])
+            chosen_head = current_head
+        else:
+            chosen_head = consensus
+
+        shared_terms = set(query_terms[0]).intersection(*(set(terms) for terms in query_terms[1:]))
+        qualifiers = [
+            term for term in role_terms[:-1]
+            if term in shared_terms and term != chosen_head
+        ]
+        return " ".join([*qualifiers, chosen_head])
 
     @classmethod
     def _split_invented_packaged_role(
@@ -472,6 +533,97 @@ class IntentMissionAgent:
             if role_head and role_head == product_head(target):
                 return True
         return False
+
+    @classmethod
+    def _visual_search_requirements(
+        cls,
+        requirements: list[SearchRequirement],
+        roles: list[str],
+        vision: dict[str, Any],
+        visual_targets: list[str],
+    ) -> list[SearchRequirement]:
+        """Build recall-oriented image queries only from runtime evidence.
+
+        Vision providers and catalogs can describe the same product at
+        different levels (for example a compound object name versus a broader
+        category noun). This reconciles those phrases within this request only;
+        it deliberately contains no product-family dictionary.
+        """
+        relevant_requirements = [
+            item for item in requirements
+            if cls._matches_visual_target(item.original_text, visual_targets)
+            or cls._matches_visual_target(item.canonical_role, visual_targets)
+        ]
+        normalized = cls._normalized_search_requirements(
+            relevant_requirements, roles,
+        )
+        runtime_phrases = [
+            str(item).strip()
+            for field in ("shopping_targets", "detected_objects", "category")
+            for item in vision.get(field, [])
+            if isinstance(item, str) and item.strip()
+        ]
+
+        enriched: list[SearchRequirement] = []
+        for item in normalized:
+            role_terms = cls._terms(item.original_text)
+            role_ordered = cls._ordered_terms(item.original_text)
+            role_head = role_ordered[-1] if role_ordered else ""
+            related: list[str] = []
+            for phrase in runtime_phrases:
+                phrase_terms = cls._terms(phrase)
+                phrase_ordered = cls._ordered_terms(phrase)
+                phrase_head = phrase_ordered[-1] if phrase_ordered else ""
+                compound_heads = bool(
+                    role_head and phrase_head
+                    and min(len(role_head), len(phrase_head)) >= 4
+                    and (
+                        role_head.endswith(phrase_head)
+                        or phrase_head.endswith(role_head)
+                    )
+                )
+                if (
+                    phrase_terms
+                    and (
+                        phrase_terms.issubset(role_terms)
+                        or role_terms.issubset(phrase_terms)
+                        or compound_heads
+                    )
+                ):
+                    related.append(phrase)
+
+            # A broader head is admitted only when a second runtime phrase
+            # establishes it as the same photographed role. This keeps broad
+            # departments (such as "electronics") and adjacent accessories out.
+            runtime_heads = [
+                cls._ordered_terms(phrase)[-1]
+                for phrase in related
+                if cls._ordered_terms(phrase)
+            ]
+            broader_heads = [
+                head for head in runtime_heads
+                if head != role_head
+                and min(len(head), len(role_head)) >= 4
+                and (head.endswith(role_head) or role_head.endswith(head))
+            ] if role_head else []
+            evidence_queries = [*item.search_queries, *related]
+            if broader_heads:
+                evidence_queries.extend(broader_heads)
+            canonical_role = cls._consensus_canonical_role(
+                item.canonical_role,
+                list(dict.fromkeys(evidence_queries)),
+                [*item.required_features, *item.preferred_features],
+            )
+            queries = list(dict.fromkeys(
+                query.strip() for query in [
+                    canonical_role, item.original_text, *evidence_queries,
+                ] if query.strip()
+            ))[:6]
+            enriched.append(item.model_copy(update={
+                "canonical_role": canonical_role,
+                "search_queries": queries,
+            }))
+        return enriched
 
     @classmethod
     def _overlaps_visible_role(cls, role: str, visible_roles: list[str]) -> bool:
@@ -618,6 +770,12 @@ class IntentMissionAgent:
             # already established as visible.
             and (not scene_photo or not cls._overlaps_visible_role(item.query, visible_roles))
         ]
+        if mission.recommendation_mode == "bundle" and len(bundle_items) >= 3:
+            runtime_roles = [item.query for item in bundle_items]
+            bundle_items = [
+                item for item in bundle_items
+                if not cls._is_structural_bundle_container(item.query, runtime_roles)
+            ]
         if object_photo:
             # Preserve a richer model-provided target (for example,
             # "ergonomic mouse") instead of adding a second generic version
@@ -651,11 +809,37 @@ class IntentMissionAgent:
             for role in cls._split_invented_packaged_role(requirement.value, user_request)
             if not cls._covered_by_owned(role, owned)
         ]
-        role_phrases = (
-            category_role_phrases
-            if len(category_role_phrases) == len(bundle_items)
-            else [item.query for item in bundle_items]
-        )
+        if mission.recommendation_mode == "bundle":
+            companion_roles = [*descriptive_role_phrases, *category_role_phrases]
+            category_role_phrases = [
+                role for role in category_role_phrases
+                if not cls._is_structural_bundle_container(role, companion_roles)
+            ]
+        # Bundle items are authoritative when the search contract corroborates
+        # them. Otherwise concise category roles are safer than descriptive
+        # bundle phrases. This resolves inconsistent model output by structure,
+        # without knowing anything about a specific catalog domain.
+        if len(category_role_phrases) == len(bundle_items):
+            role_phrases = []
+            for category_role, bundle_item in zip(category_role_phrases, bundle_items, strict=True):
+                category_terms = cls._terms(category_role)
+                bundle_terms = cls._terms(bundle_item.query)
+                roles_overlap = bool(category_terms and bundle_terms) and (
+                    category_terms <= bundle_terms or bundle_terms <= category_terms
+                )
+                search_supports_bundle = any(
+                    cls._terms(requirement.canonical_role) <= bundle_terms
+                    or bundle_terms <= cls._terms(requirement.canonical_role)
+                    or cls._terms(requirement.original_text) <= bundle_terms
+                    or bundle_terms <= cls._terms(requirement.original_text)
+                    for requirement in mission.search_requirements
+                )
+                role_phrases.append(
+                    category_role if roles_overlap or not search_supports_bundle
+                    else bundle_item.query
+                )
+        else:
+            role_phrases = descriptive_role_phrases or category_role_phrases
         if not role_phrases:
             role_phrases.extend(
                 requirement.value for requirement in mission.fulfillment_requirements
@@ -663,9 +847,27 @@ class IntentMissionAgent:
             )
         if not role_phrases and mission.catalog_query:
             role_phrases.append(mission.catalog_query)
-        search_requirements = cls._normalized_search_requirements(
-            mission.search_requirements, role_phrases,
+        search_requirements = (
+            cls._visual_search_requirements(
+                mission.search_requirements, role_phrases, vision, visual_targets,
+            )
+            if object_photo and isinstance(vision, dict)
+            else cls._normalized_search_requirements(
+                mission.search_requirements, role_phrases,
+            )
         )
+        if photo_mission:
+            # Model-generated image features are useful retrieval hints, but
+            # only customer-written requirements may become hard constraints.
+            search_requirements = [
+                item.model_copy(update={
+                    "required_features": [
+                        feature for feature in item.required_features
+                        if cls._request_explicitly_mentions(feature, user_request)
+                    ],
+                })
+                for item in search_requirements
+            ]
 
         def canonical_category_value(value: str) -> str:
             value_terms = cls._terms(value)
@@ -683,11 +885,9 @@ class IntentMissionAgent:
                 item for item in mission.search_requirements
                 if cls._terms(item.original_text) == cls._terms(matching_search.original_text)
             ), None)
-            if (
-                source_search is None
-                or cls._terms(source_search.canonical_role)
-                == cls._terms(matching_search.canonical_role)
-            ):
+            if source_search is None:
+                return matching_search.canonical_role if object_photo else value
+            if cls._terms(source_search.canonical_role) == cls._terms(matching_search.canonical_role):
                 return value
             return matching_search.canonical_role
 
@@ -697,19 +897,50 @@ class IntentMissionAgent:
             "attribute", "attributes", "capability", "capabilities", "feature",
             "features", "spec", "specification", "specifications", "specs",
         }
-        expanded_requirements = [
-            requirement.model_copy(update={
-                "value": canonical_category_value(value)
-                if requirement.kind.casefold().strip() == "category"
-                else value,
-            })
+        raw_expanded_requirements = [
+            (requirement, value)
             for requirement in mission.fulfillment_requirements
             for value in (
                 cls._split_invented_packaged_role(requirement.value, user_request)
                 if requirement.kind.casefold().strip() == "category"
                 else [requirement.value]
             )
+            if not (
+                mission.recommendation_mode == "bundle"
+                and requirement.kind.casefold().strip() == "category"
+                and cls._is_structural_bundle_container(value, role_phrases)
+            )
         ]
+        category_count = sum(
+            requirement.kind.casefold().strip() == "category"
+            for requirement, _ in raw_expanded_requirements
+        )
+        align_categories_by_position = bool(
+            bundle_items
+            and category_count == len(bundle_items) == len(search_requirements)
+        )
+        category_index = 0
+        expanded_requirements: list[FulfillmentRequirement] = []
+        for requirement, value in raw_expanded_requirements:
+            if requirement.kind.casefold().strip() != "category":
+                expanded_requirements.append(requirement.model_copy(update={"value": value}))
+                continue
+            normalized_value = canonical_category_value(value)
+            if align_categories_by_position:
+                search_role = search_requirements[category_index]
+                value_terms = cls._terms(value)
+                role_terms = cls._terms(search_role.canonical_role)
+                original_terms = cls._terms(search_role.original_text)
+                role_equivalent = bool(value_terms) and (
+                    value_terms <= role_terms or role_terms <= value_terms
+                    or value_terms <= original_terms or original_terms <= value_terms
+                )
+                if not role_equivalent:
+                    normalized_value = search_role.canonical_role
+            category_index += 1
+            expanded_requirements.append(requirement.model_copy(update={
+                "value": normalized_value,
+            }))
         for requirement in expanded_requirements:
             if cls._covered_by_owned(requirement.value, owned):
                 continue
@@ -792,7 +1023,9 @@ class IntentMissionAgent:
         # Vision shopping needs are runtime-derived roles. Adding them here keeps
         # retrieval, optimization, response disclosure, and audit on one contract.
         for need in vision_needs:
-            normalized = FulfillmentRequirement(kind="category", value=need, quantity=1)
+            normalized = FulfillmentRequirement(
+                kind="category", value=canonical_category_value(need), quantity=1,
+            )
             key = (normalized.kind, normalized.value.casefold(), "", 1)
             if key not in seen_requirements:
                 requirements.append(normalized)
@@ -864,6 +1097,7 @@ class IntentMissionAgent:
             canonical_role = cls._consensus_canonical_role(
                 matching.canonical_role,
                 matching.search_queries,
+                [*matching.required_features, *matching.preferred_features],
             )
             canonical_key = " ".join(sorted(cls._terms(canonical_role)))
             is_invented_package = len(
@@ -965,6 +1199,13 @@ class IntentMissionAgent:
                 requirements.append(FulfillmentRequirement.model_validate(item))
             except (ValidationError, TypeError, ValueError):
                 continue
+        search_requirements: list[SearchRequirement] = []
+        raw_search_requirements = partial.get("search_requirements", [])
+        for item in raw_search_requirements if isinstance(raw_search_requirements, list) else []:
+            try:
+                search_requirements.append(SearchRequirement.model_validate(item))
+            except (ValidationError, TypeError, ValueError):
+                continue
         criteria: list[SelectionCriterion] = []
         raw_criteria = partial.get("selection_criteria", [])
         for item in raw_criteria if isinstance(raw_criteria, list) else []:
@@ -973,7 +1214,14 @@ class IntentMissionAgent:
             except (ValidationError, TypeError, ValueError):
                 continue
         raw_mode = partial.get("recommendation_mode")
-        recommendation_mode = raw_mode if raw_mode in {"single", "bundle"} else ("bundle" if len(bundle_items) > 1 else "single")
+        packaged_outcome_requested = bool(
+            self._PACKAGED_ROLE_WORDS.intersection(self._terms(user_request))
+        )
+        recommendation_mode = (
+            raw_mode if raw_mode in {"single", "bundle"}
+            else "bundle" if len(bundle_items) > 1 or packaged_outcome_requested
+            else "single"
+        )
         partial_query = partial.get("catalog_query")
         catalog_query = (
             str(partial_query).strip()[:160]
@@ -1020,7 +1268,12 @@ class IntentMissionAgent:
             priorities=strings("priorities", 10),
             selection_criteria=criteria[:10],
             fulfillment_requirements=requirements[:30],
-            search_requirements=[
+            # Preserve independently valid role expansions even when another
+            # field made the overall model response fail schema validation.
+            # Replacing these with the bundle labels loses the runtime model's
+            # catalog-neutral vocabulary and creates false gaps whenever the
+            # catalog uses another valid name for the same product form.
+            search_requirements=search_requirements[:20] or [
                 SearchRequirement(
                     original_text=item.query,
                     canonical_role=item.query,

@@ -81,6 +81,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const captureInputRef = useRef<HTMLInputElement>(null);
   const activeMode = selectedMode ?? mode ?? "shop_object";
 
   const stopCamera = () => {
@@ -108,7 +109,10 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
 
   const startCamera = async (front = useFrontCamera) => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Your browser does not support camera access. Choose a photo from your gallery instead.");
+      setError(window.isSecureContext
+        ? "Live camera preview is unavailable in this browser. Use the center button to open your device camera, or choose a gallery photo."
+        : "Live camera preview is blocked on this insecure address. Open Shopy over HTTPS or at http://localhost:8002 on this computer. You can still use the center button or Gallery.");
+      setIsCameraReady(false);
       setStage("camera");
       return;
     }
@@ -137,7 +141,14 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       setStage("camera");
     } catch (cameraError) {
       const name = cameraError instanceof DOMException ? cameraError.name : "";
-      setError(name === "NotAllowedError" ? "Camera permission was denied. Enable it in your browser settings or choose a gallery photo." : "We couldn’t start the camera. You can still choose a photo from your gallery.");
+      const message = name === "NotAllowedError" || name === "SecurityError"
+        ? "Camera access is blocked. Allow camera permission for this site, then reopen the camera. You can also use the center button or Gallery."
+        : name === "NotFoundError"
+          ? "No camera was found on this device. Choose a photo from Gallery instead."
+          : name === "NotReadableError"
+            ? "The camera is busy in another app or unavailable. Close the other camera app and try again, or choose a gallery photo."
+            : "We couldn’t start the live camera preview. Use the center button to open your device camera, or choose a gallery photo.";
+      setError(message);
       setIsCameraReady(false);
       setStage("camera");
     }
@@ -297,6 +308,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
         <Camera size={compact ? 19 : 17} /><span>{mode ? modeContent[mode].label : "Shop with a photo"}</span>
       </button>
       <input ref={fileInputRef} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} />
+      <input ref={captureInputRef} className={styles.fileInput} type="file" accept="image/*" capture={useFrontCamera ? "user" : "environment"} onChange={chooseFile} />
 
       {stage && createPortal(
         <section className={styles.overlay} data-shopy-camera-overlay="" role="dialog" aria-modal="true" aria-label={modeContent[activeMode].label}>
@@ -320,15 +332,17 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
             </div>}
             {stage === "camera" && <div className={styles.cameraStage}>
               <video ref={videoRef} className={styles.video} playsInline muted autoPlay />
-              {!isCameraReady && <div className={styles.cameraEmpty}><Camera size={34} /><p>Camera preview will appear here.</p></div>}
+              {!isCameraReady && !error && <div className={styles.cameraEmpty}><Camera size={34} /><p>Camera preview will appear here.</p></div>}
               <div className={styles.cameraGradient} />
-              <div className={styles.modeHelper}>{modeContent[activeMode].helper}</div>
-              <div style={{ position: "absolute", right: 20, bottom: 132, left: 20, color: "#d7dded", fontSize: 11, lineHeight: 1.4, textAlign: "center", textShadow: "0 1px 10px #000" }}>Your photo stays on this device until you choose <strong style={{ color: "#fff" }}>Use photo</strong>.</div>
-              {error && <p className={styles.error}>{error}</p>}
+              <div className={styles.cameraGuidance}>
+                {error
+                  ? <p className={styles.error} role="alert">{error}</p>
+                  : <><div className={styles.modeHelper}>{modeContent[activeMode].helper}</div><div className={styles.privacyNote}>Your photo stays on this device until you choose <strong>Use photo</strong>.</div></>}
+              </div>
               <div className={styles.cameraControls}>
                 <button type="button" className={styles.galleryButton} onClick={() => fileInputRef.current?.click()}><ImagePlus size={19} /><span>Gallery</span></button>
-                <button type="button" className={styles.shutter} onClick={() => void capture()} aria-label="Capture photo"><span /></button>
-                <button type="button" className={styles.galleryButton} onClick={() => { const next = !useFrontCamera; setUseFrontCamera(next); void startCamera(next); }} aria-label="Switch camera"><SwitchCamera size={21} /><span>Flip</span></button>
+                <button type="button" className={styles.shutter} onClick={() => isCameraReady ? void capture() : captureInputRef.current?.click()} aria-label={isCameraReady ? "Capture photo" : "Open device camera or image picker"}><span /></button>
+                <button type="button" className={styles.galleryButton} disabled={!isCameraReady} onClick={() => { const next = !useFrontCamera; setUseFrontCamera(next); void startCamera(next); }} aria-label="Switch camera"><SwitchCamera size={21} /><span>Flip</span></button>
               </div>
             </div>}
 

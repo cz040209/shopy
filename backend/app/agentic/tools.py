@@ -64,6 +64,7 @@ class ProductToolOutput(BaseModel):
     slug: str
     name: str
     brand: str
+    description: str | None
     search_terms: list[str]
     category: str
     seller_id: UUID
@@ -110,6 +111,7 @@ def _product_output(product) -> ProductToolOutput:
     ))[:80]
     return ProductToolOutput(
         id=product.id, slug=product.slug, name=product.name, brand=product.brand,
+        description=product.description,
         search_terms=description_terms, category=product.category.name,
         seller_id=product.seller.id, seller_name=product.seller.name, price=product.price,
         currency=product.currency, inventory_quantity=max(0, product.inventory_quantity - product.reserved_quantity),
@@ -215,39 +217,48 @@ class CommerceToolRegistry:
             merged = {}
             matches: dict[str, list[UUID]] = {}
             for group in query_groups:
-                products = catalog.list_products(
+                primary = list(catalog.list_products(
                     self.db, queries=group.queries, category_slug=category_slug,
                     seller_slug=seller_slug, limit=limit,
-                )
-                if not products:
-                    # An intent expansion can still be over-specific (for
-                    # example a use-case adjective absent from catalog data).
-                    # Search its meaningful terms independently and interleave
-                    # the results so one broad term cannot consume the role's
-                    # complete candidate allowance.
-                    terms = list(dict.fromkeys(
-                        term for value in [group.role, *group.queries]
-                        for term in re.findall(r"[\w-]+", value.casefold())
-                        if len(term) > 2 and term not in catalog.SEARCH_STOP_WORDS
-                        and not term.startswith("rm") and not term.isdigit()
+                ))
+                # Search every model-generated wording separately as well as
+                # the combined OR query. Round-robin merging prevents one
+                # highly represented phrase from crowding all alternatives out
+                # of the selector's bounded candidate pool.
+                pools = [
+                    list(catalog.list_products(
+                        self.db, query=value, category_slug=category_slug,
+                        seller_slug=seller_slug, limit=limit,
                     ))
-                    pools = [
-                        catalog.list_products(
+                    for value in group.queries
+                ]
+                # When generated wording is overly specific, broaden using
+                # meaningful runtime terms. These are derived from the current
+                # mission rather than a maintained product taxonomy.
+                terms = list(dict.fromkeys(
+                    term for value in [group.role, *group.queries]
+                    for term in re.findall(r"[\w-]+", value.casefold())
+                    if len(term) > 2 and term not in catalog.SEARCH_STOP_WORDS
+                    and not term.startswith("rm") and not term.isdigit()
+                ))
+                if len(primary) < limit:
+                    pools.extend(
+                        list(catalog.list_products(
                             self.db, query=term, category_slug=category_slug,
                             seller_slug=seller_slug, limit=limit,
-                        )
+                        ))
                         for term in terms
-                    ]
-                    broadened = {}
-                    for index in range(limit):
-                        for pool in pools:
-                            if index < len(pool):
-                                broadened.setdefault(pool[index].id, pool[index])
-                                if len(broadened) >= limit:
-                                    break
-                        if len(broadened) >= limit:
-                            break
-                    products = list(broadened.values())
+                    )
+                broadened = {}
+                for index in range(limit):
+                    for pool in [*pools, primary]:
+                        if index < len(pool):
+                            broadened.setdefault(pool[index].id, pool[index])
+                            if len(broadened) >= limit:
+                                break
+                    if len(broadened) >= limit:
+                        break
+                products = list(broadened.values())
                 matches[group.role] = [product.id for product in products]
                 for product in products:
                     merged.setdefault(product.id, product)

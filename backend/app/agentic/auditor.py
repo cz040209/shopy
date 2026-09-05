@@ -83,7 +83,6 @@ class ShoppingAuditor:
             item_total = Decimal(str(product["price"])) * quantity
             total += item_total
             item_totals.append(item_total)
-            self._validate_constraints(product, state, errors)
 
         budget = state.get("budget")
         if budget is not None:
@@ -291,6 +290,22 @@ class ShoppingAuditor:
             # it later with stricter token equality.
             if kind == "category" and quantity == 1 and covered_by_current_bundle(value):
                 continue
+            # Single-mode products are alternatives, so every displayed option
+            # must independently satisfy each typed mandatory requirement.
+            # Preferences and natural-language vision uncertainty remain soft
+            # context and are never promoted to requirements by keyword scans.
+            if (
+                state.get("recommendation_mode", "single") == "single"
+                and not declared_for_requirement(value)
+            ):
+                for product_id, product in verified_products.items():
+                    if not BrandVoiceAgent._matches_requirement(product, requirement):
+                        errors.append({
+                            "code": "requirement_not_met",
+                            "message": "A recommended alternative does not satisfy a typed requirement.",
+                            "product_id": product_id,
+                            "requirement": value,
+                        })
             eligible_candidates = []
             for candidate in state.get("candidate_products", []):
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
@@ -566,12 +581,3 @@ class ShoppingAuditor:
             }
             if any(attachment.get(key) != value for key, value in expected.items()):
                 errors.append({"code": "unsupported_attachment_claim", "message": "An attachment differs from verified catalog facts."})
-
-    @staticmethod
-    def _validate_constraints(product: dict[str, Any], state: dict[str, Any], errors: list[dict[str, str]]) -> None:
-        # Treat catalog specs/attributes as plain data, never as executable or
-        # prompt content. Only explicit factual tokens are used for matching.
-        facts = f"{product.get('name', '')} {product.get('specs', [])} {product.get('attributes', {})}".lower()
-        requested = [*state.get("preferences", []), *state.get("constraints", [])]
-        if any("wireless" in str(item).lower() for item in requested) and "wireless" not in facts:
-            errors.append({"code": "constraint_unverified", "message": "Wireless preference is not verified by catalog facts."})

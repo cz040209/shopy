@@ -14,7 +14,6 @@ from app.config import settings
 
 from .auditor import ShoppingAuditor
 from .brand_voice import BrandVoiceAgent
-from .bundle_optimizer import BundleOptimizerAgent
 from .compatibility import CompatibilityAgent
 from .intent import AsyncChatModel, IntentMissionAgent
 from .llm import PrimaryLangChainChatModel
@@ -25,6 +24,7 @@ from .planning import PlanningAgent
 from .observability import OrchestrationRecorder, active_recorder, safe_audit_data
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
+from .product_selector import ProductSelectorAgent
 from .schemas import MissionInterpretation
 from .state import ShoppingAgentState, initial_shopping_state
 from .tools import CommerceToolRegistry, ToolExecutionError
@@ -58,8 +58,8 @@ class ShoppingOrchestrator:
         self.manager = WorkflowManager()
         self.product_resolver = ProductResolutionAgent(shared_model)
         self.product_search_agent = ProductSearchAgent(tool_registry)
+        self.product_selector = ProductSelectorAgent(shared_model)
         self.compatibility_agent = CompatibilityAgent(shared_model)
-        self.bundle_optimizer = BundleOptimizerAgent(shared_model)
         self.vision_agent = vision_agent or VisionAgent()
         self.memory_store = memory_store
         self.brand_voice = BrandVoiceAgent(shared_model)
@@ -85,8 +85,8 @@ class ShoppingOrchestrator:
         add_node("planning", self._planning_node)
         add_node("manager", self._manager_node)
         add_node("product_search", self._product_search_node)
+        add_node("product_selector", self._product_selector_node)
         add_node("compatibility", self._compatibility_node)
-        add_node("bundle_optimizer", self._bundle_optimizer_node)
         add_node("response_draft", self._response_draft_node)
         add_node("audit", self._audit_node)
         add_node("brand_voice", self._brand_voice_node)
@@ -113,15 +113,15 @@ class ShoppingOrchestrator:
         )
         workflow.add_conditional_edges(
             "product_search", self._after_product_search,
-            {"compatibility": "compatibility", "bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
+            {"product_selector": "product_selector", "compatibility": "compatibility", "response_draft": "response_draft"},
+        )
+        workflow.add_conditional_edges(
+            "product_selector", self._after_product_selector,
+            {"compatibility": "compatibility", "response_draft": "response_draft"},
         )
         workflow.add_conditional_edges(
             "compatibility", self._after_compatibility,
-            {"bundle_optimizer": "bundle_optimizer", "response_draft": "response_draft"},
-        )
-        workflow.add_conditional_edges(
-            "bundle_optimizer", self._after_bundle_optimizer,
-            {"compatibility": "compatibility", "response_draft": "response_draft"},
+            {"product_selector": "product_selector", "response_draft": "response_draft"},
         )
         workflow.add_edge("response_draft", "audit")
         workflow.add_conditional_edges(
@@ -160,8 +160,9 @@ class ShoppingOrchestrator:
             inputs["mode"] = state.get("vision_input", {}).get("mode")
         elif node == "compatibility":
             inputs["candidate_product_ids"] = [item.get("id") for item in state.get("candidate_products", [])]
-        elif node == "bundle_optimizer":
-            inputs["required_categories"] = state.get("required_categories", [])
+        elif node == "product_selector":
+            inputs["recommendation_mode"] = state.get("recommendation_mode")
+            inputs["candidate_product_count"] = len(state.get("candidate_products", []))
         elif node in {"response_draft", "brand_voice", "final_audit"}:
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
@@ -225,11 +226,11 @@ class ShoppingOrchestrator:
     def _after_product_search(self, state: ShoppingAgentState) -> str:
         return self.manager.next_stage(state)
 
+    def _after_product_selector(self, state: ShoppingAgentState) -> str:
+        return self.manager.next_stage(state, "product_selector")
+
     def _after_compatibility(self, state: ShoppingAgentState) -> str:
         return self.manager.next_stage(state, "compatibility")
-
-    def _after_bundle_optimizer(self, state: ShoppingAgentState) -> str:
-        return self.manager.next_stage(state, "bundle_optimizer")
 
     @staticmethod
     def _route_start(state: ShoppingAgentState) -> str:
@@ -442,7 +443,11 @@ class ShoppingOrchestrator:
         candidates, selection_context = self._apply_optimization_context(
             state, role_candidates
         )
-        result = {**result, "product_rankings": search_output["product_rankings"]}
+        result = {
+            **result,
+            "product_rankings": search_output["product_rankings"],
+            "retrieval_role_matches": search_output.get("retrieval_role_matches", {}),
+        }
         if "check_stock" in actions:
             stock_results: list[dict[str, Any]] = []
             tool_results = [*state["tool_results"], *search_output["tool_results"]]
@@ -490,15 +495,15 @@ class ShoppingOrchestrator:
             **result,
             "candidate_products": candidates,
             "selection_context": selection_context,
-            # Bundle selection is resolved by the bundle optimiser. For a
-            # single-product mission, the response model receives the full
-            # verified candidate set and chooses its own recommendation IDs.
+            # Recommendation candidates remain unselected until the dedicated
+            # LLM selector has considered the complete verified shortlist.
+            # Factual catalog operations keep their already-resolved target so
+            # the response writer can report its specs without recommending it.
             "selected_products": (
-                [] if (
-                    state.get("recommendation_mode", "single") == "single"
-                    and self.brand_voice.is_shopping_mission(state.get("mission_type"))
-                )
-                else self.brand_voice.select_catalog_products({**state, "candidate_products": selection_candidates})
+                [] if "product_selector" in state.get("execution_plan", {}).get("stages", [])
+                else self.brand_voice.select_catalog_products({
+                    **state, "candidate_products": selection_candidates,
+                })
             ) if self._should_recommend_products(actions) else [],
             "tool_results": [*state["tool_results"], *search_output["tool_results"]],
             "tool_context": tool_context,
@@ -659,9 +664,9 @@ class ShoppingOrchestrator:
         self._record_node(state, "compatibility", output)
         return output
 
-    async def _bundle_optimizer_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        output = {**self._event(state, "bundle_optimizer"), **(await self.bundle_optimizer.run(state))}
-        self._record_node(state, "bundle_optimizer", output)
+    async def _product_selector_node(self, state: ShoppingAgentState) -> dict[str, Any]:
+        output = {**self._event(state, "product_selector"), **(await self.product_selector.run(state))}
+        self._record_node(state, "product_selector", output)
         return output
 
     @staticmethod
@@ -776,12 +781,24 @@ class ShoppingOrchestrator:
         self, state: ShoppingAgentState, actions: list[str], candidates: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         resolving_actions = {"get_product", "get_product_reviews", "get_seller", "compare_products"}
-        # The intent model can label a factual lookup as product_search. Let the
-        # grounded resolver decide from the verified candidates for every
-        # search-only request, rather than depending on that label.
+        # Search-only flows can be either open-ended recommendations or factual
+        # named-product lookups, so route them according to mission semantics.
         search_only = set(actions) == {"search_products"}
         if not search_only and not resolving_actions.intersection(actions):
             return candidates, []
+        # A recommendation request is asking for a ranked choice set, not for
+        # one named entity to be resolved. The catalog search and deterministic
+        # fulfillment matcher already ground these candidates; asking an LLM
+        # resolver to guess which single item the customer "means" can label a
+        # valid generic search as ambiguous and erase every recommendation.
+        if search_only and str(state.get("mission_type", "")).casefold() == "product_search":
+            return candidates, [{
+                "tool": "product_resolution",
+                "result": {
+                    "product_ids": [str(product["id"]) for product in candidates],
+                    "status": "recommendation_candidates",
+                },
+            }]
         resolved_ids = await self.product_resolver.resolve(
             user_request=state["user_request"], actions=actions, candidates=candidates,
             mission_context={
@@ -1008,12 +1025,12 @@ class ShoppingOrchestrator:
             "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
         }
         if bundle_needs_rebuild:
-            rebuilt_bundle = await self.bundle_optimizer.run(repair_state)
+            rebuilt_bundle = await self.product_selector.run(repair_state)
             selected = list(rebuilt_bundle.get("selected_products", []))
         elif (excluded or selection_was_lost) and self._should_recommend_products(self._requested_actions(state)):
-            selected = self.brand_voice.select_catalog_products({
-                **repair_state,
-            })
+            reselection = await self.product_selector.run(repair_state)
+            rebuilt_bundle = reselection
+            selected = list(reselection.get("selected_products", []))
         # Preserve verified selections and give the response writer exact repair
         # feedback. This avoids replacing a useful answer with an empty one.
         output = {

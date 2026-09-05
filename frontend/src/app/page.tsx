@@ -7,6 +7,8 @@ import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic,
 import styles from "./home.module.css";
 import heroTheme from "./home-hero-theme.module.css";
 import AIShoppingCamera, { type VisionAnalysisResult } from "@/features/vision/components/AIShoppingCamera";
+import { visionHandoffStorageKey, writeStoredWorkspace } from "@/features/missions/components/workspace-storage";
+import type { BundleWorkspace, MissionData } from "@/features/missions/components/types";
 import { API_URL } from "@/lib/api";
 
 const missions = [
@@ -42,21 +44,19 @@ export default function Home() {
     const goal = typeof result.mission.goal === "string" && result.mission.goal.trim()
       ? result.mission.goal.trim()
       : result.mode === "complete_look" ? "Complete my look from this photo" : result.mode === "shop_room" ? "Shop this room from this photo" : "Find products from this photo";
-    try {
-      window.sessionStorage.setItem("shopy:mission-workspace:v2", JSON.stringify({
-        version: 2,
-        routeMission: goal,
-        request: goal,
-        analysis,
-        mission: result.mission,
-        items: attachments,
-        workspace: result.workspace,
-        history: [],
-      }));
-    } catch {
-      // The destination can still render the URL brief if storage is blocked.
-    }
-    router.push(`/build?mission=${encodeURIComponent(goal)}`);
+    const handoffId = crypto.randomUUID();
+    const stored = writeStoredWorkspace({
+      version: 2,
+      routeMission: goal,
+      request: goal,
+      analysis,
+      mission: result.mission as MissionData,
+      items: attachments,
+      workspace: result.workspace as BundleWorkspace,
+      history: [],
+    }, visionHandoffStorageKey(handoffId));
+    if (!stored) throw new Error("The photo was analyzed, but this browser could not open its mission result. Please try again.");
+    router.push(`/build?mission=${encodeURIComponent(goal)}&vision=${encodeURIComponent(handoffId)}`);
   };
 
   const stopStream = () => {

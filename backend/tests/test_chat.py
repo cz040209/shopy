@@ -1,3 +1,4 @@
+import asyncio
 from importlib import import_module
 import json
 from types import SimpleNamespace
@@ -179,6 +180,49 @@ def test_chat_stream_emits_incremental_deltas_and_final_metadata(db_session, mon
         ) == "Verified response for hello there."
         assert events[-1]["type"] == "done"
         assert events[-1]["attachments"] == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_stream_emits_heartbeat_while_orchestration_is_running(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+
+    class SlowShoppingOrchestrator(FakeShoppingOrchestrator):
+        async def ainvoke(self, user_request, *, state_overrides=None, defer_finish=False):
+            await asyncio.sleep(0.02)
+            return await super().ainvoke(
+                user_request, state_overrides=state_overrides, defer_finish=defer_finish,
+            )
+
+    monkeypatch.setattr(chat_route, "ShoppingOrchestrator", SlowShoppingOrchestrator)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(
+            gemini_api_key="test-key",
+            gemini_model="test-model",
+            auth_session_days=7,
+            auth_cookie_secure=False,
+        ),
+    )
+    monkeypatch.setattr(chat_route, "STREAM_HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr(chat_route, "STREAM_WORD_DELAY_SECONDS", 0)
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app).stream(
+            "POST",
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "slow mission"}]},
+        ) as response:
+            events = [json.loads(line) for line in response.iter_lines() if line]
+
+        assert response.status_code == 200
+        assert any(event["type"] == "progress" for event in events)
+        assert events[-1]["type"] == "done"
     finally:
         app.dependency_overrides.clear()
 

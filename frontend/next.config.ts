@@ -1,8 +1,18 @@
 import type { NextConfig } from "next";
 
 const backendOrigin = process.env.BACKEND_ORIGIN ?? "http://localhost:8002";
+const configuredProxyTimeout = Number.parseInt(
+  process.env.BACKEND_PROXY_TIMEOUT_MS ?? "120000",
+  10,
+);
+const backendProxyTimeout = Number.isFinite(configuredProxyTimeout) && configuredProxyTimeout >= 30000
+  ? configuredProxyTimeout
+  : 120000;
 
 const nextConfig: NextConfig = {
+  experimental: {
+    proxyTimeout: backendProxyTimeout,
+  },
   images: {
     remotePatterns: [{ protocol: "https", hostname: "images.unsplash.com" }],
   },
@@ -17,6 +27,12 @@ const nextConfig: NextConfig = {
     "localhost",
     "192.168.0.20",
   ],
+  async headers() {
+    return [{
+      source: "/:path*",
+      headers: [{ key: "Permissions-Policy", value: "camera=(self), microphone=(self)" }],
+    }];
+  },
   async rewrites() {
     return [
       {

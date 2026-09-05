@@ -19,6 +19,12 @@ class NeedPlannerAgent:
         ]
         if not required:
             required = [item.query.strip() for item in mission.bundle_items if item.query.strip()]
+        if mission.recommendation_mode == "bundle" and not required:
+            # A formatting failure can preserve the customer's explicit kit
+            # intent while leaving no independently verified component roles.
+            # Keep the broad catalog query for retrieval, but do not turn that
+            # outcome phrase into one impossible mandatory product identity.
+            return NeedPlan(required_categories=[], optional_categories=[])
         if not required:
             required = [query.strip() for query in mission.catalog_queries if query.strip()]
         if not required and mission.catalog_query:

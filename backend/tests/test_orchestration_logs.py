@@ -13,6 +13,17 @@ from app.models import Category, Conversation, OrchestrationRun, Product, Produc
 
 class FakeChatModel:
     async def ainvoke(self, input, **kwargs):
+        if "product-selection reasoning agent" in str(input[0].content):
+            products = json.loads(str(input[1].content))["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "mode": "single",
+                "related_candidate_count": len(products),
+                "choices": [{
+                    "product_id": product["id"], "role": "gaming setup",
+                    "reason": "It matches the requested setup.", "quantity": 1,
+                } for product in products],
+                "unfulfilled_roles": [],
+            }))
         if "response-writing agent" in str(input[0].content):
             payload = json.loads(str(input[1].content))
             products = payload["verified_catalog_products"]

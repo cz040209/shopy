@@ -6,10 +6,12 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import select
 
 from app.agentic.orchestrator import ShoppingOrchestrator
+from app.agentic.brand_voice import BrandVoiceAgent
 from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.compatibility import CompatibilityAgent
 from app.agentic.intent import IntentMissionAgent
 from app.agentic.product_search import ProductSearchAgent
+from app.agentic.product_selector import ProductSelectorAgent
 from app.agentic.schemas import BundleItemPlan, MissionInterpretation, SearchRequirement
 from app.agentic.state import initial_shopping_state
 from app.agentic.tools import CommerceToolRegistry
@@ -130,6 +132,48 @@ async def test_role_expanded_search_uses_one_tool_call_and_json_catalog_evidence
     assert registry.remaining_calls == registry.max_calls - 1
 
 
+@pytest.mark.anyio
+async def test_broad_product_role_keeps_real_recommendations_and_rejects_accessories(db_session):
+    mouse = add_product(
+        db_session, sku="ADV-MOUSE", name="Glide Wireless Mouse",
+        price="189", inventory=8,
+    )
+    mouse.description = "Quiet ergonomic mouse with multi-device switching."
+    accessory = add_product(
+        db_session, sku="ADV-MAT", name="Large Mouse Desk Mat",
+        price="79", inventory=8,
+    )
+    accessory.description = "A protective desk surface for a keyboard and mouse."
+    db_session.commit()
+    state = initial_shopping_state("Shop this shop object image.")
+    state.update({
+        "recommendation_mode": "single",
+        "search_requirements": [{
+            "original_text": "wireless computer mouse",
+            "canonical_role": "mouse",
+            "required_features": [],
+            "preferred_features": ["wireless", "ergonomic"],
+            "search_queries": ["mouse", "wireless computer mouse", "ergonomic mouse"],
+        }],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+        ],
+    })
+
+    result = await ProductSearchAgent(
+        CommerceToolRegistry(db_session, "mouse-recommendations")
+    ).run_requirements(state, requirements=state["search_requirements"], per_role_limit=6)
+    candidates = ShoppingOrchestrator._role_constrained_candidates(
+        state, result["candidate_products"],
+    )
+    selected = BrandVoiceAgent.select_catalog_products({
+        **state, "candidate_products": candidates,
+    })
+
+    assert [item["id"] for item in candidates] == [str(mouse.id)]
+    assert selected == [{"id": str(mouse.id), "quantity": 1}]
+
+
 class VisionGenerator:
     last_kwargs = None
 
@@ -175,6 +219,35 @@ class GraphModel:
         if "response-writing agent" in str(messages[0].content):
             return AIMessage(content='{"response":"I can help with the room.","product_ids":[]}')
         return AIMessage(content='{"mission_type":"information_request","goal":"room context","catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[]}')
+
+
+@pytest.mark.anyio
+async def test_generic_recommendation_keeps_grounded_candidates_without_entity_resolution():
+    class ResolverMustNotRun:
+        async def resolve(self, **kwargs):
+            raise AssertionError("A generic recommendation is not named-product resolution")
+
+    orchestrator = ShoppingOrchestrator(GraphModel())
+    orchestrator.product_resolver = ResolverMustNotRun()
+    candidates = [
+        {"id": "mouse-a", "name": "Mouse A"},
+        {"id": "mouse-b", "name": "Mouse B"},
+    ]
+    state = initial_shopping_state("Recommend a mouse")
+    state.update({"mission_type": "product_search", "recommendation_mode": "single"})
+
+    resolved, context = await orchestrator._resolve_action_candidates(
+        state, ["search_products"], candidates,
+    )
+
+    assert resolved == candidates
+    assert context == [{
+        "tool": "product_resolution",
+        "result": {
+            "product_ids": ["mouse-a", "mouse-b"],
+            "status": "recommendation_candidates",
+        },
+    }]
 
 
 @pytest.mark.anyio
@@ -251,6 +324,64 @@ async def test_bundle_optimizer_enforces_budget_and_reports_coverage():
     assert result["bundle"]["budget_remaining"] == "-100"
     assert result["bundle"]["required_category_coverage"]["missing"] == []
     assert {item["id"] for item in result["selected_products"]} == {"laptop", "keyboard", "mouse"}
+
+
+@pytest.mark.anyio
+async def test_bundle_optimizer_uses_role_bound_runtime_vocabulary_when_catalog_labels_differ():
+    products = [
+        {
+            "id": "soap", "name": "Gold Class Car Wash Shampoo",
+            "category": "Car Shampoo", "price": "49", "inventory_quantity": 8,
+            "attributes": {"department": "automotive", "car_care_category": "Car Shampoo"},
+        },
+        {
+            "id": "mitt", "name": "Chenille Premium Car Wash Mitt",
+            "category": "Wash Mitt", "price": "29", "inventory_quantity": 8,
+            "attributes": {"department": "automotive", "car_care_category": "Wash Mitt"},
+        },
+        {
+            "id": "wheel", "name": "Wheel Cleaner Plus",
+            "category": "Wheel Cleaner", "price": "65", "inventory_quantity": 8,
+            "attributes": {"department": "automotive", "car_care_category": "Wheel Cleaner"},
+        },
+        {
+            "id": "cargo", "name": "Utility Cargo Pants",
+            "category": "Cargo Pants", "price": "179", "inventory_quantity": 8,
+            "attributes": {"department": "apparel"},
+        },
+    ]
+    roles = ["car wash soap", "microfiber car wash mitt", "wheel and tire cleaner"]
+    state = initial_shopping_state("Build a weekly care kit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": roles,
+        "candidate_products": products,
+        "search_requirements": [
+            {
+                "original_text": roles[0], "canonical_role": roles[0],
+                "search_queries": [roles[0], "vehicle cleaning soap", "auto wash liquid"],
+            },
+            {
+                "original_text": roles[1], "canonical_role": roles[1],
+                "search_queries": [roles[1], "wash mitt for cars", "automotive microfiber mitt"],
+            },
+            {
+                "original_text": roles[2], "canonical_role": roles[2],
+                "search_queries": [roles[2], "tire shine product", "rims and tires cleaning solution"],
+            },
+        ],
+        "retrieval_role_matches": {
+            role: [product["id"] for product in products] for role in roles
+        },
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert {item["id"] for item in result["selected_products"]} == {
+        "soap", "mitt", "wheel",
+    }
+    assert result["bundle"]["product_count"] == 3
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
 
 
 @pytest.mark.anyio
@@ -420,3 +551,167 @@ async def test_bundle_optimizer_does_not_fallback_to_an_unrelated_affordable_pro
 
     assert result["selected_products"] == []
     assert result["bundle"]["required_category_coverage"]["missing"] == ["compact first aid kit"]
+
+
+@pytest.mark.anyio
+async def test_product_selector_sees_complete_bundle_shortlist_and_repairs_rejected_choice():
+    class SelectorModel:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            payload = json.loads(str(messages[1].content))
+            assert {item["id"] for item in payload["verified_catalog_products"]} == {
+                "soap", "mitt", "wheel", "cloth",
+            }
+            assert payload["verified_catalog_products"][0]["description"] == "Paint-safe wash concentrate"
+            assert kwargs["enable_thinking"] is False
+            assert kwargs["response_mime_type"] == "application/json"
+            assert kwargs["max_output_tokens"] == 3000
+            if self.calls == 1:
+                return AIMessage(content=json.dumps({
+                    "mode": "bundle",
+                    "related_candidate_count": 4,
+                    "choices": [
+                            {"product_id": "soap", "role": "wash soap", "reason": "Cleans paint", "quantity": 1},
+                            {"product_id": "mitt", "role": "wash mitt", "reason": "Applies wash", "quantity": 1},
+                    ],
+                    "unfulfilled_roles": [],
+                }))
+            assert "Bundle mode must select 3" in str(messages[0].content)
+            return AIMessage(content=json.dumps({
+                "mode": "bundle",
+                "related_candidate_count": 4,
+                "choices": [
+                    {"product_id": "soap", "role": "wash soap", "reason": "Cleans paint", "quantity": 1},
+                    {"product_id": "mitt", "role": "wash mitt", "reason": "Applies wash", "quantity": 1},
+                    {"product_id": "wheel", "role": "wheel cleaner", "reason": "Cleans wheels", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    products = [
+        {"id": "soap", "name": "Wash Soap", "brand": "A", "description": "Paint-safe wash concentrate", "category": "Wash", "price": "40", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "mitt", "name": "Wash Mitt", "brand": "B", "category": "Tools", "price": "20", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "wheel", "name": "Wheel Cleaner", "brand": "C", "category": "Wheel", "price": "30", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "cloth", "name": "Drying Cloth", "brand": "D", "category": "Drying", "price": "15", "currency": "MYR", "inventory_quantity": 5},
+    ]
+    state = initial_shopping_state("Build a weekly wash kit")
+    state.update({"recommendation_mode": "bundle", "candidate_products": products})
+    model = SelectorModel()
+
+    result = await ProductSelectorAgent(model, max_attempts=2).run(state)
+
+    assert model.calls == 2
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == ["soap", "mitt", "wheel"]
+    assert result["bundle"]["product_count"] == 3
+    assert result["bundle"]["total"] == "90"
+
+
+@pytest.mark.anyio
+async def test_product_selector_uses_llm_for_single_comparable_choices():
+    class SelectorModel:
+        async def ainvoke(self, messages, **kwargs):
+            payload = json.loads(str(messages[1].content))
+            assert len(payload["verified_catalog_products"]) == 3
+            return AIMessage(content=json.dumps({
+                "mode": "single",
+                "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "one", "role": "headphones", "reason": "Portable option", "quantity": 1},
+                    {"product_id": "two", "role": "headphones", "reason": "Comfort option", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Recommend headphones")
+    state.update({
+        "recommendation_mode": "single",
+        "candidate_products": [
+            {"id": value, "name": value.title(), "brand": "Test", "category": "Headphones", "price": "100", "currency": "MYR", "inventory_quantity": 5}
+            for value in ("one", "two", "three")
+        ],
+    })
+
+    result = await ProductSelectorAgent(SelectorModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == ["one", "two"]
+    assert result["bundle"] is None
+
+
+@pytest.mark.anyio
+async def test_product_selector_failure_never_chooses_products_deterministically():
+    class InvalidModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content="not json")
+
+    state = initial_shopping_state("Recommend a keyboard")
+    state.update({
+        "recommendation_mode": "single",
+        "candidate_products": [
+            {"id": "one", "name": "One", "price": "100", "inventory_quantity": 5},
+            {"id": "two", "name": "Two", "price": "120", "inventory_quantity": 5},
+        ],
+    })
+
+    result = await ProductSelectorAgent(InvalidModel(), max_attempts=2).run(state)
+
+    assert result["selected_products"] == []
+    assert result["selection_source"] == "llm_product_selector_failed"
+    assert result["selection_errors"]
+
+
+def test_product_selector_accepts_json_wrapped_by_model_explanation():
+    value = ProductSelectorAgent._selection_object(
+        'I considered every candidate.\n{"mode":"single","related_candidate_count":0,"choices":[],"unfulfilled_roles":[]}\nDone.'
+    )
+
+    assert value["mode"] == "single"
+
+
+@pytest.mark.anyio
+async def test_product_selector_rejects_cross_domain_lexical_false_positive():
+    class SelectorModel:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            selected = ["car", "hair"] if self.calls == 1 else ["car", "ceramic"]
+            return AIMessage(content=json.dumps({
+                "mode": "single",
+                "related_candidate_count": 2,
+                "choices": [
+                    {
+                        "product_id": product_id, "role": "car wash shampoo",
+                        "reason": "Candidate comparison", "quantity": 1,
+                    }
+                    for product_id in selected
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Recommend car wash shampoo")
+    state.update({
+        "recommendation_mode": "single",
+        "required_categories": ["car wash shampoo"],
+        "search_requirements": [{
+            "original_text": "car wash shampoo", "canonical_role": "car wash shampoo",
+            "search_queries": ["car wash shampoo", "automotive shampoo", "car cleaning wash"],
+        }],
+        "candidate_products": [
+            {"id": "car", "name": "Car Wash Shampoo", "category": "Car Care", "price": "40", "inventory_quantity": 5},
+            {"id": "ceramic", "name": "Ceramic Vehicle Wash", "category": "Car Shampoo", "price": "60", "inventory_quantity": 5},
+            {"id": "hair", "name": "Creamy Shampoo", "category": "Hair Care", "price": "20", "inventory_quantity": 5},
+        ],
+    })
+    model = SelectorModel()
+
+    result = await ProductSelectorAgent(model, max_attempts=2).run(state)
+
+    assert model.calls == 2
+    assert [item["id"] for item in result["selected_products"]] == ["car", "ceramic"]
+    assert result["selection_source"] == "llm_product_selector_v1"

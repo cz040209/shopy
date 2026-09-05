@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from app.ai.primary import PrimaryLLMClient
+from app.config import settings
 
 
 def _provider_contents(messages: list[BaseMessage]) -> tuple[str, list[dict[str, Any]]]:
@@ -25,7 +26,7 @@ class PrimaryLangChainChatModel(BaseChatModel):
     """LangChain adapter backed by Qwen with Gemini fallback."""
 
     timeout_seconds: float = 30.0
-    max_output_tokens: int = 700
+    max_output_tokens: int = settings.agent_model_max_output_tokens
     response_mime_type: str | None = "application/json"
 
     @property
@@ -48,8 +49,8 @@ class PrimaryLangChainChatModel(BaseChatModel):
         generation = await PrimaryLLMClient(timeout_seconds=self.timeout_seconds).generate_with_usage(
             system_instruction=system_instruction,
             contents=contents,
-            max_output_tokens=self.max_output_tokens,
-            response_mime_type=self.response_mime_type,
+            max_output_tokens=int(kwargs.get("max_output_tokens", self.max_output_tokens)),
+            response_mime_type=kwargs.get("response_mime_type", self.response_mime_type),
             enable_thinking=kwargs.get("enable_thinking"),
         )
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=generation.text))])

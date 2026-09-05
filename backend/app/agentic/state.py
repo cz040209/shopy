@@ -38,6 +38,7 @@ class ShoppingAgentState(TypedDict):
     optional_categories: list[str]
     candidate_products: list[dict[str, Any]]
     product_rankings: list[dict[str, Any]]
+    retrieval_role_matches: dict[str, list[str]]
     compatibility_results: list[dict[str, Any]]
     compatibility_plan: dict[str, Any]
     bundle: dict[str, Any] | None
@@ -46,6 +47,9 @@ class ShoppingAgentState(TypedDict):
     stock_results: list[dict[str, Any]]
     tool_context: list[dict[str, Any]]
     selected_products: list[dict[str, Any]]
+    selection_source: str | None
+    selection_reasoning: list[dict[str, Any]]
+    selection_errors: list[str]
     tool_results: list[dict[str, Any]]
     audit_result: dict[str, Any] | None
     repair_count: int
@@ -97,6 +101,7 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "optional_categories": [],
         "candidate_products": [],
         "product_rankings": [],
+        "retrieval_role_matches": {},
         "compatibility_results": [],
         "compatibility_plan": {},
         "bundle": None,
@@ -104,6 +109,9 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "stock_results": [],
         "tool_context": [],
         "selected_products": [],
+        "selection_source": None,
+        "selection_reasoning": [],
+        "selection_errors": [],
         "tool_results": [],
         "audit_result": None,
         "repair_count": 0,

@@ -5,7 +5,7 @@ import { ArrowLeft, CircleCheck, RefreshCw, WandSparkles } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API_URL, apiFetch } from "@/lib/api";
+import { API_URL, apiErrorMessage, apiFetch } from "@/lib/api";
 import { useCart } from "@/features/cart/cart-context";
 import AIProgressPanel from "./AIProgressPanel";
 import AlternativeBundles from "./AlternativeBundles";
@@ -15,71 +15,28 @@ import MissionInputPanel from "./MissionInputPanel";
 import OptimizationActions from "./OptimizationActions";
 import { recommendationPriceSummary } from "./pricing";
 import { Attachment, BundleWorkspace, MissionData, MissionHistoryItem } from "./types";
+import {
+  readStoredWorkspace,
+  visionHandoffStorageKey,
+  workspaceStorageKey,
+  writeStoredWorkspace,
+} from "./workspace-storage";
+import type { StoredMissionWorkspace } from "./workspace-storage";
 import styles from "./mission-studio.module.css";
 
 const emptyMission: MissionData = { preferences: [], owned_items: [], priorities: [] };
 const progressStepCount = 6;
 const stageDurationMs = 1800;
-const workspaceStorageKey = "shopy:mission-workspace:v2";
-
-type StoredMissionWorkspace = {
-  version: 2;
-  routeMission: string;
-  request: string;
-  analysis: string;
-  mission: MissionData;
-  items: Attachment[];
-  workspace: BundleWorkspace;
-  history: MissionHistoryItem[];
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isAttachment(value: unknown): value is Attachment {
-  if (!isRecord(value)) return false;
-  return typeof value.product_id === "string"
-    && typeof value.name === "string"
-    && (typeof value.price === "string" || typeof value.price === "number")
-    && typeof value.currency === "string"
-    && typeof value.image_url === "string";
-}
-
-function isHistoryItem(value: unknown): value is MissionHistoryItem {
-  return isRecord(value)
-    && typeof value.id === "string"
-    && typeof value.label === "string"
-    && typeof value.price_label === "string"
-    && typeof value.at === "string";
-}
-
-function readStoredWorkspace(): StoredMissionWorkspace | null {
-  try {
-    const raw = window.sessionStorage.getItem(workspaceStorageKey);
-    if (!raw) return null;
-    const value: unknown = JSON.parse(raw);
-    if (!isRecord(value)
-      || value.version !== 2
-      || typeof value.routeMission !== "string"
-      || typeof value.request !== "string"
-      || typeof value.analysis !== "string"
-      || !value.analysis.trim()
-      || !isRecord(value.mission)
-      || !Array.isArray(value.items)
-      || !value.items.every(isAttachment)
-      || !isRecord(value.workspace)
-      || !Array.isArray(value.history)
-      || !value.history.every(isHistoryItem)) {
-      return null;
+type MissionStreamEvent =
+  | { type: "start" | "progress" }
+  | { type: "delta"; delta?: string }
+  | {
+      type: "done";
+      attachments?: Attachment[];
+      mission?: MissionData;
+      workspace?: BundleWorkspace;
     }
-    return value as StoredMissionWorkspace;
-  } catch {
-    // Storage can be unavailable or contain data from an older app version.
-    return null;
-  }
-}
-
+  | { type: "error"; detail?: string };
 const uniquePhrases = (values: string[]) => Array.from(new Map(
   values
     .map((value) => value.replace(/\s+/g, " ").replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, "").trim())
@@ -129,6 +86,7 @@ export default function MissionWorkspace() {
   const reduceMotion = useReducedMotion();
   const initialRequest = search.get("mission") ?? "";
   const autoRunId = search.get("autorun") ?? "";
+  const visionHandoffId = search.get("vision") ?? "";
   const [request, setRequest] = useState(initialRequest);
   const [mission, setMission] = useState<MissionData>(() => draftMission(initialRequest));
   const [busy, setBusy] = useState(false);
@@ -160,6 +118,9 @@ export default function MissionWorkspace() {
   }, [busy]);
 
   useEffect(() => {
+    const handoff = visionHandoffId
+      ? readStoredWorkspace(visionHandoffStorageKey(visionHandoffId))
+      : null;
     if (autoRunId) {
       try {
         if (window.sessionStorage.getItem(`shopy:auto-mission:${autoRunId}`) !== "started") return;
@@ -167,10 +128,16 @@ export default function MissionWorkspace() {
         return;
       }
     }
-    const stored = readStoredWorkspace();
+    const stored = handoff ?? readStoredWorkspace();
     // A mission supplied in the URL represents a new brief unless it matches
     // the saved workspace (as it does when returning from a product page).
-    if (!stored || stored.routeMission !== initialRequest) return;
+    if (!stored || stored.routeMission !== initialRequest) {
+      if (!visionHandoffId) return;
+      const errorFrame = window.requestAnimationFrame(() => {
+        setError("The completed photo result could not be restored. Please return and try the photo again.");
+      });
+      return () => window.cancelAnimationFrame(errorFrame);
+    }
     const frame = window.requestAnimationFrame(() => {
       setRequest(stored.request);
       setAnalysis(stored.analysis);
@@ -179,9 +146,19 @@ export default function MissionWorkspace() {
       setBundleWorkspace(stored.workspace);
       setHistory(stored.history.slice(0, 5));
       setProgressStep(progressStepCount);
+      if (visionHandoffId) {
+        // Commit the canonical copy before consuming the one-time handoff.
+        // This ordering also survives React's development effect replay.
+        writeStoredWorkspace(stored, workspaceStorageKey);
+        try {
+          window.sessionStorage.removeItem(visionHandoffStorageKey(visionHandoffId));
+        } catch {
+          // Leaving an already-consumed handoff is harmless.
+        }
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [autoRunId, initialRequest]);
+  }, [autoRunId, initialRequest, visionHandoffId]);
 
   useEffect(() => {
     if (!analysis.trim()) return;
@@ -195,11 +172,7 @@ export default function MissionWorkspace() {
       workspace: bundleWorkspace,
       history: history.slice(0, 5),
     };
-    try {
-      window.sessionStorage.setItem(workspaceStorageKey, JSON.stringify(snapshot));
-    } catch {
-      // The recommendation remains usable even when browser storage is blocked.
-    }
+    writeStoredWorkspace(snapshot, workspaceStorageKey);
   }, [analysis, bundleWorkspace, history, initialRequest, items, mission, request]);
 
   useEffect(() => {
@@ -226,23 +199,62 @@ export default function MissionWorkspace() {
     setShowBundleReady(false);
 
     try {
-      const response = await fetch(`${API_URL}/api/chat`, {
+      const response = await fetch(`${API_URL}/api/chat/stream`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [{ role: "user", content: missionRequest }] }),
       });
-      const data = await response.json() as {
-        reply?: string;
-        detail?: string;
-        attachments?: Attachment[];
-        mission?: MissionData;
-        workspace?: BundleWorkspace;
+      if (!response.ok || !response.body) {
+        throw new Error(await apiErrorMessage(
+          response,
+          "The mission connection closed before the recommendation was ready. Please try again.",
+        ));
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let reply = "";
+      let completed: Extract<MissionStreamEvent, { type: "done" }> | null = null;
+      const applyEvent = (line: string) => {
+        let event: MissionStreamEvent;
+        try {
+          event = JSON.parse(line) as MissionStreamEvent;
+        } catch {
+          throw new Error("The mission response stream was interrupted. Please try again.");
+        }
+        if (event.type === "error") {
+          throw new Error(event.detail ?? "We could not complete that mission right now.");
+        }
+        if (event.type === "delta" && event.delta) reply += event.delta;
+        if (event.type === "done") completed = event;
       };
 
-      if (!response.ok || !data.reply) {
-        throw new Error(data.detail ?? "We could not complete that mission right now.");
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) if (line.trim()) applyEvent(line);
+          if (done) break;
+        }
+        if (buffer.trim()) applyEvent(buffer);
+      } catch (streamError) {
+        await reader.cancel().catch(() => undefined);
+        throw streamError;
       }
+
+      if (!completed || !reply.trim()) {
+        throw new Error("The mission response ended before the recommendation was ready. Please try again.");
+      }
+      const data = {
+        reply: reply.trim(),
+        attachments: completed.attachments,
+        mission: completed.mission,
+        workspace: completed.workspace,
+      };
 
       const nextItems = data.attachments ?? [];
       const sequenceDuration = stageDurationMs * progressStepCount;

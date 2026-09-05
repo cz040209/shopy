@@ -11,19 +11,24 @@ class WorkflowManager:
     may describe requested actions, but cannot cause an unknown stage to run.
     """
 
-    _VALID_STAGES = ("compatibility", "bundle_optimizer")
+    _VALID_STAGES = ("product_selector", "compatibility")
 
     def plan(self, state: dict[str, Any], actions: list[str]) -> dict[str, Any]:
         mission_type = str(state.get("mission_type", "")).casefold()
         stages: list[str] = []
-        if (
-            state.get("recommendation_mode") == "bundle"
-            or mission_type in {"build_setup", "bundle"}
-            or len(state.get("required_categories", [])) > 1
+        is_recommendation = (
+            "search_products" in actions
+            and mission_type in {"product_search", "build_setup", "bundle"}
+            and set(actions) <= {"search_products"}
+        )
+        if is_recommendation:
+            # Both single and bundle recommendations pass through the same
+            # mandatory LLM selector after catalog retrieval.
+            stages.append("product_selector")
+        # Compatibility checks operate on the LLM-selected products.
+        if is_recommendation and (
+            state.get("owned_items") or mission_type in {"build_setup", "bundle"}
         ):
-            stages.append("bundle_optimizer")
-        # Compatibility is meaningful only after a tentative bundle exists.
-        if state.get("owned_items") or mission_type in {"build_setup", "bundle"}:
             stages.append("compatibility")
         return {
             "stages": [stage for stage in stages if stage in self._VALID_STAGES],

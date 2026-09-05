@@ -18,6 +18,7 @@ from .product_roles import (
     has_product_role_overlap,
     matches_product_role,
     normalized_terms,
+    product_identity_parts,
     units_per_package,
 )
 from .state import ShoppingAgentState
@@ -61,6 +62,74 @@ class BundleOptimizerAgent:
     def __init__(self, model: AsyncChatModel | None = None) -> None:
         self.model = model
 
+    @staticmethod
+    def _role_queries(state: ShoppingAgentState, role: str) -> list[str]:
+        """Return model-generated vocabulary belonging to one runtime role."""
+        role_terms = set(normalized_terms(role))
+        for requirement in state.get("search_requirements", []):
+            if not isinstance(requirement, dict):
+                continue
+            original = str(requirement.get("original_text", ""))
+            canonical = str(requirement.get("canonical_role", ""))
+            original_terms = set(normalized_terms(original))
+            canonical_terms = set(normalized_terms(canonical))
+            if not role_terms or not (
+                role_terms == original_terms
+                or role_terms == canonical_terms
+                or role_terms <= original_terms
+                or original_terms <= role_terms
+                or role_terms <= canonical_terms
+                or canonical_terms <= role_terms
+            ):
+                continue
+            return list(dict.fromkeys(
+                value.strip() for value in [
+                    role, canonical, original, *requirement.get("search_queries", []),
+                ] if isinstance(value, str) and value.strip()
+            ))
+        return [role]
+
+    @classmethod
+    def _retrieval_evidence_match(
+        cls, product: dict[str, Any], role: str, state: ShoppingAgentState,
+    ) -> bool:
+        """Validate a retrieved synonym using catalog identity overlap.
+
+        Query-group membership alone is too broad, while exact product heads
+        reject valid catalog wording differences. Accept a runtime alias
+        directly when it matches typed identity, or require at least two exact
+        identity terms shared with that role's generated vocabulary.
+        """
+        aliases = cls._role_queries(state, role)
+        if any(matches_product_role(product, alias) for alias in aliases):
+            return True
+        identity_terms = set(normalized_terms(" ".join(product_identity_parts(product))))
+        vocabulary_terms = {
+            term for alias in aliases for term in normalized_terms(alias)
+        }
+        role_terms = set(normalized_terms(role))
+        overlap = identity_terms & vocabulary_terms
+        return len(overlap) >= 2 and bool(overlap & role_terms)
+
+    @classmethod
+    def _deterministic_role_matches(
+        cls, products: list[dict[str, Any]], role: str, state: ShoppingAgentState,
+    ) -> list[str]:
+        exact = [str(product["id"]) for product in products if cls._matches(product, role)]
+        if exact:
+            return exact
+        retrieval_matches = state.get("retrieval_role_matches", {})
+        retrieved_ids = next((
+            {str(product_id) for product_id in product_ids}
+            for retrieved_role, product_ids in retrieval_matches.items()
+            if set(normalized_terms(str(retrieved_role))) == set(normalized_terms(role))
+        ), set())
+        return [
+            str(product["id"]) for product in products
+            if str(product["id"]) in retrieved_ids
+            and cls._retrieval_evidence_match(product, role, state)
+        ]
+
     async def _plan(self, products: list[dict[str, Any]], state: ShoppingAgentState) -> BundlePlan:
         default_mode = str(
             state.get("optimization_mode")
@@ -69,7 +138,7 @@ class BundleOptimizerAgent:
         )
         required = [str(need).strip() for need in state.get("required_categories", []) if str(need).strip()]
         deterministic_matches = {
-            need: [str(product["id"]) for product in products if self._matches(product, need)]
+            need: self._deterministic_role_matches(products, need, state)
             for need in required
         }
 
@@ -249,7 +318,13 @@ class BundleOptimizerAgent:
         ]
         for category in state.get("required_categories", []):
             matched_ids = planned_matches.get(str(category))
-            exact_options = [product for product in products if self._matches(product, category)]
+            deterministic_ids = set(
+                self._deterministic_role_matches(products, str(category), state)
+            )
+            exact_options = [
+                product for product in products
+                if str(product["id"]) in deterministic_ids
+            ]
             # Structured catalog evidence takes precedence over a semantic
             # mapping. The model is used only for genuine taxonomy/synonym
             # gaps, never to replace a clear product role with another item.
@@ -267,7 +342,10 @@ class BundleOptimizerAgent:
                 current_ids = {str(item["id"]) for item in current_products}
                 for choice in options:
                     product_id = str(choice["id"])
-                    if product_id not in current_ids and len(current_products) >= self.max_bundle_products:
+                    # Bundle roles are independently selectable product needs;
+                    # one ordinary product cannot silently count as several
+                    # complementary bundle components.
+                    if product_id in current_ids or len(current_products) >= self.max_bundle_products:
                         continue
                     unit_price = self._price(choice)
                     required_units = self._required_quantity(state, str(category))
@@ -341,17 +419,41 @@ class BundleOptimizerAgent:
                 })
         # With explicit roles, an arbitrary affordable product is not a valid
         # fallback: it creates a recommendation unrelated to the planned need.
-        # The empty selection plus verified gaps is the honest result. Retain
-        # the broad fallback only when there are no product-role constraints.
+        # The empty selection plus verified gaps is the honest result. For an
+        # explicit bundle whose role plan could not be recovered, build a
+        # bounded, category-diverse shortlist from the already ranked catalog
+        # results. This uses runtime catalog identity rather than a fixed
+        # product taxonomy.
         if not selected and products and not state.get("required_categories"):
-            for product in sorted(products, key=lambda item: (
+            ranked_products = sorted(products, key=lambda item: (
                 (self._price(item) or Decimal("Infinity")) if prefer_lower_total else -self._score(item, state, plan),
                 str(item["name"]),
-            )):
+            ))
+            chosen_categories: set[str] = set()
+            deferred: list[dict[str, Any]] = []
+            for product in ranked_products:
+                price = self._price(product)
+                category_key = " ".join(normalized_terms(str(product.get("category", ""))))
+                if price is None or (budget_limit is not None and total + price > budget_limit):
+                    continue
+                if category_key and category_key in chosen_categories:
+                    deferred.append(product)
+                    continue
+                selected.append(product)
+                total += price
+                if category_key:
+                    chosen_categories.add(category_key)
+                if len(selected) >= self.max_bundle_products:
+                    break
+            # If the catalog has fewer distinct categories, fill the requested
+            # 3-product minimum with the next highest-ranked verified options.
+            for product in deferred:
+                if len(selected) >= min(3, len(products)):
+                    break
                 price = self._price(product)
                 if price is not None and (budget_limit is None or total + price <= budget_limit):
-                    selected.append(product); total += price
-                    break
+                    selected.append(product)
+                    total += price
         missing = [category for category in state.get("required_categories", []) if category not in covered]
         selected_quantities = {
             str(product["id"]): max(

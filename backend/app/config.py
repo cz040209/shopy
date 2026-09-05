@@ -43,16 +43,24 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = 8
     # Retrieval asks the database for a bounded set per intent-derived product
     # role. The full catalog is never copied into an LLM prompt.
-    agent_catalog_shortlist_limit: int = 48
-    agent_catalog_role_matches_per_need: int = 6
+    agent_catalog_shortlist_limit: int = 60
+    agent_catalog_role_matches_per_need: int = 12
     agent_bundle_options_per_need: int = 12
     agent_bundle_beam_width: int = 800
     agent_max_repair_attempts: int = 2
     agent_response_format_attempts: int = 2
+    # Product selection is always performed by the configured LLM. The first
+    # attempt receives the complete verified shortlist; later attempts receive
+    # the same shortlist plus deterministic validation errors.
+    agent_selector_max_attempts: int = 3
     # Near-budget alternatives can be shown when they are explicitly disclosed
     # to the shopper; the customer budget remains the primary target.
     agent_recommendation_budget_tolerance_percent: float = 30
     agent_model_timeout_seconds: float = 30
+    # Intent extraction can contain six roles with several query variants, and
+    # product selection includes a reason for every chosen catalog ID.
+    agent_model_max_output_tokens: int = 1600
+    agent_selector_max_output_tokens: int = 3000
     # Optional semantic enrichments must never hold the verified deterministic
     # workflow open for a full provider timeout.
     agent_optional_model_timeout_seconds: float = 8

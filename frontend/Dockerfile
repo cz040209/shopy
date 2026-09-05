@@ -7,7 +7,9 @@ RUN npm ci
 FROM node:22-alpine AS build
 
 ARG BACKEND_ORIGIN=http://backend:8000
+ARG BACKEND_PROXY_TIMEOUT_MS=120000
 ENV BACKEND_ORIGIN=$BACKEND_ORIGIN
+ENV BACKEND_PROXY_TIMEOUT_MS=$BACKEND_PROXY_TIMEOUT_MS
 
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules

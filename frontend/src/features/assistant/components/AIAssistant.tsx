@@ -29,6 +29,7 @@ type ChatProductAttachment = {
 
 type ChatStreamEvent =
   | { type: "start" }
+  | { type: "progress" }
   | { type: "delta"; delta?: string }
   | { type: "done"; attachments?: ChatProductAttachment[] }
   | { type: "error"; detail?: string };

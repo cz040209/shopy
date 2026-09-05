@@ -14,6 +14,9 @@ def main() -> None:
     password = quote(os.environ.get("POSTGRES_PASSWORD", "shopy_local_password"), safe="")
     database = quote(os.environ.get("POSTGRES_DB", "shopy"), safe="")
     os.environ["DATABASE_URL"] = (
+        # Containers communicate over Compose's private network, where
+        # PostgreSQL always listens on its container port. POSTGRES_PORT (and
+        # the localhost DATABASE_URL) are host-development settings only.
         f"postgresql+psycopg://{user}:{password}@postgres:5432/{database}"
     )
     os.execvp(sys.argv[1], sys.argv[1:])

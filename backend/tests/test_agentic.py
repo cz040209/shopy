@@ -80,6 +80,52 @@ def test_need_planner_does_not_rebuy_a_more_specific_owned_item():
     assert result.required_categories == ["white sneakers"]
 
 
+def test_intent_normalization_removes_a_structural_bundle_wrapper_after_decomposition():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="weekly car washing", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[
+            {"query": "Car Wash Kit"},
+            {"query": "Car Wash Mitt"},
+            {"query": "Car Shampoo"},
+            {"query": "Microfiber Drying Towel"},
+            {"query": "Wheel Cleaner"},
+        ],
+        search_requirements=[
+            {
+                "original_text": role, "canonical_role": role,
+                "search_queries": [role],
+            }
+            for role in (
+                "Car Wash Kit", "Car Wash Mitt", "Car Shampoo",
+                "Microfiber Drying Towel", "Wheel Cleaner",
+            )
+        ],
+        fulfillment_requirements=[
+            {"kind": "category", "value": role}
+            for role in (
+                "Car Wash Kit", "Car Wash Mitt", "Car Shampoo",
+                "Microfiber Drying Towel", "Wheel Cleaner",
+            )
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="I need a car care kit for weekly wash",
+    )
+
+    assert [item.query for item in normalized.bundle_items] == [
+        "Car Wash Mitt", "Car Shampoo", "Microfiber Drying Towel", "Wheel Cleaner",
+    ]
+    assert [item.canonical_role for item in normalized.search_requirements] == [
+        "Car Wash Mitt", "Car Shampoo", "Microfiber Drying Towel", "Wheel Cleaner",
+    ]
+    assert [item.value for item in normalized.fulfillment_requirements] == [
+        "Car Wash Mitt", "Car Shampoo", "Microfiber Drying Towel", "Wheel Cleaner",
+    ]
+
+
 def test_intent_normalization_reconciles_vision_and_malformed_duplicate_requirements():
     mission = MissionInterpretation(
         mission_type="product_search", recommendation_mode="bundle", goal="complete the look",
@@ -455,6 +501,78 @@ async def test_invalid_intent_model_output_uses_a_safe_fallback():
     assert result.mission_type == "information_request"
     assert result.goal == "Build a setup"
     assert result.requested_actions == []
+
+
+@pytest.mark.anyio
+async def test_invalid_object_photo_intent_uses_dynamic_vision_catalog_vocabulary():
+    class SearchArgs(BaseModel):
+        queries: list[str] = []
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    result = await IntentMissionAgent(
+        FakeChatModel("not JSON"), tools=[SearchTool()],
+    ).interpret("Shop this shop object image.", runtime_context={
+        "vision_context": {
+            "mode": "shop_object",
+            "shopping_targets": ["smartphone"],
+            "detected_objects": ["smartphone", "camera module"],
+            "category": ["electronics", "mobile phone"],
+        },
+    })
+
+    requirement = result.search_requirements[0]
+    assert requirement.original_text == "smartphone"
+    assert requirement.canonical_role == "phone"
+    assert requirement.search_queries[:3] == ["phone", "smartphone", "mobile phone"]
+    assert [item.value for item in result.fulfillment_requirements] == ["phone"]
+    assert "Shop this shop object image." not in requirement.search_queries
+
+
+@pytest.mark.anyio
+async def test_intent_fallback_preserves_valid_dynamic_role_expansions():
+    class SearchArgs(BaseModel):
+        query_groups: list[dict[str, object]] = []
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    # An invalid top-level field forces the safe fallback, while the role
+    # expansion itself remains valid and must not be discarded.
+    response = json.dumps({
+        "mission_type": "product_search",
+        "recommendation_mode": "kit",
+        "goal": "Build a weekly wash kit",
+        "requires_catalog": True,
+        "requested_actions": ["search_products"],
+        "bundle_items": [{"query": "car wash soap", "quantity": 1}],
+        "search_requirements": [{
+            "original_text": "car wash soap",
+            "canonical_role": "car wash soap",
+            "search_queries": [
+                "car wash soap", "car cleaning shampoo", "car shampoo",
+            ],
+        }],
+        "fulfillment_requirements": [{
+            "kind": "category", "value": "car wash soap", "quantity": 1,
+        }],
+    })
+
+    result = await IntentMissionAgent(
+        FakeChatModel(response), tools=[SearchTool()],
+    ).interpret("Build a weekly wash kit")
+
+    assert result.recommendation_mode == "bundle"
+    assert result.search_requirements[0].canonical_role == "car shampoo"
+    assert result.search_requirements[0].search_queries == [
+        "car shampoo", "car wash soap", "car cleaning shampoo",
+    ]
+    assert result.fulfillment_requirements[0].value == "car shampoo"
 
 
 @pytest.mark.anyio
@@ -1018,6 +1136,48 @@ def test_phone_role_expands_catalog_wording_and_matches_phone_categories():
     )
 
 
+def test_object_photo_features_remain_soft_and_do_not_hide_valid_products():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="single",
+        goal="Find a wireless computer mouse", requires_catalog=True,
+        catalog_query="wireless computer mouse",
+        bundle_items=[{"query": "wireless computer mouse"}],
+        search_requirements=[{
+            "original_text": "Wireless Computer Mouse",
+            "canonical_role": "Wireless Computer Mouse",
+            "required_features": ["wireless"],
+            "preferred_features": ["ergonomic", "minimalist"],
+            "search_queries": [
+                "Wireless Computer Mouse", "wireless computer mouse",
+                "ergonomic wireless mouse", "minimalist black wireless mouse",
+            ],
+        }],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "Wireless Computer Mouse"},
+            {"kind": "feature", "value": "wireless", "field": "Wireless Computer Mouse"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "shop_object",
+            "detected_objects": ["computer mouse"],
+            "shopping_targets": ["wireless computer mouse"],
+            "style": ["wireless", "ergonomic"],
+            "visual_constraints": ["Connectivity type is not visible."],
+        }},
+        user_request="Shop this shop object image.",
+    )
+
+    assert normalized.search_requirements[0].canonical_role == "mouse"
+    assert normalized.search_requirements[0].search_queries[0] == "mouse"
+    assert normalized.search_requirements[0].required_features == []
+    assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
+        {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+    ]
+
+
 def test_single_recommendation_returns_up_to_six_comparable_choices():
     state = initial_shopping_state("Recommend a phone")
     state.update({
@@ -1193,7 +1353,7 @@ async def test_bundle_resolves_generic_product_form_terms_from_catalog_evidence(
         mission, None, user_request="Build a weekly wash kit",
     )
     role = normalized.fulfillment_requirements[0].value
-    assert role == "car wash shampoo"
+    assert role == "car shampoo"
 
     state = initial_shopping_state("Build a weekly wash kit")
     state.update({
@@ -1397,13 +1557,13 @@ def test_bundle_refinement_inherits_the_complete_prior_mission_contract():
     assert merged.selection_criteria == follow_up.selection_criteria
 
 
-def test_manager_always_runs_optimizer_for_bundle_mode_even_with_one_planned_role():
+def test_manager_always_runs_llm_selector_for_bundle_mode_even_with_one_planned_role():
     plan = WorkflowManager().plan({
         "mission_type": "product_search", "recommendation_mode": "bundle",
         "required_categories": ["travel setup"], "owned_items": [],
     }, ["search_products"])
 
-    assert plan["stages"] == ["bundle_optimizer"]
+    assert plan["stages"] == ["product_selector"]
 
 
 def test_manager_does_not_schedule_review_intelligence_for_aggregate_ratings():

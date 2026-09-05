@@ -217,6 +217,9 @@ class BrandVoiceAgent:
             "fulfillment_gaps": state.get("fulfillment_gaps", []),
             "fulfillment_requirements": state.get("fulfillment_requirements", []),
             "selection_context": state.get("selection_context", {}),
+            "selection_source": state.get("selection_source"),
+            "selection_reasoning": state.get("selection_reasoning", []),
+            "selection_errors": state.get("selection_errors", []),
             "repair_feedback": state.get("repair_feedback", []),
             "brand_voice_guidance": self._voice_guidance(state),
         }
@@ -308,11 +311,10 @@ class BrandVoiceAgent:
             candidate_ids = set(products_by_id)
             if cls._is_valid_catalog_selection(preferred_ids, candidate_ids):
                 return preferred_ids
-            deterministic = cls.select_catalog_products(state, limit=6)
-            return [
-                str(item["id"]) for item in deterministic
-                if str(item.get("id")) in candidate_ids
-            ]
+            # Product IDs must originate from the LLM selector. A response
+            # formatting failure is not authorization for deterministic code
+            # to make a new recommendation decision.
+            return []
         selected_ids = [
             str(item.get("id")) for item in state.get("selected_products", [])
             if isinstance(item, dict) and str(item.get("id")) in products_by_id
@@ -787,6 +789,7 @@ class BrandVoiceAgent:
         return (
             state.get("recommendation_mode", "single") == "single"
             and BrandVoiceAgent.is_shopping_mission(state.get("mission_type"))
+            and state.get("selection_source") is None
             and not state.get("selected_products")
             and bool(state.get("candidate_products"))
         )
