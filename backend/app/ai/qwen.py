@@ -59,11 +59,12 @@ class QwenClient:
         max_output_tokens: int,
         response_mime_type: str | None = None,
         enable_thinking: bool | None = None,
+        qwen_model: str | None = None,
     ) -> QwenGeneration:
         messages = [{"role": "system", "content": system_instruction}]
         messages.extend(self._messages_from_contents(contents))
         return await self._complete(
-            model=settings.qwen_model,
+            model=qwen_model or settings.qwen_model,
             messages=messages,
             max_output_tokens=max_output_tokens,
             response_mime_type=response_mime_type,

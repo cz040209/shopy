@@ -13,7 +13,7 @@ from app.agentic.product_search import ProductSearchAgent
 from app.agentic.schemas import BundleItemPlan, MissionInterpretation, SearchRequirement
 from app.agentic.state import initial_shopping_state
 from app.agentic.tools import CommerceToolRegistry
-from app.agentic.vision import VisionAgent
+from app.agentic.vision import VISION_PROMPT, VisionAgent
 from app.models import Category, Product, ProductStatus, Seller, SellerStatus
 
 
@@ -70,7 +70,7 @@ def test_search_requirement_keeps_dynamic_aliases_for_lexical_role_variant():
 
     assert result[0].canonical_role == "lighting"
     assert result[0].search_queries == [
-        "lighting", "desk light", "ambient lighting", "RGB light", "LED light", "light",
+        "lighting", "light", "desk light", "ambient lighting", "RGB light", "LED light",
     ]
 
 
@@ -131,15 +131,21 @@ async def test_role_expanded_search_uses_one_tool_call_and_json_catalog_evidence
 
 
 class VisionGenerator:
+    last_kwargs = None
+
     async def generate(self, **kwargs):
+        self.last_kwargs = kwargs
         return '{"detected_objects":["sofa","window"],"category":["living room"],"colors":["beige"],"style":["minimal"],"existing_items":["sofa"],"possible_shopping_needs":["floor lamp"],"visual_constraints":["keep walkway clear"]}'
 
 
 @pytest.mark.anyio
 async def test_vision_agent_returns_structured_context_and_rejects_missing_image():
-    agent = VisionAgent(VisionGenerator())
+    generator = VisionGenerator()
+    agent = VisionAgent(generator)
     context = await agent.analyze(image_bytes=b"image", mime_type="image/png", mode="shop_room")
     assert context.possible_shopping_needs == ["floor lamp"]
+    assert generator.last_kwargs["qwen_model"] == "qwen3.5-omni-plus"
+    assert generator.last_kwargs["enable_thinking"] is False
     state = initial_shopping_state("Shop this room")
     state["vision_input"] = {"image_bytes": b"image", "mime_type": "image/png", "mode": "shop_room"}
     assert (await agent.run(state))["vision_context"]["mode"] == "shop_room"
@@ -147,6 +153,16 @@ async def test_vision_agent_returns_structured_context_and_rejects_missing_image
         await agent.analyze(image_bytes=b"", mime_type="image/png", mode="shop_room")
     with pytest.raises(ValueError, match="Unsupported"):
         await agent.analyze(image_bytes=b"image", mime_type="image/png", mode="bad-mode")
+
+
+def test_vision_prompt_applies_evidence_and_crop_rules_to_every_mode():
+    assert "Evidence and outcome policy for every mode" in VISION_PROMPT
+    assert "not automatically something the customer wants to buy" in VISION_PROMPT
+    assert "framing, occlusion, and image quality" in VISION_PROMPT
+    assert "do not apply a predefined room checklist" in VISION_PROMPT
+    assert "cropped image is incomplete evidence" in VISION_PROMPT
+    assert "anatomy, facial features, hair, and grooming" in VISION_PROMPT
+    assert "do not assume a fixed outfit template" in VISION_PROMPT.casefold()
 
 
 class GraphVisionAgent:
@@ -238,6 +254,39 @@ async def test_bundle_optimizer_enforces_budget_and_reports_coverage():
 
 
 @pytest.mark.anyio
+async def test_bundle_optimizer_fulfills_model_generated_role_menus_without_empty_result():
+    roles = [
+        "bottoms (jeans or chinos)",
+        "footwear (sneakers or boots)",
+        "outerwear layer (optional jacket)",
+        "accessories (watch, cap, or bag)",
+    ]
+    state = initial_shopping_state("Complete this look")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": roles,
+        "fulfillment_requirements": [
+            {"kind": "category", "value": role, "quantity": 1}
+            for role in roles
+        ],
+        "candidate_products": [
+            {"id": "jeans", "name": "Relaxed Carpenter Jeans", "category": "Jeans", "price": "199", "currency": "MYR", "inventory_quantity": 10, "specs": [], "attributes": {}},
+            {"id": "boots", "name": "Trail Grip Hiking Boot", "category": "Shoes", "price": "359", "currency": "MYR", "inventory_quantity": 10, "specs": [], "attributes": {}},
+            {"id": "jacket", "name": "Lightweight Bomber Jacket", "category": "Outerwear", "price": "239", "currency": "MYR", "inventory_quantity": 10, "specs": [], "attributes": {}},
+            {"id": "watch", "name": "Minimal Steel Watch", "category": "Accessories", "price": "229", "currency": "MYR", "inventory_quantity": 10, "specs": [], "attributes": {}},
+        ],
+    })
+
+    result = await BundleOptimizerAgent().run(state)
+
+    assert {item["id"] for item in result["selected_products"]} == {
+        "jeans", "boots", "jacket", "watch",
+    }
+    assert result["bundle"]["required_category_coverage"]["missing"] == []
+    assert result["fulfillment_gaps"] == []
+
+
+@pytest.mark.anyio
 async def test_bundle_optimizer_does_not_use_mousepad_as_mouse_or_gaming_product_as_laptop():
     state = initial_shopping_state("Build a gaming setup under RM 1000")
     state.update({
@@ -277,6 +326,34 @@ async def test_exact_catalog_role_overrides_an_incorrect_semantic_mapping():
     result = await BundleOptimizerAgent(WrongMappingModel()).run(state)
 
     assert result["selected_products"] == [{"id": "arm", "quantity": 1}]
+
+
+@pytest.mark.anyio
+async def test_semantic_mapping_cannot_assign_an_unrelated_product_type_to_a_role():
+    class MixedMappingModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "quality", "rankings": [
+                    {"product_id": "laptop", "score": 100, "reason": "performance"},
+                    {"product_id": "chair", "score": 1, "reason": "correct product type"},
+                ],
+                "need_matches": [{
+                    "need": "gaming chair", "product_ids": ["laptop", "chair"],
+                }],
+            }))
+
+    state = initial_shopping_state("Build a gaming setup")
+    state.update({
+        "recommendation_mode": "bundle", "required_categories": ["gaming chair"],
+        "candidate_products": [
+            {"id": "laptop", "name": "Lenovo Gaming Laptop", "brand": "Lenovo", "category": "Laptops", "price": "3000", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+            {"id": "chair", "name": "Posture Pro Ergonomic Chair", "brand": "Test", "category": "Office Furniture", "price": "999", "currency": "MYR", "inventory_quantity": 2, "specs": [], "attributes": {}},
+        ],
+    })
+
+    result = await BundleOptimizerAgent(MixedMappingModel()).run(state)
+
+    assert result["selected_products"] == [{"id": "chair", "quantity": 1}]
 
 
 @pytest.mark.anyio

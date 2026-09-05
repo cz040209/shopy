@@ -14,7 +14,12 @@ from app.config import settings
 
 from .budgeting import recommendation_budget_limit
 from .intent import AsyncChatModel, _json_object
-from .product_roles import matches_product_role, normalized_terms, units_per_package
+from .product_roles import (
+    has_product_role_overlap,
+    matches_product_role,
+    normalized_terms,
+    units_per_package,
+)
 from .state import ShoppingAgentState
 
 
@@ -83,6 +88,7 @@ class BundleOptimizerAgent:
         unresolved = [need for need, product_ids in deterministic_matches.items() if not product_ids]
         payload = {"mission": state.get("mission", {}), "required_categories": unresolved, "priorities": state.get("priorities", []), "preferences": state.get("preferences", []), "vision_context": state.get("vision_context"), "compatibility": state.get("compatibility_results", []), "products": [{"id": str(item["id"]), "name": item.get("name"), "category": item.get("category"), "price": str(item.get("price")), "rating_average": item.get("rating_average"), "review_count": item.get("review_count"), "specs": item.get("specs", []), "attributes": item.get("attributes", {})} for item in products]}
         valid_ids = {str(product["id"]) for product in products}
+        products_by_id = {str(product["id"]): product for product in products}
         valid_needs = set(unresolved)
         messages = [SystemMessage(content=PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str))]
         last_plan: BundlePlan | None = None
@@ -102,7 +108,11 @@ class BundleOptimizerAgent:
                 mode=plan.mode,
                 rankings=[item for item in plan.rankings if item.product_id in valid_ids],
                 need_matches=[
-                    BundleNeedMatch(need=match.need, product_ids=[product_id for product_id in match.product_ids if product_id in valid_ids])
+                    BundleNeedMatch(need=match.need, product_ids=[
+                        product_id for product_id in match.product_ids
+                        if product_id in valid_ids
+                        and has_product_role_overlap(products_by_id[product_id], match.need)
+                    ])
                     for match in plan.need_matches if match.need in valid_needs
                 ],
             )

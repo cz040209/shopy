@@ -14,6 +14,7 @@ from app.agentic.bundle_optimizer import BundleOptimizerAgent
 from app.agentic.schemas import MissionInterpretation
 from app.agentic.manager import WorkflowManager
 from app.agentic.state import initial_shopping_state
+from app.agentic.product_roles import has_product_role_overlap, matches_product_role, role_alternatives
 
 
 class FakeChatModel:
@@ -98,6 +99,122 @@ def test_intent_normalization_reconciles_vision_and_malformed_duplicate_requirem
     assert "beige t-shirt with navy trim" in normalized.owned_items
 
 
+def test_complete_look_intent_can_correct_salient_but_irrelevant_vision_needs():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="complete the visible outfit", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[{"query": "casual pants"}, {"query": "casual shoes"}],
+        catalog_queries=["casual pants", "chinos", "casual shoes", "sneakers"],
+        search_requirements=[
+            {
+                "original_text": "casual pants", "canonical_role": "pants",
+                "search_queries": ["pants", "chinos", "jeans"],
+            },
+            {
+                "original_text": "casual shoes", "canonical_role": "shoes",
+                "search_queries": ["shoes", "sneakers"],
+            },
+        ],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "casual pants"},
+            {"kind": "category", "value": "casual shoes"},
+            {"kind": "category", "value": "beard grooming products"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "complete_look",
+            "detected_objects": ["person", "black crew-neck shirt", "beard", "hair"],
+            "existing_items": ["black crew-neck shirt"],
+            "style": ["casual", "minimal"],
+            "colors": ["black", "brown"],
+            "possible_shopping_needs": [
+                "beard grooming products", "hair styling products",
+            ],
+        }},
+        user_request="Complete this look from the photo.",
+    )
+
+    assert [item.query for item in normalized.bundle_items] == [
+        "casual pants", "casual shoes",
+    ]
+    assert [item.value for item in normalized.fulfillment_requirements] == [
+        "casual pants", "casual shoes",
+    ]
+    assert normalized.catalog_queries == ["casual pants", "casual shoes"]
+    assert [item.search_queries for item in normalized.search_requirements] == [
+        ["pants", "casual pants", "chinos", "jeans"],
+        ["shoes", "casual shoes", "sneakers"],
+    ]
+    assert normalized.recommendation_mode == "bundle"
+    assert normalized.owned_items == ["black crew-neck shirt"]
+
+
+def test_role_expression_alternatives_match_catalog_identity_without_taxonomy_rules():
+    jeans = {"name": "Relaxed Carpenter Jeans", "category": "Jeans", "attributes": {}}
+    boots = {"name": "Trail Grip Hiking Boot", "category": "Shoes", "attributes": {}}
+    watch = {"name": "Minimal Steel Watch", "category": "Accessories", "attributes": {}}
+    jacket = {"name": "Lightweight Bomber Jacket", "category": "Outerwear", "attributes": {}}
+
+    assert role_alternatives("bottoms (jeans or chinos)") == ["bottoms", "jeans", "chinos"]
+    assert role_alternatives("outerwear layer (optional jacket)") == ["outerwear layer", "jacket"]
+    assert role_alternatives("shoes (waterproof)") == ["shoes (waterproof)"]
+    assert matches_product_role(jeans, "bottoms (jeans or chinos)")
+    assert matches_product_role(boots, "footwear (sneakers or boots)")
+    assert matches_product_role(watch, "accessories (watch, cap, or bag)")
+    assert matches_product_role(jacket, "outerwear layer (optional jacket)")
+    assert has_product_role_overlap(jeans, "bottoms (jeans or chinos)")
+
+
+def test_room_intent_can_correct_an_outcome_irrelevant_vision_need():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="complete the photographed room", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[{"query": "floor lamp"}, {"query": "side table"}],
+        catalog_queries=["floor lamp", "standing light", "side table"],
+        search_requirements=[
+            {
+                "original_text": "floor lamp", "canonical_role": "floor lamp",
+                "search_queries": ["floor lamp", "standing light"],
+            },
+            {
+                "original_text": "side table", "canonical_role": "side table",
+                "search_queries": ["side table", "end table"],
+            },
+        ],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "floor lamp"},
+            {"kind": "category", "value": "side table"},
+            {"kind": "category", "value": "wall repair supplies"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "shop_room",
+            "detected_objects": ["sofa", "window", "coffee table"],
+            "existing_items": ["sofa", "coffee table"],
+            "possible_shopping_needs": ["wall repair supplies"],
+            "visual_constraints": ["preserve circulation"],
+        }},
+        user_request="Shop this room from the photo.",
+    )
+
+    assert [item.query for item in normalized.bundle_items] == [
+        "floor lamp", "side table",
+    ]
+    assert [item.value for item in normalized.fulfillment_requirements] == [
+        "floor lamp", "side table",
+    ]
+    assert normalized.catalog_queries == ["floor lamp", "side table"]
+    assert normalized.owned_items == ["sofa", "coffee table"]
+
+
 def test_intent_normalization_removes_feature_duplicates_embedded_in_bundle_roles():
     mission = MissionInterpretation(
         mission_type="product_search", recommendation_mode="bundle", goal="WFH setup",
@@ -115,6 +232,50 @@ def test_intent_normalization_removes_feature_duplicates_embedded_in_bundle_role
     assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
         {"kind": "category", "value": "chair", "field": None, "quantity": 1},
         {"kind": "category", "value": "desk", "field": None, "quantity": 1},
+    ]
+
+
+def test_intent_normalization_repairs_invented_combo_and_duplicate_role_mapping():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="Set up a gaming desk", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[
+            {"query": "ergonomic gaming chair"},
+            {"query": "adjustable gaming desk"},
+            {"query": "monitor stand for gaming desk"},
+            {"query": "keyboard and mouse combo"},
+        ],
+        search_requirements=[
+            {"original_text": "ergonomic gaming chair", "canonical_role": "gaming chair", "search_queries": ["gaming chair"]},
+            {"original_text": "adjustable gaming desk", "canonical_role": "gaming desk", "search_queries": ["gaming desk"]},
+            {"original_text": "monitor stand for gaming desk", "canonical_role": "gaming desk", "search_queries": ["gaming desk"]},
+            {"original_text": "keyboard and mouse combo", "canonical_role": "keyboard and mouse combo", "search_queries": ["keyboard and mouse combo"]},
+        ],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "Gaming Chair"},
+            {"kind": "category", "value": "Gaming Desk"},
+            {"kind": "category", "value": "Monitor Stand"},
+            {"kind": "category", "value": "Keyboard and Mouse Combo"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="I need to set up my gaming desk",
+    )
+
+    assert [item.query for item in normalized.bundle_items] == [
+        "ergonomic gaming chair", "adjustable gaming desk",
+        "monitor stand for gaming desk", "keyboard", "mouse",
+    ]
+    assert [item.value for item in normalized.fulfillment_requirements] == [
+        "Gaming Chair", "Gaming Desk", "Monitor Stand", "Keyboard", "Mouse",
+    ]
+    assert [item.canonical_role for item in normalized.search_requirements] == [
+        "gaming chair", "gaming desk", "Monitor Stand", "Keyboard", "Mouse",
+    ]
+    assert NeedPlannerAgent().plan(normalized).required_categories == [
+        "Gaming Chair", "Gaming Desk", "Monitor Stand", "Keyboard", "Mouse",
     ]
 
 
@@ -290,6 +451,139 @@ async def test_invalid_intent_model_output_uses_a_safe_fallback():
     assert result.mission_type == "information_request"
     assert result.goal == "Build a setup"
     assert result.requested_actions == []
+
+
+@pytest.mark.anyio
+async def test_non_catalog_intent_cannot_execute_contradictory_catalog_actions():
+    class SearchArgs(BaseModel):
+        query: str | None = None
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    response = json.dumps({
+        "mission_type": "information_request",
+        "recommendation_mode": "single",
+        "goal": "hi",
+        "requires_catalog": False,
+        "catalog_query": "hi",
+        "catalog_queries": ["hi"],
+        "requested_actions": ["search_products"],
+        "bundle_items": [],
+        "search_requirements": [{
+            "original_text": "hi",
+            "canonical_role": "hi",
+            "search_queries": ["hi"],
+        }],
+    })
+    result = await IntentMissionAgent(
+        FakeChatModel(response), tools=[SearchTool()],
+    ).interpret("hi")
+
+    assert result.requires_catalog is False
+    assert result.catalog_query is None
+    assert result.catalog_queries == []
+    assert result.requested_actions == []
+    assert result.bundle_items == []
+    assert result.search_requirements == []
+
+
+@pytest.mark.anyio
+async def test_invalid_refinement_intent_preserves_active_shopping_mission():
+    class SearchArgs(BaseModel):
+        query: str | None = None
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    agent = IntentMissionAgent(FakeChatModel("not JSON"), tools=[SearchTool()])
+    memory = {
+        "selected_products": [{"id": "gaming-desk"}],
+        "current_bundle": {"total": "399.00"},
+        "current_mission": {
+            "mission_type": "product_search",
+            "recommendation_mode": "bundle",
+            "goal": "Set up a gaming desk",
+            "requires_catalog": True,
+            "budget": 4000,
+            "requested_actions": ["search_products"],
+            "bundle_items": [{"query": "desk"}, {"query": "chair"}, {"query": "mouse"}],
+            "search_requirements": [
+                {"original_text": role, "canonical_role": role, "search_queries": [role]}
+                for role in ("desk", "chair", "mouse")
+            ],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": role, "quantity": 1}
+                for role in ("desk", "chair", "mouse")
+            ],
+        },
+    }
+
+    fallback = await agent.interpret(
+        "Prioritize quality and performance",
+        runtime_context={"short_term_memory": memory},
+    )
+    merged = ShoppingOrchestrator._merge_continuation_mission(fallback, memory)
+
+    assert merged.continues_context is True
+    assert merged.recommendation_mode == "bundle"
+    assert merged.goal == "Set up a gaming desk"
+    assert merged.budget == 4000
+    assert [item.query for item in merged.bundle_items] == ["desk", "chair", "mouse"]
+    assert "Prioritize quality and performance" in merged.priorities
+
+
+@pytest.mark.anyio
+async def test_valid_but_roleless_catalog_follow_up_cannot_escape_active_mission():
+    class SearchArgs(BaseModel):
+        query: str | None = None
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    response = json.dumps({
+        "mission_type": "product_search",
+        "recommendation_mode": "single",
+        "goal": "Prioritize quality and performance",
+        "requires_catalog": True,
+        "continues_context": False,
+        "catalog_query": "quality and performance",
+        "catalog_queries": ["quality and performance"],
+        "requested_actions": ["search_products"],
+    })
+    memory = {
+        "selected_products": [{"id": "gaming-desk"}],
+        "current_bundle": {"total": "399.00"},
+        "current_mission": {
+            "mission_type": "product_search", "recommendation_mode": "bundle",
+            "goal": "Set up a gaming desk", "requires_catalog": True,
+            "budget": 4000, "requested_actions": ["search_products"],
+            "bundle_items": [{"query": "desk"}, {"query": "chair"}],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": "desk"},
+                {"kind": "category", "value": "chair"},
+            ],
+        },
+    }
+
+    interpreted = await IntentMissionAgent(
+        FakeChatModel(response), tools=[SearchTool()],
+    ).interpret(
+        "Prioritize quality and performance",
+        runtime_context={"short_term_memory": memory},
+    )
+    merged = ShoppingOrchestrator._merge_continuation_mission(interpreted, memory)
+
+    assert interpreted.continues_context is True
+    assert interpreted.catalog_query is None
+    assert merged.goal == "Set up a gaming desk"
+    assert [item.query for item in merged.bundle_items] == ["desk", "chair"]
 
 
 @pytest.mark.anyio

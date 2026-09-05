@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { LoaderCircle, Plus, Send } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import { MissionData } from "./types";
 import ExtractedChips from "./ExtractedChips";
 import styles from "./mission-studio.module.css";
@@ -26,6 +26,18 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
     if (textareaRef.current) resizeTextarea(textareaRef.current);
   }, [request]);
 
+  const submitMission = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy || !request.trim()) return;
+    onLaunch();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  };
+
   return (
     <section className={styles.inputPanel} aria-labelledby="mission-input-title">
       <div className={styles.sectionIntro}>
@@ -33,7 +45,7 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
         <h2 id="mission-input-title">Set the brief. We’ll handle the details.</h2>
         <p>Describe the outcome, budget, what you already own, and the priorities that should guide the recommendation.</p>
       </div>
-      <div className={styles.inputComposer}>
+      <form className={styles.inputComposer} onSubmit={submitMission}>
         <div className={styles.inputSurface}>
         <textarea
           ref={textareaRef}
@@ -42,14 +54,14 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
             resizeTextarea(event.currentTarget);
             onRequestChange(event.target.value);
           }}
+          onKeyDown={handleKeyDown}
           placeholder="Build me a calm WFH setup under RM2,000. I already own a laptop and prefer warm wood."
           rows={1}
         />
         <motion.button
-          type="button"
+          type="submit"
           className={styles.launchButton}
           disabled={busy || !request.trim()}
-          onClick={onLaunch}
           aria-label={busy ? "Shopy is building your mission" : "Submit mission"}
           title={busy ? "Shopy is building your mission" : "Submit mission"}
           whileHover={busy ? undefined : { y: -2, scale: 1.015 }}
@@ -58,7 +70,7 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
           {busy ? <LoaderCircle size={19} /> : <Send size={19} />}
         </motion.button>
         </div>
-      </div>
+      </form>
       <ExtractedChips mission={mission} onRemoveOwned={onRemoveOwned} />
       <button className={styles.addOwned} type="button" onClick={() => onRequestChange(`${request}${request ? " " : ""}I already own `)}>
         <Plus size={16} /> Add something you own

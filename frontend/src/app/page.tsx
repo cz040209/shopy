@@ -6,7 +6,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, BriefcaseBusiness, House, Plane } from "lucide-react";
 import styles from "./home.module.css";
 import heroTheme from "./home-hero-theme.module.css";
-import AIShoppingCamera from "@/features/vision/components/AIShoppingCamera";
+import AIShoppingCamera, { type VisionAnalysisResult } from "@/features/vision/components/AIShoppingCamera";
 import { API_URL } from "@/lib/api";
 
 const missions = [
@@ -36,6 +36,27 @@ export default function Home() {
     setLaunchingMission(true);
     const launchId = crypto.randomUUID();
     router.push(`/build?mission=${encodeURIComponent(brief)}&autorun=${encodeURIComponent(launchId)}`);
+  };
+
+  const openVisionRecommendation = (analysis: string, attachments: VisionAnalysisResult["attachments"], result: VisionAnalysisResult) => {
+    const goal = typeof result.mission.goal === "string" && result.mission.goal.trim()
+      ? result.mission.goal.trim()
+      : result.mode === "complete_look" ? "Complete my look from this photo" : result.mode === "shop_room" ? "Shop this room from this photo" : "Find products from this photo";
+    try {
+      window.sessionStorage.setItem("shopy:mission-workspace:v2", JSON.stringify({
+        version: 2,
+        routeMission: goal,
+        request: goal,
+        analysis,
+        mission: result.mission,
+        items: attachments,
+        workspace: result.workspace,
+        history: [],
+      }));
+    } catch {
+      // The destination can still render the URL brief if storage is blocked.
+    }
+    router.push(`/build?mission=${encodeURIComponent(goal)}`);
   };
 
   const stopStream = () => {
@@ -121,7 +142,7 @@ export default function Home() {
         <button type="button" className={`${styles.inputAction} ${voiceState === "recording" ? "home-voice-recording" : ""}`} onClick={toggleVoiceInput} disabled={voiceState === "transcribing"} aria-label={voiceState === "recording" ? "Stop recording and transcribe" : "Record a mission by voice"} aria-pressed={voiceState === "recording"}>
           {voiceState === "transcribing" ? <LoaderCircle className="home-voice-spinner" size={19} /> : voiceState === "recording" ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}
         </button>
-        <AIShoppingCamera compact />
+        <AIShoppingCamera compact showResult={false} onAnalysisComplete={openVisionRecommendation} />
         <button className={styles.buildButton} type="submit" disabled={launchingMission}>
           {launchingMission ? "Opening workspace…" : "Build for me"} <ArrowRight size={17} />
         </button>

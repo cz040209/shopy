@@ -69,7 +69,7 @@ async def analyze_shopping_photo(
             request_id=request_id,
             stage="preparing_vision_analysis",
             bytes=len(image_bytes),
-            model=settings.active_llm_model,
+            model=settings.qwen_vision_model if settings.qwen_api_key else settings.gemini_model,
             vision_goal=VISION_PROMPTS[mode],
             reasoning_trace="The selected shopping mode determines the image-analysis goal and product recommendation format.",
         )
@@ -190,7 +190,26 @@ async def analyze_shopping_photo(
         final_output=analysis,
         elapsed_ms=round((time.perf_counter() - started_at) * 1000),
     )
+    mission = {
+        "goal": state.get("goal"),
+        "mission_type": state.get("mission_type"),
+        "recommendation_mode": state.get("recommendation_mode"),
+        "budget": state.get("budget"),
+        "preferences": state.get("preferences", []),
+        "key_requirements": state.get("key_requirements", []),
+        "owned_items": state.get("owned_items", []),
+        "priorities": state.get("priorities", []),
+    }
+    workspace = {
+        "bundle": state.get("bundle"),
+        "compatibility": state.get("compatibility_results", []),
+        "product_rankings": state.get("product_rankings", []),
+        "audit": state.get("audit_result", {}),
+        "fulfillment_gaps": state.get("fulfillment_gaps", []),
+        "unfulfilled_requirements": state.get("unfulfilled_requirements", []),
+    }
     return VisionResponse(
         mode=mode, analysis=analysis, attachments=attachments,
         vision_context=dict(state.get("vision_context", {})),
+        mission=mission, workspace=workspace,
     )

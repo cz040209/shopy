@@ -219,6 +219,35 @@ class CommerceToolRegistry:
                     self.db, queries=group.queries, category_slug=category_slug,
                     seller_slug=seller_slug, limit=limit,
                 )
+                if not products:
+                    # An intent expansion can still be over-specific (for
+                    # example a use-case adjective absent from catalog data).
+                    # Search its meaningful terms independently and interleave
+                    # the results so one broad term cannot consume the role's
+                    # complete candidate allowance.
+                    terms = list(dict.fromkeys(
+                        term for value in [group.role, *group.queries]
+                        for term in re.findall(r"[\w-]+", value.casefold())
+                        if len(term) > 2 and term not in catalog.SEARCH_STOP_WORDS
+                        and not term.startswith("rm") and not term.isdigit()
+                    ))
+                    pools = [
+                        catalog.list_products(
+                            self.db, query=term, category_slug=category_slug,
+                            seller_slug=seller_slug, limit=limit,
+                        )
+                        for term in terms
+                    ]
+                    broadened = {}
+                    for index in range(limit):
+                        for pool in pools:
+                            if index < len(pool):
+                                broadened.setdefault(pool[index].id, pool[index])
+                                if len(broadened) >= limit:
+                                    break
+                        if len(broadened) >= limit:
+                            break
+                    products = list(broadened.values())
                 matches[group.role] = [product.id for product in products]
                 for product in products:
                     merged.setdefault(product.id, product)

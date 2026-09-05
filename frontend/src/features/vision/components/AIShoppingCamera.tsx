@@ -31,6 +31,15 @@ type VisionContext = {
   visual_constraints?: string[];
 };
 
+export type VisionAnalysisResult = {
+  mode: VisionMode;
+  analysis: string;
+  attachments: VisionProductAttachment[];
+  visionContext: VisionContext;
+  mission: Record<string, unknown>;
+  workspace: Record<string, unknown>;
+};
+
 type Props = {
   /** Omit this to let the shopper choose what they want to shop from the photo. */
   mode?: VisionMode;
@@ -39,7 +48,9 @@ type Props = {
   maxFileSizeMb?: number;
   maxDimension?: number;
   quality?: number;
-  onAnalysisComplete?: (analysis: string, attachments: VisionProductAttachment[]) => void;
+  onAnalysisComplete?: (analysis: string, attachments: VisionProductAttachment[], result: VisionAnalysisResult) => void;
+  /** Send the completed recommendation to a parent workspace instead of keeping it in this modal. */
+  showResult?: boolean;
 };
 
 
@@ -54,7 +65,7 @@ const MAX_CAMERA_CAPTURE_WIDTH = 3840;
 const MAX_CAMERA_CAPTURE_HEIGHT = 2160;
 const MAX_SOURCE_FILE_MULTIPLIER = 3;
 
-export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 2048, quality = 0.92, onAnalysisComplete }: Props) {
+export default function AIShoppingCamera({ mode, compact = false, disabled = false, maxFileSizeMb = 10, maxDimension = 2048, quality = 0.92, onAnalysisComplete, showResult = true }: Props) {
   const [stage, setStage] = useState<"mode_select" | "camera" | "preview" | "processing" | "result" | null>(null);
   const [selectedMode, setSelectedMode] = useState<VisionMode | null>(mode ?? null);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
@@ -226,7 +237,7 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       if (styleDirection) data.append("style", styleDirection);
       const response = await fetch(`${API_URL}/api/v1/shopping/missions/vision`, { method: "POST", credentials: "include", body: data });
       const responseText = await response.text();
-      let result: { analysis?: string; detail?: string; attachments?: VisionProductAttachment[]; vision_context?: VisionContext } = {};
+      let result: { mode?: VisionMode; analysis?: string; detail?: string; attachments?: VisionProductAttachment[]; vision_context?: VisionContext; mission?: Record<string, unknown>; workspace?: Record<string, unknown> } = {};
       if (responseText) {
         try {
           result = JSON.parse(responseText) as typeof result;
@@ -245,7 +256,18 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       setAttachments(result.attachments ?? []);
       setVisionContext(result.vision_context ?? {});
       if (styleDirection) setLookStyle(styleDirection);
-      onAnalysisComplete?.(result.analysis, result.attachments ?? []);
+      onAnalysisComplete?.(result.analysis, result.attachments ?? [], {
+        mode: result.mode ?? activeMode,
+        analysis: result.analysis,
+        attachments: result.attachments ?? [],
+        visionContext: result.vision_context ?? {},
+        mission: result.mission ?? {},
+        workspace: result.workspace ?? {},
+      });
+      if (!showResult) {
+        close();
+        return;
+      }
       setStage("result");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "AI analysis could not be completed.");

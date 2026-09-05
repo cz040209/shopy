@@ -1,4 +1,5 @@
 from importlib import import_module
+import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -136,6 +137,48 @@ def test_anonymous_chat_is_persisted_without_a_user(db_session, monkeypatch):
         assert conversation is not None
         assert conversation.user_id is None
         assert len(conversation.messages) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_stream_emits_incremental_deltas_and_final_metadata(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+    install_fake_orchestrator(monkeypatch, chat_route)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(
+            gemini_api_key="test-key",
+            gemini_model="test-model",
+            auth_session_days=7,
+            auth_cookie_secure=False,
+        ),
+    )
+    monkeypatch.setattr(chat_route, "STREAM_WORD_DELAY_SECONDS", 0)
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    try:
+        with client.stream(
+            "POST",
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "hello there"}]},
+        ) as response:
+            events = [json.loads(line) for line in response.iter_lines() if line]
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/x-ndjson")
+        assert "shopy_ai_conversation" in response.cookies
+        assert events[0] == {"type": "start"}
+        assert len([event for event in events if event["type"] == "delta"]) > 1
+        assert "".join(
+            event["delta"] for event in events if event["type"] == "delta"
+        ) == "Verified response for hello there."
+        assert events[-1]["type"] == "done"
+        assert events[-1]["attachments"] == []
     finally:
         app.dependency_overrides.clear()
 

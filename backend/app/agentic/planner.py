@@ -10,7 +10,15 @@ class NeedPlannerAgent:
     """No domain catalogue is embedded here; the intent plan is the source of needs."""
 
     def plan(self, mission: MissionInterpretation) -> NeedPlan:
-        required = [item.query.strip() for item in mission.bundle_items if item.query.strip()]
+        # Typed category requirements are the cleanest product-role contract.
+        # Bundle queries can contain descriptive use-case text intended for
+        # retrieval, which should not become a stricter product identity.
+        required = [
+            item.value.strip() for item in mission.fulfillment_requirements
+            if item.kind.casefold().strip() == "category" and item.value.strip()
+        ]
+        if not required:
+            required = [item.query.strip() for item in mission.bundle_items if item.query.strip()]
         if not required:
             required = [query.strip() for query in mission.catalog_queries if query.strip()]
         if not required and mission.catalog_query:

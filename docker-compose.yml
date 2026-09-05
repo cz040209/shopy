@@ -6,10 +6,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-shopy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shopy_local_password}
       POSTGRES_DB: ${POSTGRES_DB:-shopy}
-    ports:
-      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - shopy_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,8 +21,6 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "${REDIS_PORT:-6380}:6379"
     volumes:
       - shopy_redis_data:/data
     healthcheck:
@@ -34,6 +30,65 @@ services:
       retries: 10
       start_period: 5s
 
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-shopy}:${POSTGRES_PASSWORD:-shopy_local_password}@postgres:5432/${POSTGRES_DB:-shopy}
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_ORIGIN: http://localhost:8002
+      UPLOAD_DIRECTORY: /app/data/uploads
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.7-flash}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen3.6-flash}
+      QWEN_VISION_MODEL: ${QWEN_VISION_MODEL:-qwen3.5-omni-plus}
+      QWEN_AUDIO_MODEL: ${QWEN_AUDIO_MODEL:-qwen3-omni-30b-a3b-captioner}
+    volumes:
+      - shopy_uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        poetry run alembic upgrade head &&
+        poetry run python -m app.scripts.seed_catalog &&
+        poetry run python -m app.scripts.seed_apparel_catalog &&
+        poetry run python -m app.scripts.seed_beauty_catalog &&
+        poetry run python -m app.scripts.seed_car_care_catalog &&
+        poetry run python -m app.scripts.seed_device_catalog &&
+        poetry run python -m app.scripts.seed_furniture_catalog &&
+        poetry run python -m app.scripts.seed_travel_catalog &&
+        poetry run python -m app.scripts.seed_working_kit_catalog &&
+        poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_ORIGIN: http://backend:8000
+      NEXT_PUBLIC_BACKEND_API_URL: ""
+      NEXT_PUBLIC_ASSISTANT_API_URL: ""
+    ports:
+      - "8002:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   shopy_postgres_data:
   shopy_redis_data:
+  shopy_uploads:

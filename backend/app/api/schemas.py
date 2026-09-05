@@ -48,6 +48,10 @@ class VisionResponse(BaseModel):
     analysis: str
     attachments: list[ChatProductAttachment] = Field(default_factory=list)
     vision_context: dict[str, Any] = Field(default_factory=dict)
+    # The camera client hands the already-audited result to the mission
+    # workspace, so it must not infer single-versus-bundle presentation again.
+    mission: dict[str, Any] = Field(default_factory=dict)
+    workspace: dict[str, Any] = Field(default_factory=dict)
 
 
 class TranscriptionResponse(BaseModel):

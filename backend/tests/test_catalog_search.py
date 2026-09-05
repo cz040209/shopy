@@ -100,3 +100,30 @@ async def test_catalog_tool_returns_full_verified_snapshot_without_query_terms(d
     assert products[str(makeup.id)]["search_terms"] == ["blendable", "cheek", "colour"]
     assert products[str(skincare.id)]["specs"] == []
     assert products[str(makeup.id)]["attributes"] == {}
+
+
+@pytest.mark.anyio
+async def test_grouped_search_broadens_an_over_specific_role_without_global_catalog_search(db_session):
+    chair = _product(
+        db_session, sku="CHAIR", name="Posture Pro Ergonomic Chair",
+        category_name="Office Furniture", description="Supportive chair for long sessions.",
+    )
+    desk = _product(
+        db_session, sku="DESK", name="Utility Gaming Desk",
+        category_name="Gaming", description="Stable desk with cable management.",
+    )
+    db_session.commit()
+    registry = CommerceToolRegistry(db_session, "role-broadening")
+
+    result = await registry.execute("search_products", {
+        "query_groups": [{
+            "role": "gaming chair",
+            "queries": ["gaming chair", "ergonomic gaming chair", "comfortable gaming chair"],
+        }],
+        "limit": 6,
+    })
+
+    matched_ids = result["query_matches"]["gaming chair"]
+    assert str(chair.id) in matched_ids
+    assert str(desk.id) in matched_ids
+    assert registry.remaining_calls == registry.max_calls - 1

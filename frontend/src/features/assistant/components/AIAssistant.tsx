@@ -27,6 +27,12 @@ type ChatProductAttachment = {
   image_alt_text?: string | null;
 };
 
+type ChatStreamEvent =
+  | { type: "start" }
+  | { type: "delta"; delta?: string }
+  | { type: "done"; attachments?: ChatProductAttachment[] }
+  | { type: "error"; detail?: string };
+
 const SHOPY_LOGO = "/images/brand/shopy-logo-transparent.png";
 
 export default function AIAssistant() {
@@ -43,6 +49,7 @@ export default function AIAssistant() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isReceivingReply, setIsReceivingReply] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "preview" | "transcribing">("idle");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -80,8 +87,11 @@ export default function AIAssistant() {
 
   const requestAssistantReply = async (history: Message[]) => {
     setIsLoading(true);
+    setIsReceivingReply(false);
+    const assistantMessageId = `assistant-${Date.now()}`;
+    let placeholderAdded = false;
     try {
-      const response = await fetch(`${ASSISTANT_API_URL}/api/chat`, {
+      const response = await fetch(`${ASSISTANT_API_URL}/api/chat/stream`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -94,31 +104,76 @@ export default function AIAssistant() {
           input_payload: history.at(-1)?.inputPayload ?? {},
         }),
       });
-      const data = await response.json() as { reply?: string; detail?: string; attachments?: ChatProductAttachment[] };
-      const reply = data.reply;
-      if (!response.ok || !reply) throw new Error(data.detail ?? "No response received.");
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `assistant-${prev.length + 1}`,
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({})) as { detail?: string };
+        throw new Error(data.detail ?? "No response stream received.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let completed = false;
+
+      const applyEvent = (event: ChatStreamEvent) => {
+        if (event.type === "error") throw new Error(event.detail ?? "The response stream failed.");
+        if (event.type === "delta" && event.delta) {
+          setIsReceivingReply(true);
+          if (!placeholderAdded) {
+            placeholderAdded = true;
+            setMessages((prev) => [...prev, {
+              id: assistantMessageId,
+              role: "assistant",
+              content: event.delta ?? "",
+              timestamp: null,
+            }]);
+          } else {
+            setMessages((prev) => prev.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: message.content + event.delta }
+                : message
+            ));
+          }
+        }
+        if (event.type === "done") {
+          completed = true;
+          setMessages((prev) => prev.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, timestamp: new Date(), attachments: event.attachments ?? [] }
+              : message
+          ));
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) applyEvent(JSON.parse(line) as ChatStreamEvent);
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) applyEvent(JSON.parse(buffer) as ChatStreamEvent);
+      if (!completed) throw new Error("The response stream ended before completion.");
+    } catch (error) {
+      const fallback = error instanceof Error && error.message
+        ? error.message
+        : "I’m unable to connect right now. Please check that the Shopy AI service is running and try again.";
+      setMessages((prev) => placeholderAdded
+        ? prev.map((message) => message.id === assistantMessageId
+          ? { ...message, content: fallback, timestamp: new Date(), attachments: [] }
+          : message)
+        : [...prev, {
+          id: assistantMessageId,
           role: "assistant",
-          content: reply,
+          content: fallback,
           timestamp: new Date(),
-          attachments: data.attachments ?? [],
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `assistant-${prev.length + 1}`,
-          role: "assistant",
-          content: "I’m unable to connect right now. Please check that the Shopy AI service is running and try again.",
-          timestamp: new Date(),
-        },
-      ]);
+        }]
+      );
     } finally {
       setIsLoading(false);
+      setIsReceivingReply(false);
     }
   };
 
@@ -432,7 +487,7 @@ export default function AIAssistant() {
                 );
               })}
 
-              {isLoading && (
+              {isLoading && !isReceivingReply && (
                 <div className={styles.messageRow} role="status" aria-label="Shopy Assistant is thinking">
                   <div className={`${styles.messageAvatar} ${styles.botAvatar} ${styles.thinkingAvatar}`} aria-hidden="true">
                     <Bot size={18} strokeWidth={2.1} />

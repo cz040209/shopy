@@ -5,6 +5,6 @@ Use clear, friendly language and ask one useful follow-up when needed."""
 
 VISION_PROMPTS = {
     "shop_room": "Analyze this room for furniture, colours, style, empty spaces, and practical product recommendations. Give a concise shopping brief with 3-5 ideas.",
-    "complete_look": "Analyze the clothing and accessories in this photo. Suggest complementary items, colours, and styling choices in a concise shopping brief.",
+    "complete_look": "Use visible garments as the anchor for a coordinated outfit. Infer complementary wearable roles from the image framing and style, including useful off-frame roles when appropriate, without treating anatomy or grooming as shopping requests.",
     "shop_object": "Identify the main object in this photo and suggest similar or complementary products. Give a concise shopping brief with 3-5 ideas.",
 }

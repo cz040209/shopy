@@ -55,7 +55,10 @@ class PrimaryLLMClient:
                 failures.append(error)
         if settings.gemini_api_key:
             try:
-                gemini_kwargs = {key: value for key, value in kwargs.items() if key != "enable_thinking"}
+                gemini_kwargs = {
+                    key: value for key, value in kwargs.items()
+                    if key not in {"enable_thinking", "qwen_model"}
+                }
                 result = await GeminiClient(timeout_seconds=self.timeout_seconds).generate_with_usage(**gemini_kwargs)
                 return PrimaryGeneration(**result.__dict__)
             except (GeminiConnectionError, GeminiResponseError) as error:

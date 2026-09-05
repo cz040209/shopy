@@ -18,12 +18,12 @@ Shopy AI is a full-stack e-commerce platform: a Next.js storefront, FastAPI comm
 ## Architecture
 
 ```text
-Next.js storefront :3002
+Next.js storefront :8002
       │ HTTP + cookie credentials
       ▼
-FastAPI API :8000
-  ├── PostgreSQL :5433  — catalog, users, commerce, conversations, run logs
-  ├── Redis :6380       — expiring short-term shopping memory
+FastAPI API (internal Docker network)
+  ├── PostgreSQL         — catalog, users, commerce, conversations, run logs
+  ├── Redis              — expiring short-term shopping memory
   ├── Qwen             — primary intent, planning, vision, and response writing
   ├── Qwen Omni Captioner — primary speech-to-text
   └── Gemini           — fallback provider
@@ -49,90 +49,35 @@ backend/                  FastAPI, Alembic, Poetry, LangGraph agents
   app/scripts/            Catalog seed scripts
   migrations/             Database migrations
   tests/                  Backend tests
-docker-compose.yml        Local PostgreSQL and Redis
+docker-compose.yml        Complete local application stack
 ```
 
 ## Prerequisites
 
-- Node.js 20+ and npm
-- Python 3.11–3.14
-- [Poetry](https://python-poetry.org/)
 - Docker Desktop / Docker Compose
-- Alibaba Cloud Model Studio API key (Qwen primary)
-- Gemini API key (fallback)
+- A Qwen or Gemini API key for AI-powered features (optional for non-AI flows)
 
 ## Quick start
 
-### 1. Create local environment files
+Run the entire application with one command:
 
 ```bash
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env.local
+docker compose up --build
 ```
 
-Set these values in `backend/.env`:
+Open [http://localhost:8002](http://localhost:8002). The first startup applies
+database migrations and seeds every catalog automatically. PostgreSQL, Redis,
+and the API remain private to the Docker network; the frontend proxies `/api`
+and `/uploads` to the API, so the browser has one origin.
 
-```env
-GEMINI_API_KEY=your_gemini_api_key
-QWEN_API_KEY=your_alibaba_cloud_model_studio_api_key
-POSTGRES_PASSWORD=choose_a_local_password
-DATABASE_URL=postgresql+psycopg://shopy:choose_a_local_password@localhost:5433/shopy
-REDIS_PORT=6380
-REDIS_URL=redis://localhost:6380/0
-FRONTEND_ORIGIN=http://localhost:3002
-```
-
-The frontend uses:
-
-```env
-NEXT_PUBLIC_ASSISTANT_API_URL=http://localhost:8000
-```
-
-### 2. Start PostgreSQL and Redis
+To enable AI features, supply a provider key when starting:
 
 ```bash
-docker compose --env-file backend/.env up -d
-docker compose ps
+QWEN_API_KEY=your_key docker compose up --build
 ```
 
-PostgreSQL is exposed on `5433`; Redis is exposed on `6380` to avoid conflicts with another local Redis instance. If the backend runs in the Docker network, use `REDIS_URL=redis://redis:6379/0`.
-
-### 3. Install, migrate, and seed the backend
-
-```bash
-cd backend
-poetry install
-poetry run alembic upgrade head
-poetry run python -m app.scripts.seed_catalog
-poetry run python -m app.scripts.seed_apparel_catalog
-poetry run python -m app.scripts.seed_furniture_catalog
-```
-
-Seed scripts are safe to rerun: known SKUs are updated rather than duplicated.
-
-### 4. Start FastAPI
-
-```bash
-cd backend
-poetry run uvicorn app.main:app --reload --port 8000
-```
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/health/database
-```
-
-### 5. Start the frontend
-
-In another terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev -- --port 3002
-```
-
-Open [http://localhost:3002](http://localhost:3002).
+You can likewise set `POSTGRES_PASSWORD`; otherwise Compose uses the
+development-only default `shopy_local_password`.
 
 ## Configuration
 

@@ -342,8 +342,10 @@ class ShoppingOrchestrator:
         for field in ("catalog_query",):
             if not data.get(field) and previous.get(field):
                 data[field] = previous[field]
-        if data.get("budget") is None and memory_context.get("budget") is not None:
-            data["budget"] = memory_context["budget"]
+        if data.get("budget") is None:
+            remembered_budget = memory_context.get("budget", previous.get("budget"))
+            if remembered_budget is not None:
+                data["budget"] = remembered_budget
         for field in ("preferences", "constraints", "owned_items"):
             remembered = memory_context.get(field)
             if isinstance(remembered, list):
@@ -379,7 +381,23 @@ class ShoppingOrchestrator:
             if not data.get("requested_actions"):
                 data["requested_actions"] = ["search_products"]
         data["optimization_mode"] = mission.optimization_mode or memory_context.get("optimization_mode")
-        return MissionInterpretation.model_validate(data)
+        merged = MissionInterpretation.model_validate(data)
+        recent_messages = memory_context.get("recent_messages", [])
+        original_request = next((
+            str(item.get("content", "")).strip()
+            for item in reversed(recent_messages)
+            if isinstance(item, dict)
+            and str(item.get("role", "")).casefold() == "user"
+            and str(item.get("content", "")).strip()
+        ), None) if isinstance(recent_messages, list) else None
+        # Memory may have been produced by an older intent contract. Normalize
+        # it again using the original customer wording so stale combined roles
+        # or duplicate search mappings cannot survive every refinement.
+        return IntentMissionAgent._normalize_mission(
+            merged,
+            {"short_term_memory": memory_context},
+            user_request=original_request,
+        )
 
     async def _need_planner_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         plan = self.need_planner.plan(MissionInterpretation.model_validate(state["mission"]))

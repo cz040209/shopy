@@ -1,9 +1,13 @@
+import asyncio
+import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -25,6 +29,7 @@ from .auth import SESSION_COOKIE_NAME, get_optional_current_user
 
 router = APIRouter(tags=["assistant"])
 CONVERSATION_COOKIE_NAME = "shopy_ai_conversation"
+STREAM_WORD_DELAY_SECONDS = 0.030
 
 
 @dataclass
@@ -297,3 +302,83 @@ async def chat(
         reply=reply, conversation_id=conversation.id, attachments=attachments,
         mission=mission, workspace=workspace,
     )
+
+
+def _stream_event(event_type: str, **payload: object) -> bytes:
+    """Encode one independently parseable chat-stream event."""
+    return (json.dumps({"type": event_type, **payload}, ensure_ascii=False, default=str) + "\n").encode()
+
+
+@router.post("/api/chat/stream")
+async def stream_chat(
+    payload: ChatRequest,
+    conversation_token: Annotated[
+        str | None, Cookie(alias=CONVERSATION_COOKIE_NAME)
+    ] = None,
+    auth_session_token: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
+    ] = None,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Stream an audited chat response as word-preserving NDJSON deltas."""
+    latest_customer_input = next(
+        (message.content for message in reversed(payload.messages) if message.role == "user"),
+        "",
+    )
+    if not latest_customer_input.strip():
+        raise HTTPException(status_code=400, detail="A customer message is required.")
+    if not (getattr(settings, "qwen_api_key", "") or settings.gemini_api_key):
+        raise HTTPException(status_code=503, detail="No LLM API key is configured.")
+
+    # Resolve the session before returning the StreamingResponse so its HttpOnly
+    # cookie is present in the initial headers. The regular chat path reuses the
+    # same pending conversation through this token and commits it with the reply.
+    _, active_conversation_token = get_or_create_conversation(
+        db=db,
+        token=conversation_token,
+        user=current_user,
+        first_message=latest_customer_input.strip(),
+    )
+    db.flush()
+
+    async def events():
+        yield _stream_event("start")
+        try:
+            result = await chat(
+                payload=payload,
+                http_response=Response(),
+                conversation_token=active_conversation_token,
+                auth_session_token=auth_session_token,
+                current_user=current_user,
+                db=db,
+            )
+        except HTTPException as error:
+            db.rollback()
+            yield _stream_event("error", detail=str(error.detail))
+            return
+        except Exception:
+            db.rollback()
+            yield _stream_event(
+                "error",
+                detail="The shopping assistant could not complete a response. Please try again.",
+            )
+            return
+
+        for word in re.findall(r"\S+\s*", result.reply):
+            yield _stream_event("delta", delta=word)
+            await asyncio.sleep(STREAM_WORD_DELAY_SECONDS)
+        completed = result.model_dump(mode="json")
+        completed.pop("reply", None)
+        yield _stream_event("done", **completed)
+
+    response = StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    set_conversation_cookie(response, active_conversation_token)
+    return response

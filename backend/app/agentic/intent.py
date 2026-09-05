@@ -86,6 +86,16 @@ Return only valid JSON, without Markdown.
   candidate complementary roles when they support the customer's requested
   outcome. Do not turn detected objects into purchase requirements unless the
   customer explicitly asks to replace or duplicate them.
+* For every vision mode, independently validate proposed shopping roles against
+  the selected mode, visible items, framing, style, and constraints. Vision
+  fields are fallible observations, not hard requirements. Replace irrelevant
+  possible_shopping_needs with better outcome-aligned roles, remove visible-item
+  duplicates, and keep distinct product roles independently fulfillable. Derive
+  roles dynamically from the evidence; do not apply a fixed domain checklist.
+* In shop_room, complete practical or visual gaps without rebuying visible room
+  contents. In complete_look, extend visible garments into a coordinated outfit,
+  including useful off-frame roles when appropriate; human anatomy and grooming
+  are not implicit shopping requests.
 * Exception: when vision_context.mode is "shop_object", shopping_targets are
   the object the customer wants to shop, not items they own. Make that target
   the primary shopping role, usually with recommendation_mode="single". Do not
@@ -113,7 +123,14 @@ Available runtime tools (the source of truth for requested_actions):
 
 ### Tool Execution & Actions
 * requested_actions may contain only exact names from the available runtime tools, selected only when needed and according to their documented input schemas.
+* Keep the workflow fields consistent: when requires_catalog=false, requested_actions, catalog_query, catalog_queries, bundle_items, and search_requirements must all be empty. A greeting or casual conversation must never trigger product search or recommendations.
 * When a selected tool needs a set of products and quantities, bundle_items must list each requested product phrase and quantity.
+* Each bundle_items query must describe exactly one independently selectable product role. Keep use case, style, and performance language in preferences/features instead of making it part of the product type. Split different products into separate entries; do not invent a combined "set", "combo", "bundle", "kit", or "pack" unless the customer explicitly requested the products as one packaged item.
+* Never encode a menu of interchangeable examples inside a role using "or" or
+  parentheses. Choose one concise umbrella product type when it is a real
+  product identity; keep catalog wording and acceptable alternatives in that
+  role's search_queries. Each fulfillment requirement must use the same single
+  role meaning.
 * Quantity is customer evidence, not planning advice. Use quantity 1 whenever the customer did not explicitly state a count for that item. Never infer extra units from best practices, typical kits, product usage, or the available budget. Keep the matching fulfillment_requirement quantity identical to its bundle item quantity.
 
 ### Mission Classification (`mission_type`)
@@ -150,11 +167,17 @@ Available runtime tools (the source of truth for requested_actions):
 * Criteria are data for later ranking, not product claims. Do not use a fixed list of customer phrases or invent a criterion the customer did not imply. Return [] when there is no optimisation request.
 * When optimization_mode is set for a catalog-backed continuation, return at
   least one selection criterion that makes the requested improvement verifiable.
+* A short comparative direction that depends on the active mission must remain
+  a continuation and preserve its product roles, bundle shape, budget, and
+  constraints. Never search the catalog for preference words as though they
+  were a new product type.
 
 ### Catalog Queries & Fulfillment Requirements
 * Set catalog_query to null, requested_actions to [], and bundle_items to [] when the request does not need a catalog lookup.
 * For a comparison, catalog_queries should contain one search phrase per product when possible. For other catalog tasks, include the one or more product phrases needed to resolve the request. Never put tool arguments, SQL, or invented product IDs in the plan.
 * For every product role in a catalog-backed mission, add one search_requirements entry. `original_text` preserves the customer's wording and `canonical_role` is the concise product type, not a specific product name.
+* `canonical_role` must identify the product itself. Remove use-case modifiers that catalog products may not repeat. Do not map an accessory to the product it supports: keep the accessory as its own role.
+* Return exactly one search_requirements entry per bundle_items entry, in the same order, with no duplicate canonical role for different requested product types.
 * Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
 * Put an explicitly mandatory capability in `required_features`. Put desired but negotiable qualities in `preferred_features`. A query variant is retrieval vocabulary, not proof that a returned product has that feature; later stages verify facts from the product record.
 * Keep search requirements distinct by product role. For example, a broad lighting role may search `lighting`, `desk light`, `ambient lighting`, `RGB light`, and `LED light`; a retrieved light does not need every optional term in its name.
@@ -200,6 +223,8 @@ def _json_object(content: object) -> dict[str, object]:
 
 
 class IntentMissionAgent:
+    _PACKAGED_ROLE_WORDS = {"bundle", "combo", "kit", "pack", "set"}
+
     def __init__(self, model: AsyncChatModel, *, tools: Iterable[Any] = ()) -> None:
         self.model = model
         self.available_tools = tuple(tools)
@@ -225,18 +250,100 @@ class IntentMissionAgent:
                 ], enable_thinking=False)
                 last_data = _json_object(response.content)
                 mission = MissionInterpretation.model_validate(last_data)
+                # `requires_catalog` is the workflow authorization boundary.
+                # Older model outputs sometimes omitted the flag while still
+                # supplying a catalog action, so retain that compatibility. An
+                # explicit false value, however, must never be allowed to leak
+                # contradictory search actions into the orchestrator.
+                if "requires_catalog" not in last_data and (
+                    mission.requested_actions
+                    or mission.catalog_query
+                    or mission.catalog_queries
+                ):
+                    mission = mission.model_copy(update={"requires_catalog": True})
                 unknown_actions = set(mission.requested_actions) - self.tool_names
                 if unknown_actions:
-                    raise StructuredOutputError("Intent model requested a tool that is not available.")
+                    valid_actions = [
+                        action for action in mission.requested_actions
+                        if action in self.tool_names
+                    ]
+                    if mission.requires_catalog and "search_products" in self.tool_names:
+                        valid_actions.append("search_products")
+                    mission = mission.model_copy(update={
+                        "requested_actions": list(dict.fromkeys(valid_actions)),
+                    })
+                if not mission.requires_catalog and (
+                    mission.requested_actions
+                    or mission.catalog_query
+                    or mission.catalog_queries
+                    or mission.bundle_items
+                    or mission.search_requirements
+                ):
+                    if attempt + 1 < max(1, settings.agent_response_format_attempts):
+                        raise StructuredOutputError(
+                            "A non-catalog mission cannot contain catalog queries or tool actions."
+                        )
+                    mission = mission.model_copy(update={
+                        "catalog_query": None,
+                        "catalog_queries": [],
+                        "requested_actions": [],
+                        "bundle_items": [],
+                        "search_requirements": [],
+                    })
                 memory = runtime_context.get("short_term_memory") if isinstance(runtime_context, dict) else None
                 has_reference_selection = isinstance(memory, dict) and bool(
                     memory.get("selected_products") or memory.get("current_bundle")
                 )
+                prior_mission = memory.get("current_mission") if isinstance(memory, dict) else None
+                has_product_roles = bool(mission.bundle_items) or any(
+                    requirement.kind.casefold().strip() == "category"
+                    for requirement in mission.fulfillment_requirements
+                )
+                if (
+                    has_reference_selection
+                    and isinstance(prior_mission, dict)
+                    and mission.requires_catalog
+                    and not has_product_roles
+                ):
+                    # A catalog-backed follow-up with no new product role is a
+                    # refinement of the active mission, even if the model
+                    # mistakenly labels its preference words as a fresh query.
+                    criteria = mission.selection_criteria or [SelectionCriterion(
+                        field="catalog_facts", operator="prefer_match",
+                        value=mission.optimization_mode or user_request, weight=5,
+                    )]
+                    mission = mission.model_copy(update={
+                        "continues_context": True,
+                        "optimization_mode": mission.optimization_mode or "preference_refinement",
+                        "catalog_query": None,
+                        "catalog_queries": [],
+                        "search_requirements": [],
+                        "preferences": list(dict.fromkeys([
+                            *mission.preferences, user_request.strip(),
+                        ]))[:20],
+                        "priorities": list(dict.fromkeys([
+                            *mission.priorities, user_request.strip(),
+                        ]))[:10],
+                        "selection_criteria": criteria,
+                    })
                 if (
                     mission.continues_context and mission.optimization_mode
                     and has_reference_selection and not mission.selection_criteria
                 ):
-                    raise StructuredOutputError("An optimization continuation requires a verifiable criterion.")
+                    if attempt + 1 < max(1, settings.agent_response_format_attempts):
+                        raise StructuredOutputError("An optimization continuation requires a verifiable criterion.")
+                    # Preserve the valid continuation on the final formatting
+                    # attempt. The broad preference remains useful to semantic
+                    # ranking, while deterministic role and budget enforcement
+                    # still control which products may be selected.
+                    mission = mission.model_copy(update={
+                        "selection_criteria": [SelectionCriterion(
+                            field="catalog_facts",
+                            operator="prefer_match",
+                            value=mission.optimization_mode or user_request,
+                            weight=5,
+                        )],
+                    })
                 return self._normalize_mission(mission, runtime_context, user_request=user_request)
             except ValidationError as error:
                 last_error = StructuredOutputError("Intent model response does not match the mission schema.")
@@ -250,10 +357,12 @@ class IntentMissionAgent:
                 break
         assert last_error is not None
         # A provider-formatting failure must not make the storefront unavailable.
-        # Salvage only schema-validated fields and otherwise use the customer's
-        # text as a broad, read-only catalog query. Product selection and every
-        # claim remain constrained by verified tools and the final auditor.
-        fallback = self._fallback_mission(user_request, last_data)
+        # Salvage only schema-validated fields. An active shopping mission keeps
+        # its verified role contract; otherwise the customer's text becomes a
+        # broad read-only query. Every claim remains tool-grounded.
+        fallback = self._fallback_mission(
+            user_request, last_data, runtime_context=runtime_context,
+        )
         log_ai_event(
             "agent.intent.fallback",
             request_id="intent-fallback",
@@ -275,6 +384,30 @@ class IntentMissionAgent:
                 token = token[:-1]
             terms.add(token)
         return terms
+
+    @classmethod
+    def _split_invented_packaged_role(
+        cls, value: str, user_request: str | None,
+    ) -> list[str]:
+        """Split model-invented multi-product packages into selectable roles."""
+        tokens = re.findall(r"[\w]+", value.casefold())
+        request_terms = cls._terms(user_request or "")
+        package_words = cls._PACKAGED_ROLE_WORDS.intersection(tokens)
+        if (
+            "and" not in tokens
+            or not package_words
+            or cls._terms(value).issubset(request_terms)
+        ):
+            return [value.strip()]
+        parts = re.split(r"\s+and\s+", value, flags=re.IGNORECASE)
+        cleaned = [
+            " ".join(
+                token for token in re.findall(r"[\w-]+", part)
+                if token.casefold() not in cls._PACKAGED_ROLE_WORDS
+            ).strip()
+            for part in parts
+        ]
+        return [part for part in cleaned if part] or [value.strip()]
 
     @classmethod
     def _covered_by_owned(cls, phrase: str, owned_items: list[str]) -> bool:
@@ -434,16 +567,24 @@ class IntentMissionAgent:
             and (not scene_photo or not cls._overlaps_visible_role(item, visible_roles))
         ] if isinstance(vision, dict) and mission.requires_catalog else []
 
+        expanded_bundle_items = [
+            item.model_copy(update={"query": role})
+            for item in mission.bundle_items
+            for role in cls._split_invented_packaged_role(item.query, user_request)
+        ]
         bundle_items = [
             item.model_copy(update={
                 "quantity": cls._grounded_quantity(
                     user_request, item.query, item.quantity,
                     runtime_context=runtime_context if mission.continues_context else None,
                 ),
-            }) for item in mission.bundle_items
+            }) for item in expanded_bundle_items
             if not cls._covered_by_owned(item.query, owned)
             and (not object_photo or cls._matches_visual_target(item.query, visual_targets))
-            and (not scene_photo or cls._matches_visual_target(item.query, vision_needs))
+            # Scene intent is an independent semantic checkpoint. It may
+            # correct an outcome-irrelevant raw need, but cannot rebuy a role
+            # already established as visible.
+            and (not scene_photo or not cls._overlaps_visible_role(item.query, visible_roles))
         ]
         if object_photo:
             # Preserve a richer model-provided target (for example,
@@ -453,6 +594,15 @@ class IntentMissionAgent:
                 cls._matches_visual_target(item.query, visual_targets)
                 for item in bundle_items
             ) else visual_targets
+        elif scene_photo and bundle_items:
+            # Prefer the intent agent's outcome-aware correction for every
+            # scene mode. Retain a raw need only when it describes the same
+            # product role, so salience cannot create an extra requirement.
+            interpreted_roles = [item.query for item in bundle_items]
+            vision_needs = [
+                need for need in vision_needs
+                if cls._matches_visual_target(need, interpreted_roles)
+            ]
         existing_queries = {item.query.casefold() for item in bundle_items}
         for need in vision_needs:
             if need.casefold() not in existing_queries and not cls._matches_visual_target(
@@ -461,7 +611,19 @@ class IntentMissionAgent:
                 bundle_items.append(BundleItemPlan(query=need, quantity=1))
                 existing_queries.add(need.casefold())
 
-        role_phrases = [item.query for item in bundle_items]
+        descriptive_role_phrases = [item.query for item in bundle_items]
+        category_role_phrases = [
+            role
+            for requirement in mission.fulfillment_requirements
+            if requirement.kind.casefold().strip() == "category"
+            for role in cls._split_invented_packaged_role(requirement.value, user_request)
+            if not cls._covered_by_owned(role, owned)
+        ]
+        role_phrases = (
+            category_role_phrases
+            if len(category_role_phrases) == len(bundle_items)
+            else [item.query for item in bundle_items]
+        )
         if not role_phrases:
             role_phrases.extend(
                 requirement.value for requirement in mission.fulfillment_requirements
@@ -478,13 +640,24 @@ class IntentMissionAgent:
             "attribute", "attributes", "capability", "capabilities", "feature",
             "features", "spec", "specification", "specifications", "specs",
         }
-        for requirement in mission.fulfillment_requirements:
+        expanded_requirements = [
+            requirement.model_copy(update={"value": value})
+            for requirement in mission.fulfillment_requirements
+            for value in (
+                cls._split_invented_packaged_role(requirement.value, user_request)
+                if requirement.kind.casefold().strip() == "category"
+                else [requirement.value]
+            )
+        ]
+        for requirement in expanded_requirements:
             if cls._covered_by_owned(requirement.value, owned):
                 continue
             kind = requirement.kind.casefold().strip()
             if object_photo and kind == "category" and not cls._matches_visual_target(requirement.value, visual_targets):
                 continue
-            if scene_photo and kind == "category" and not cls._matches_visual_target(requirement.value, vision_needs):
+            if scene_photo and kind == "category" and bundle_items and not cls._matches_visual_target(
+                requirement.value, [item.query for item in bundle_items]
+            ):
                 continue
             if photo_mission and kind in {"attribute", "feature"} and not cls._request_explicitly_mentions(requirement.value, user_request):
                 continue
@@ -500,7 +673,7 @@ class IntentMissionAgent:
             # partial requirements such as `ergonomic` plus `ergonomic chair`.
             if kind == "feature" and any(
                 cls._terms(requirement.value).issubset(cls._terms(role))
-                for role in role_phrases if cls._terms(requirement.value)
+                for role in descriptive_role_phrases if cls._terms(requirement.value)
             ):
                 continue
             matching_bundle_item = next((
@@ -567,7 +740,9 @@ class IntentMissionAgent:
         catalog_queries = [
             query for query in mission.catalog_queries
             if not cls._covered_by_owned(query, owned)
-            and (not scene_photo or cls._matches_visual_target(query, vision_needs))
+            and (not scene_photo or not bundle_items or cls._matches_visual_target(
+                query, [item.query for item in bundle_items]
+            ))
         ]
         catalog_queries.extend(item.query for item in bundle_items)
         data.update({
@@ -603,6 +778,7 @@ class IntentMissionAgent:
     ) -> list[SearchRequirement]:
         """Keep model expansions role-bound and supply a safe dynamic fallback."""
         normalized: list[SearchRequirement] = []
+        used_canonical_roles: set[str] = set()
         unique_roles = list(dict.fromkeys(item.strip() for item in roles if item.strip()))
         for index, role in enumerate(unique_roles):
             matching = next((
@@ -624,13 +800,23 @@ class IntentMissionAgent:
                     search_queries=[role],
                 ))
                 continue
+            canonical_role = matching.canonical_role
+            canonical_key = " ".join(sorted(cls._terms(canonical_role)))
+            is_invented_package = len(
+                cls._split_invented_packaged_role(canonical_role, None)
+            ) > 1
+            if not canonical_key or canonical_key in used_canonical_roles or is_invented_package:
+                canonical_role = role
+                canonical_key = " ".join(sorted(cls._terms(canonical_role)))
+            used_canonical_roles.add(canonical_key)
             queries = list(dict.fromkeys(
                 query.strip() for query in [
-                    matching.canonical_role, *matching.search_queries, role,
+                    canonical_role, role, *matching.search_queries,
                 ] if query.strip()
             ))[:6]
             normalized.append(matching.model_copy(update={
                 "original_text": role,
+                "canonical_role": canonical_role,
                 "search_queries": queries,
             }))
         return normalized
@@ -689,9 +875,15 @@ class IntentMissionAgent:
         ) else 1
 
     def _fallback_mission(
-        self, user_request: str, partial: dict[str, object]
+        self, user_request: str, partial: dict[str, object],
+        *, runtime_context: dict[str, Any] | None = None,
     ) -> MissionInterpretation:
         can_search = "search_products" in self.tool_names
+        memory = runtime_context.get("short_term_memory") if isinstance(runtime_context, dict) else None
+        prior_mission = memory.get("current_mission") if isinstance(memory, dict) else None
+        has_active_mission = isinstance(prior_mission, dict) and bool(
+            memory.get("selected_products") or memory.get("current_bundle")
+        )
         goal_value = partial.get("goal")
         goal = str(goal_value).strip()[:300] if isinstance(goal_value, str) and goal_value.strip() else user_request.strip()[:300]
         budget_value = partial.get("budget")
@@ -741,7 +933,7 @@ class IntentMissionAgent:
             else "product_search" if can_search else "information_request"
         )
         optimization_value = partial.get("optimization_mode")
-        return MissionInterpretation(
+        fallback = MissionInterpretation(
             mission_type=mission_type,
             recommendation_mode=recommendation_mode,
             goal=goal,
@@ -776,3 +968,28 @@ class IntentMissionAgent:
                 search_queries=[catalog_query],
             )] if catalog_query else []),
         )
+        if has_active_mission and not bundle_items and not requirements:
+            # A malformed response for a terse follow-up must not turn words
+            # such as "better" or "performance" into a global catalog role.
+            # Leave role fields empty so the orchestrator inherits the last
+            # verified mission contract and applies this text as a preference.
+            return fallback.model_copy(update={
+                "continues_context": True,
+                "optimization_mode": "preference_refinement",
+                "catalog_query": None,
+                "catalog_queries": [],
+                "bundle_items": [],
+                "search_requirements": [],
+                "fulfillment_requirements": [],
+                "preferences": list(dict.fromkeys([
+                    *fallback.preferences, user_request.strip(),
+                ]))[:20],
+                "priorities": list(dict.fromkeys([
+                    *fallback.priorities, user_request.strip(),
+                ]))[:10],
+                "selection_criteria": [SelectionCriterion(
+                    field="catalog_facts", operator="prefer_match",
+                    value=user_request.strip(), weight=5,
+                )],
+            })
+        return fallback

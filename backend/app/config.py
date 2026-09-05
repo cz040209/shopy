@@ -25,9 +25,12 @@ class Settings(BaseSettings):
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     qwen_model: str = "qwen3.6-flash"
+    # Available in the Model Studio free quota and accepts image input through
+    # the OpenAI-compatible chat-completions endpoint.
+    qwen_vision_model: str = "qwen3.5-omni-plus"
     qwen_audio_model: str = "qwen3-omni-30b-a3b-captioner"
     qwen_enable_thinking: bool = True
-    frontend_origin: str = "http://localhost:3002"
+    frontend_origin: str = "http://localhost:8002"
     transcription_default_language: str = "en"
     transcription_timeout_seconds: float = 60
     ai_log_customer_input: bool = True
