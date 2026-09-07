@@ -216,7 +216,9 @@ export default function MissionWorkspace() {
       const decoder = new TextDecoder();
       let buffer = "";
       let reply = "";
-      let completed: Extract<MissionStreamEvent, { type: "done" }> | null = null;
+      const streamResult: {
+        completed?: Extract<MissionStreamEvent, { type: "done" }>;
+      } = {};
       const applyEvent = (line: string) => {
         let event: MissionStreamEvent;
         try {
@@ -228,7 +230,7 @@ export default function MissionWorkspace() {
           throw new Error(event.detail ?? "We could not complete that mission right now.");
         }
         if (event.type === "delta" && event.delta) reply += event.delta;
-        if (event.type === "done") completed = event;
+        if (event.type === "done") streamResult.completed = event;
       };
 
       try {
@@ -246,6 +248,7 @@ export default function MissionWorkspace() {
         throw streamError;
       }
 
+      const completed = streamResult.completed;
       if (!completed || !reply.trim()) {
         throw new Error("The mission response ended before the recommendation was ready. Please try again.");
       }
@@ -512,7 +515,9 @@ export default function MissionWorkspace() {
             ) : (
               <section className={styles.insight}><span>MISSION INSIGHT</span><p>{analysis}</p></section>
             )}
-            <AlternativeBundles items={items} onExplore={refine} />
+            {(mission.recommendation_mode ?? bundleWorkspace.recommendation_mode) === "bundle" && (
+              <AlternativeBundles items={items} disabled={busy} onExplore={refine} />
+            )}
           </motion.section>
         )}
       </AnimatePresence>

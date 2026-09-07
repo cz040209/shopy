@@ -11,10 +11,23 @@ class BundleItemPlan(BaseModel):
 
 
 class SearchRequirement(BaseModel):
-    """Retrieval vocabulary for one product role, without changing its meaning."""
+    """A broad retrieval role plus the customer's product-specific modifiers."""
 
-    original_text: str = Field(min_length=1, max_length=160)
-    canonical_role: str = Field(min_length=1, max_length=120)
+    original_text: str = Field(
+        min_length=1, max_length=160,
+        description="Complete customer wording for this product need.",
+    )
+    canonical_role: str = Field(
+        min_length=1, max_length=120,
+        description="Bare catalog-neutral base product type used for recall-oriented retrieval.",
+    )
+    customer_required: bool = Field(
+        default=True,
+        description=(
+            "True only when the customer explicitly requested this product role; "
+            "false when the LLM inferred it to broaden discovery."
+        ),
+    )
     required_features: list[str] = Field(default_factory=list, max_length=8)
     preferred_features: list[str] = Field(default_factory=list, max_length=8)
     search_queries: list[str] = Field(default_factory=list, min_length=1, max_length=6)

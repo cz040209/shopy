@@ -29,7 +29,9 @@ export type MissionHistoryItem = {
 };
 
 export type BundleWorkspace = {
+  recommendation_mode?: "single" | "bundle" | null;
   bundle?: {
+    mode?: "bundle";
     rationale?: string[];
     trade_offs?: string[];
     budget_remaining?: string | number | null;

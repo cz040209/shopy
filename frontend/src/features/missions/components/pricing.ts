@@ -31,7 +31,7 @@ export function recommendationPriceSummary(
       value: maximum,
       label: minimum === maximum
         ? `RM ${money(minimum)}`
-        : `RM ${money(minimum)} – RM ${money(maximum)}`,
+        : `RM ${money(minimum)} to RM ${money(maximum)}`,
     };
   }
 

@@ -5,14 +5,12 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
-      - path: ./compose.defaults.env
-      - path: ./backend/.env
-        required: false
+      - ./.env
     volumes:
       - shopy_postgres_data:/var/lib/postgresql/data
     ports:
       # Host tools use localhost:5433; Compose services use postgres:5432.
-      - "5433:5432"
+      - "${POSTGRES_PORT}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -38,13 +36,11 @@ services:
       context: ./backend
     restart: unless-stopped
     env_file:
-      - path: ./compose.defaults.env
-      - path: ./backend/.env
-        required: false
+      - ./.env
     environment:
-      REDIS_URL: redis://redis:6379/0
-      FRONTEND_ORIGIN: http://localhost:8002
-      UPLOAD_DIRECTORY: /app/data/uploads
+      REDIS_URL: ${DOCKER_REDIS_URL}
+      FRONTEND_ORIGIN: ${DOCKER_FRONTEND_ORIGIN}
+      UPLOAD_DIRECTORY: ${DOCKER_UPLOAD_DIRECTORY}
     volumes:
       - shopy_uploads:/app/data/uploads
     depends_on:
@@ -71,16 +67,18 @@ services:
     build:
       context: ./frontend
       args:
-        BACKEND_ORIGIN: http://backend:8000
-        BACKEND_PROXY_TIMEOUT_MS: "120000"
+        BACKEND_ORIGIN: ${BACKEND_ORIGIN}
+        BACKEND_PROXY_TIMEOUT_MS: ${BACKEND_PROXY_TIMEOUT_MS}
+        NEXT_PUBLIC_BACKEND_API_URL: ${NEXT_PUBLIC_BACKEND_API_URL}
+        NEXT_PUBLIC_ASSISTANT_API_URL: ${NEXT_PUBLIC_ASSISTANT_API_URL}
     restart: unless-stopped
     environment:
-      BACKEND_ORIGIN: http://backend:8000
-      BACKEND_PROXY_TIMEOUT_MS: "120000"
-      NEXT_PUBLIC_BACKEND_API_URL: ""
-      NEXT_PUBLIC_ASSISTANT_API_URL: ""
+      BACKEND_ORIGIN: ${BACKEND_ORIGIN}
+      BACKEND_PROXY_TIMEOUT_MS: ${BACKEND_PROXY_TIMEOUT_MS}
+      NEXT_PUBLIC_BACKEND_API_URL: ${NEXT_PUBLIC_BACKEND_API_URL}
+      NEXT_PUBLIC_ASSISTANT_API_URL: ${NEXT_PUBLIC_ASSISTANT_API_URL}
     ports:
-      - "8002:3000"
+      - "${APP_PORT}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -90,12 +88,10 @@ services:
       context: ./backend
     restart: unless-stopped
     env_file:
-      - path: ./compose.defaults.env
-      - path: ./backend/.env
-        required: false
+      - ./.env
     environment:
-      REDIS_URL: redis://redis:6379/0
-      UPLOAD_DIRECTORY: /app/data/uploads
+      REDIS_URL: ${DOCKER_REDIS_URL}
+      UPLOAD_DIRECTORY: ${DOCKER_UPLOAD_DIRECTORY}
     volumes:
       - shopy_uploads:/app/data/uploads
     depends_on:

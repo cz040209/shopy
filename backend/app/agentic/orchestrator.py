@@ -25,7 +25,7 @@ from .observability import OrchestrationRecorder, active_recorder, safe_audit_da
 from .product_resolution import ProductResolutionAgent
 from .product_search import ProductSearchAgent
 from .product_selector import ProductSelectorAgent
-from .schemas import MissionInterpretation
+from .schemas import FulfillmentRequirement, MissionInterpretation, SearchRequirement
 from .state import ShoppingAgentState, initial_shopping_state
 from .tools import CommerceToolRegistry, ToolExecutionError
 from .vision import VisionAgent
@@ -34,8 +34,8 @@ from .vision import VisionAgent
 class ShoppingOrchestrator:
     """Main controller for the first LangGraph shopping workflow.
 
-    Product Search, Compatibility, Bundle,
-    Auditor, Repair, and Vision nodes attach after ``next_stage``.
+    Product Search, LLM Selection, Compatibility, Auditor, and Vision nodes
+    attach after ``next_stage``.
     """
 
     def __init__(
@@ -44,7 +44,6 @@ class ShoppingOrchestrator:
         *,
         tool_registry: CommerceToolRegistry | None = None,
         auditor: ShoppingAuditor | None = None,
-        max_repairs: int = settings.agent_max_repair_attempts,
         max_graph_iterations: int = settings.agent_max_graph_iterations,
         recorder: OrchestrationRecorder | None = None,
         vision_agent: VisionAgent | None = None,
@@ -67,7 +66,6 @@ class ShoppingOrchestrator:
         # pricing, totals, constraints, response claims, and attachments are
         # verified without another provider call.
         self.auditor = auditor or ShoppingAuditor()
-        self.max_repairs = max_repairs
         self.max_graph_iterations = max_graph_iterations
         self._started_at: float | None = None
         self.recorder = recorder
@@ -92,7 +90,6 @@ class ShoppingOrchestrator:
         add_node("brand_voice", self._brand_voice_node)
         add_node("final_audit", self._final_audit_node)
         add_node("restore_audited_draft", self._restore_audited_draft_node)
-        add_node("repair", self._repair_node)
         add_node("memory_update", self._memory_update_node)
         workflow.add_edge(START, "memory_load")
         workflow.add_conditional_edges("memory_load", self._route_start, {"vision": "vision", "intent_agent": "intent_agent"})
@@ -127,16 +124,15 @@ class ShoppingOrchestrator:
         workflow.add_conditional_edges(
             "audit",
             self._after_audit,
-            {"repair": "repair", "brand_voice": "brand_voice", "memory_update": "memory_update", "end": END},
+            {"brand_voice": "brand_voice", "memory_update": "memory_update", "end": END},
         )
         workflow.add_edge("brand_voice", "final_audit")
         workflow.add_conditional_edges(
             "final_audit", self._after_final_audit,
-            {"repair": "repair", "restore_audited_draft": "restore_audited_draft", "memory_update": "memory_update", "end": END},
+            {"restore_audited_draft": "restore_audited_draft", "memory_update": "memory_update", "end": END},
         )
         workflow.add_edge("restore_audited_draft", "final_audit")
         workflow.add_edge("memory_update", END)
-        workflow.add_edge("repair", "response_draft")
         return workflow.compile()
 
     def _event(self, state: ShoppingAgentState, node: str) -> dict[str, int]:
@@ -167,8 +163,6 @@ class ShoppingOrchestrator:
             inputs["selected_products"] = state.get("selected_products", [])
         elif node == "audit":
             inputs["selected_products"] = state.get("selected_products", [])
-        elif node == "repair":
-            inputs["audit_result"] = state.get("audit_result")
         elif node == "memory_update":
             inputs["memory_session_scope"] = bool(state.get("memory_session_scope"))
         return inputs
@@ -217,7 +211,29 @@ class ShoppingOrchestrator:
 
     @staticmethod
     def _after_need_planner(state: ShoppingAgentState) -> str:
-        return "planning" if state.get("requires_planning") else "manager"
+        search_roles = {
+            str(item.get("canonical_role", "")).strip()
+            for item in state.get("search_requirements", [])
+            if isinstance(item, dict) and str(item.get("canonical_role", "")).strip()
+        }
+        required_roles = {
+            str(role).strip() for role in state.get("required_categories", [])
+            if str(role).strip()
+        }
+        complete_catalog_contract = bool(
+            state.get("requires_catalog")
+            and search_roles
+            and required_roles
+            and len(search_roles) >= len(required_roles)
+        )
+        # Do not spend another provider call rewriting roles the intent LLM has
+        # already supplied. Planning remains available when the role contract
+        # is absent or incomplete.
+        return (
+            "planning"
+            if state.get("requires_planning") and not complete_catalog_contract
+            else "manager"
+        )
 
     @staticmethod
     def _after_planning(state: ShoppingAgentState) -> str:
@@ -296,6 +312,9 @@ class ShoppingOrchestrator:
         if has_vision_context:
             mission = mission.model_copy(update={"continues_context": False})
         else:
+            mission = self._validate_continuation_boundary(
+                mission, memory_context, request,
+            )
             mission = self._merge_continuation_mission(mission, memory_context)
         output = {
             **self._event(state, "intent_agent"),
@@ -318,6 +337,95 @@ class ShoppingOrchestrator:
         }
         self._record_node(state, "intent_agent", output)
         return output
+
+    @staticmethod
+    def _validate_continuation_boundary(
+        mission: MissionInterpretation,
+        memory_context: object,
+        user_request: str,
+    ) -> MissionInterpretation:
+        """Prevent a complete new role contract from inheriting stale roles.
+
+        Terse refinements intentionally omit roles and remain continuations. If
+        the intent LLM supplies new canonical product roles, those roles must
+        share a normalized product head with the prior mission before its state
+        may be inherited. This uses runtime language structure, not a catalog
+        taxonomy or a list of known product domains.
+        """
+        if (
+            not mission.continues_context
+            or mission.optimization_mode
+            or mission.selection_criteria
+            or not isinstance(memory_context, dict)
+        ):
+            return mission
+        previous = memory_context.get("current_mission")
+        if not isinstance(previous, dict):
+            return mission
+
+        current_roles = [
+            *(item.canonical_role for item in mission.search_requirements),
+            *(item.query for item in mission.bundle_items),
+        ]
+        prior_roles = [
+            *(
+                str(item.get("canonical_role", ""))
+                for item in previous.get("search_requirements", [])
+                if isinstance(item, dict)
+            ),
+            *(
+                str(item.get("query", ""))
+                for item in previous.get("bundle_items", [])
+                if isinstance(item, dict)
+            ),
+            *(
+                str(item.get("value", ""))
+                for item in previous.get("fulfillment_requirements", [])
+                if isinstance(item, dict)
+                and str(item.get("kind", "")).casefold().strip() == "category"
+            ),
+        ]
+
+        def role_heads(values: list[str]) -> set[str]:
+            return {
+                terms[-1]
+                for value in values
+                if (terms := IntentMissionAgent._ordered_terms(value))
+            }
+
+        current_heads = role_heads(current_roles)
+        prior_heads = role_heads(prior_roles)
+        if not current_heads or not prior_heads or current_heads & prior_heads:
+            return mission
+
+        # A malformed continuation response can already contain a copied prior
+        # category even before the merge below. Remove only those prior-role
+        # artifacts that are unsupported by the new model-generated role
+        # contract; all new roles and non-category requirements are preserved.
+        fulfillment_requirements = [
+            requirement
+            for requirement in mission.fulfillment_requirements
+            if requirement.kind.casefold().strip() != "category"
+            or not (
+                (terms := IntentMissionAgent._ordered_terms(requirement.value))
+                and terms[-1] in prior_heads - current_heads
+            )
+        ]
+        key_requirements = [
+            requirement
+            for requirement in mission.key_requirements
+            if not (
+                set(IntentMissionAgent._ordered_terms(requirement)) & (prior_heads - current_heads)
+            )
+        ]
+        fresh = mission.model_copy(update={
+            "continues_context": False,
+            "fulfillment_requirements": fulfillment_requirements,
+            "key_requirements": key_requirements,
+        })
+        return IntentMissionAgent._normalize_mission(
+            fresh, None, user_request=user_request,
+        )
 
     @staticmethod
     def _merge_continuation_mission(
@@ -371,7 +479,11 @@ class ShoppingOrchestrator:
                     "bundle_items", "search_requirements", "key_requirements",
                     "fulfillment_requirements",
                 ):
-                    if previous.get(field):
+                    if field == "catalog_query":
+                        # A refinement phrase such as "make it cheaper" is a
+                        # criterion, never a replacement catalog query.
+                        data[field] = previous.get(field)
+                    elif previous.get(field):
                         data[field] = previous[field]
             data["requires_catalog"] = bool(
                 previous.get("requires_catalog", True)
@@ -384,20 +496,39 @@ class ShoppingOrchestrator:
         data["optimization_mode"] = mission.optimization_mode or memory_context.get("optimization_mode")
         merged = MissionInterpretation.model_validate(data)
         recent_messages = memory_context.get("recent_messages", [])
-        original_request = next((
+        user_messages = [
             str(item.get("content", "")).strip()
-            for item in reversed(recent_messages)
+            for item in recent_messages
             if isinstance(item, dict)
             and str(item.get("role", "")).casefold() == "user"
             and str(item.get("content", "")).strip()
-        ), None) if isinstance(recent_messages, list) else None
+        ] if isinstance(recent_messages, list) else []
+        mission_terms = IntentMissionAgent._terms(" ".join([
+            str(previous.get("goal", "")),
+            *map(str, previous.get("key_requirements", [])),
+        ]))
+        # Select the remembered user turn that best grounds the active mission,
+        # instead of assuming the latest trade-off instruction created it.
+        source_request = max(
+            enumerate(user_messages),
+            key=lambda item: (
+                len(IntentMissionAgent._terms(item[1]) & mission_terms),
+                -item[0],
+            ),
+            default=(0, None),
+        )[1]
+        merged = merged.model_copy(update={
+            "search_requirements": IntentMissionAgent._ground_customer_required_roles(
+                merged.search_requirements, source_request,
+            ),
+        })
         # Memory may have been produced by an older intent contract. Normalize
         # it again using the original customer wording so stale combined roles
         # or duplicate search mappings cannot survive every refinement.
         return IntentMissionAgent._normalize_mission(
             merged,
             {"short_term_memory": memory_context},
-            user_request=original_request,
+            user_request=source_request,
         )
 
     async def _need_planner_node(self, state: ShoppingAgentState) -> dict[str, Any]:
@@ -423,13 +554,26 @@ class ShoppingOrchestrator:
             self._record_node(state, "product_search", result)
             return result
         actions = self._requested_actions(state)
+        search_requirements = self._search_requirements(state)
+        role_count = max(1, len(search_requirements))
+        # Allocate the bounded global prompt capacity across generated roles.
+        # A single broad role can expose the complete bounded shortlist, while
+        # a multi-role kit retains balanced coverage without ever loading the
+        # complete catalog into the model prompt.
+        dynamic_role_limit = min(
+            settings.agent_catalog_shortlist_limit,
+            max(
+                settings.agent_catalog_role_matches_per_need,
+                (settings.agent_catalog_shortlist_limit + role_count - 1) // role_count,
+            ),
+        )
         search_output = await self.product_search_agent.run_requirements(
             state,
-            requirements=self._search_requirements(state),
+            requirements=search_requirements,
             per_role_limit=(
                 self._stock_search_limit()
                 if "check_stock" in actions
-                else settings.agent_catalog_role_matches_per_need
+                else dynamic_role_limit
             ),
             include_out_of_stock="check_stock" in actions,
         )
@@ -445,6 +589,9 @@ class ShoppingOrchestrator:
         )
         result = {
             **result,
+            # Persist the post-planning role map so the selector receives the
+            # same base-role evidence that retrieval used.
+            "search_requirements": search_requirements,
             "product_rankings": search_output["product_rankings"],
             "retrieval_role_matches": search_output.get("retrieval_role_matches", {}),
         }
@@ -484,13 +631,9 @@ class ShoppingOrchestrator:
             if self._should_recommend_products(actions)
             else action_candidates or candidates
         )
-        selection_candidates = (
-            response_candidates
-            if self.brand_voice.is_shopping_mission(state.get("mission_type"))
-            else action_candidates or response_candidates
-        )
         no_eligible_alternative = bool(selection_context.get("no_eligible_alternative"))
         fulfillment_gaps = [] if no_eligible_alternative else self.brand_voice.fulfillment_gaps(response_candidates, state)
+        selector_scheduled = "product_selector" in state.get("execution_plan", {}).get("stages", [])
         output = {
             **result,
             "candidate_products": candidates,
@@ -499,11 +642,15 @@ class ShoppingOrchestrator:
             # LLM selector has considered the complete verified shortlist.
             # Factual catalog operations keep their already-resolved target so
             # the response writer can report its specs without recommending it.
+            # Recommendation choices are made only by ProductSelectorAgent.
+            # A search-only information request can still carry the exact
+            # product targets resolved by the LLM, but those are facts rather
+            # than recommendation choices.
             "selected_products": (
-                [] if "product_selector" in state.get("execution_plan", {}).get("stages", [])
-                else self.brand_voice.select_catalog_products({
-                    **state, "candidate_products": selection_candidates,
-                })
+                [] if selector_scheduled else [
+                    {"id": str(product["id"]), "quantity": 1}
+                    for product in action_candidates
+                ]
             ) if self._should_recommend_products(actions) else [],
             "tool_results": [*state["tool_results"], *search_output["tool_results"]],
             "tool_context": tool_context,
@@ -516,24 +663,33 @@ class ShoppingOrchestrator:
     def _role_constrained_candidates(
         state: ShoppingAgentState, candidates: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Keep single-product refinements within the active product role."""
+        """Keep single recommendations in-role without pre-selecting features.
+
+        Explicit capabilities belong to the selector's semantic decision. Only
+        the broad product identity may constrain its candidate input.
+        """
         if state.get("recommendation_mode", "single") != "single":
             return candidates
         requirements = [
             item for item in state.get("fulfillment_requirements", [])
             if isinstance(item, dict)
-            and str(item.get("kind", "")).casefold().strip()
-            in BrandVoiceAgent._SHOPPING_REQUIREMENT_KINDS
+            and str(item.get("kind", "")).casefold().strip() == "category"
         ]
         if not requirements:
             return candidates
-        return [
+        matched = [
             product for product in candidates
-            if all(
+            if any(
                 BrandVoiceAgent._matches_requirement(product, requirement)
                 for requirement in requirements
             )
         ]
+        # This stage is only a conservative recall guard. If generated role
+        # wording and catalog identity fields do not overlap lexically, retain
+        # the already bounded search results and let the selector LLM make the
+        # semantic decision. A successful database search must never become an
+        # empty selector prompt merely because this matcher lacks vocabulary.
+        return matched or candidates
 
     @staticmethod
     def _apply_optimization_context(
@@ -572,25 +728,32 @@ class ShoppingOrchestrator:
             if operator not in {"lower_than_reference", "higher_than_reference"}:
                 continue
             field = str(criterion["field"])
-            # Price applied to a continuing bundle means the combined selection,
-            # not "every candidate must cost less than the cheapest old item".
-            # Preserve role diversity here; the bundle optimiser enforces the
-            # verified prior-total comparison across candidate combinations.
-            if (
-                state.get("recommendation_mode") == "bundle"
-                and field.casefold().strip() == "price"
-                and bundle_total is not None
-            ):
-                applied.append({
-                    "field": field, "operator": operator,
-                    "reference_value": str(bundle_total), "scope": "bundle_total",
-                    "eligible_count": len(filtered),
-                })
-                continue
             references = [
                 value for product in reference_products
                 if (value := ShoppingOrchestrator._numeric_catalog_fact(product, field)) is not None
             ]
+            if state.get("recommendation_mode") == "bundle":
+                # A refinement compares complete bundles. Filtering individual
+                # candidates against one old item's value can remove every
+                # candidate for another role before the selector sees it.
+                # Preserve the bounded, high-recall pool and pass a verified
+                # aggregate reference to the LLM selector instead.
+                if field.casefold().strip() == "price" and bundle_total is not None:
+                    reference = bundle_total
+                    scope = "bundle_total"
+                elif references:
+                    reference = sum(references, Decimal("0")) / len(references)
+                    scope = "bundle_average"
+                else:
+                    continue
+                applied.append({
+                    "field": field,
+                    "operator": operator,
+                    "reference_value": str(reference),
+                    "scope": scope,
+                    "eligible_count": len(filtered),
+                })
+                continue
             if not references:
                 continue
             reference = min(references) if operator == "lower_than_reference" else max(references)
@@ -871,23 +1034,86 @@ class ShoppingOrchestrator:
 
     @staticmethod
     def _search_requirements(state: ShoppingAgentState) -> list[dict[str, Any]]:
-        requirements = [
-            item for item in state.get("search_requirements", [])
-            if isinstance(item, dict)
-            and str(item.get("canonical_role", "")).strip()
-            and isinstance(item.get("search_queries"), list)
-        ]
-        if requirements:
-            return requirements
+        """Reconcile LLM-generated base roles after optional planning.
+
+        Planning may add or replace bundle roles after intent extraction. This
+        preserves matching intent requirements and derives missing mappings
+        from the planner's typed roles and query vocabulary, without knowing
+        any catalog category names.
+        """
+        source: list[SearchRequirement] = []
+        for item in state.get("search_requirements", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                source.append(SearchRequirement.model_validate(item))
+            except Exception:
+                continue
+        roles = list(dict.fromkeys(
+            str(role).strip() for role in [
+                *state.get("required_categories", []),
+                *state.get("optional_categories", []),
+            ]
+            if str(role).strip()
+        ))
+        if not roles:
+            roles = [item.canonical_role for item in source]
+        if not roles:
+            roles = ShoppingOrchestrator._catalog_queries(state)
+
+        all_queries = ShoppingOrchestrator._catalog_queries(state)
+        mapped: list[SearchRequirement] = []
+        for index, role in enumerate(roles):
+            role_terms = IntentMissionAgent._terms(role)
+            matching = next((
+                item for item in source
+                if role_terms
+                and (
+                    role_terms <= IntentMissionAgent._terms(item.canonical_role)
+                    or IntentMissionAgent._terms(item.canonical_role) <= role_terms
+                    or role_terms <= IntentMissionAgent._terms(item.original_text)
+                    or IntentMissionAgent._terms(item.original_text) <= role_terms
+                )
+            ), None)
+            related_queries = [
+                query for query in all_queries
+                if role_terms
+                and (
+                    role_terms <= IntentMissionAgent._terms(query)
+                    or IntentMissionAgent._terms(query) <= role_terms
+                )
+            ]
+            if not related_queries and len(all_queries) == len(roles):
+                related_queries = [all_queries[index]]
+            mapped.append(SearchRequirement(
+                original_text=matching.original_text if matching else (related_queries[0] if related_queries else role),
+                canonical_role=matching.canonical_role if matching else role,
+                customer_required=(
+                    matching.customer_required if matching
+                    else role in state.get("required_categories", [])
+                ),
+                required_features=list(matching.required_features) if matching else [],
+                preferred_features=list(matching.preferred_features) if matching else [],
+                search_queries=list(dict.fromkeys([
+                    role,
+                    *(matching.search_queries if matching else []),
+                    *related_queries,
+                ]))[:6],
+            ))
+
+        typed_requirements: list[FulfillmentRequirement] = []
+        for item in state.get("fulfillment_requirements", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                typed_requirements.append(FulfillmentRequirement.model_validate(item))
+            except Exception:
+                continue
         return [
-            {
-                "original_text": query,
-                "canonical_role": query,
-                "required_features": [],
-                "preferred_features": [],
-                "search_queries": [query],
-            }
-            for query in ShoppingOrchestrator._catalog_queries(state)
+            item.model_dump()
+            for item in IntentMissionAgent._normalized_search_requirements(
+                mapped, roles, typed_requirements,
+            )
         ]
 
     def _stock_search_limit(self) -> int:
@@ -938,7 +1164,9 @@ class ShoppingOrchestrator:
                 )
                 return "memory_update" if self.memory_store is not None and state.get("memory_session_scope") else "end"
             return "brand_voice"
-        return "repair" if state["repair_count"] < self.max_repairs else "end"
+        # Validation is a terminal accept/reject gate. It never changes a
+        # model selection or starts another token-heavy selector cycle.
+        return "end"
 
     def _past_response_soft_deadline(self) -> bool:
         return bool(
@@ -959,7 +1187,7 @@ class ShoppingOrchestrator:
         audited = state.get("audited_response")
         if isinstance(audited, str) and audited.strip() and audited != state.get("final_response"):
             return "restore_audited_draft"
-        return "repair" if state["repair_count"] < self.max_repairs else "end"
+        return "end"
 
     async def _restore_audited_draft_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         """Fall back to the initial audited draft if final wording added a claim."""
@@ -987,63 +1215,6 @@ class ShoppingOrchestrator:
             return {}
         output = {**self._event(state, "memory_update")}
         self._record_node(state, "memory_update", output)
-        return output
-
-    async def _repair_node(self, state: ShoppingAgentState) -> dict[str, Any]:
-        attempt = state["repair_count"] + 1
-        log_ai_event("agent.repair", request_id=state["run_id"], attempt=attempt)
-        audit_errors = list((state.get("audit_result") or {}).get("errors", []))
-        excluded = {
-            str(item["product_id"])
-            for item in audit_errors
-            if isinstance(item, dict) and item.get("code") in {"product_not_found", "insufficient_stock"} and item.get("product_id")
-        }
-        selected = [item for item in state.get("selected_products", []) if str(item.get("id")) not in excluded]
-        selection_was_lost = any(
-            isinstance(item, dict) and item.get("code") in {
-                "catalog_match_not_selected", "unsupported_unavailability_claim",
-                "fulfillment_requirement_unmet", "requirement_not_met",
-            }
-            for item in audit_errors
-        )
-        bundle_repair_codes = {
-            "catalog_match_not_selected", "fulfillment_requirement_unmet",
-            "missing_requirement_coverage", "requirement_not_met",
-            "stale_bundle_selection", "stale_bundle_total", "missing_bundle_state",
-            "product_not_found", "insufficient_stock",
-        }
-        bundle_needs_rebuild = (
-            state.get("recommendation_mode") == "bundle"
-            and any(
-                isinstance(item, dict) and item.get("code") in bundle_repair_codes
-                for item in audit_errors
-            )
-        )
-        rebuilt_bundle: dict[str, Any] = {}
-        repair_state = {
-            **state,
-            "excluded_product_ids": [*state.get("excluded_product_ids", []), *excluded],
-        }
-        if bundle_needs_rebuild:
-            rebuilt_bundle = await self.product_selector.run(repair_state)
-            selected = list(rebuilt_bundle.get("selected_products", []))
-        elif (excluded or selection_was_lost) and self._should_recommend_products(self._requested_actions(state)):
-            reselection = await self.product_selector.run(repair_state)
-            rebuilt_bundle = reselection
-            selected = list(reselection.get("selected_products", []))
-        # Preserve verified selections and give the response writer exact repair
-        # feedback. This avoids replacing a useful answer with an empty one.
-        output = {
-            **self._event(state, "repair"),
-            **rebuilt_bundle,
-            "repair_count": attempt,
-            "selected_products": selected,
-            "excluded_product_ids": [*state.get("excluded_product_ids", []), *sorted(excluded)],
-            "repair_feedback": [item for item in audit_errors if isinstance(item, dict)],
-            "final_response": None,
-            "next_stage": "response_draft",
-        }
-        self._record_node(state, "repair", output)
         return output
 
     async def ainvoke(

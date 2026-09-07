@@ -10,8 +10,8 @@ from app.config import settings
 def recommendation_budget_limit(budget: Any) -> Decimal | None:
     """Return the highest price/total eligible for a recommendation.
 
-    The customer's stated budget remains the target.  A small, configurable
-    allowance permits clearly disclosed near-budget alternatives.
+    The customer's stated budget remains the target. A configurable allowance
+    permits clearly disclosed alternatives above that target.
     """
     if budget is None:
         return None

@@ -12,10 +12,16 @@ from app.agentic.compatibility import CompatibilityAgent
 from app.agentic.intent import IntentMissionAgent
 from app.agentic.product_search import ProductSearchAgent
 from app.agentic.product_selector import ProductSelectorAgent
-from app.agentic.schemas import BundleItemPlan, MissionInterpretation, SearchRequirement
+from app.agentic.schemas import (
+    BundleItemPlan,
+    FulfillmentRequirement,
+    MissionInterpretation,
+    SearchRequirement,
+)
 from app.agentic.state import initial_shopping_state
 from app.agentic.tools import CommerceToolRegistry
 from app.agentic.vision import VISION_PROMPT, VisionAgent
+from app.config import settings
 from app.models import Category, Product, ProductStatus, Seller, SellerStatus
 
 
@@ -47,6 +53,72 @@ async def test_product_search_filters_stock_budget_and_never_invents_ids(db_sess
     assert result["product_rankings"][0]["product_id"] == str(affordable.id)
 
 
+def test_single_selector_validation_rejects_an_alternative_that_violates_a_named_catalog_field():
+    state = initial_shopping_state("I want an Acme phone")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "phone", "field": None, "quantity": 1},
+            {"kind": "attribute", "value": "Acme", "field": "brand", "quantity": 1},
+        ],
+    })
+    products = [
+        {"id": "acme", "name": "Acme One", "brand": "Acme", "category": "Phones", "price": "100", "inventory_quantity": 2, "specs": [], "attributes": {}},
+        {"id": "other", "name": "Other One", "brand": "Other", "category": "Phones", "price": "100", "inventory_quantity": 2, "specs": [], "attributes": {}},
+    ]
+    from app.agentic.product_selector import ProductSelectionDecision
+
+    decision = ProductSelectionDecision.model_validate({
+        "mode": "single",
+        "related_candidate_count": 2,
+        "choices": [
+            {"product_id": "acme", "role": "phone", "reason": "Matches", "quantity": 1},
+            {"product_id": "other", "role": "phone", "reason": "Alternative", "quantity": 1},
+        ],
+        "unfulfilled_roles": [],
+    })
+
+    errors = ProductSelectorAgent._validation_errors(decision, products, state)
+
+    assert any("other" in error and "Acme" in error for error in errors)
+
+
+def test_selector_role_evidence_rejects_incidental_specification_words():
+    state = initial_shopping_state("Build a travel kit")
+    state.update({
+        "search_requirements": [{
+            "original_text": "waterproof rain cover",
+            "canonical_role": "rain cover",
+            "customer_required": False,
+            "required_features": [],
+            "preferred_features": ["waterproof"],
+            "search_queries": ["rain cover", "waterproof rain cover"],
+        }],
+        "retrieval_role_matches": {
+            "rain cover": ["pillow", "cover"],
+        },
+    })
+    pillow = {
+        "id": "pillow",
+        "name": "Travel Pillow",
+        "category": "Travel Pillow",
+        "description": "Contoured pillow with a washable cover.",
+    }
+    cover = {
+        "id": "cover",
+        "name": "Packable Backpack Rain Cover",
+        "category": "Rain Covers",
+        "description": "Waterproof shell for a travel backpack.",
+    }
+
+    assert not ProductSelectorAgent._choice_has_role_evidence(
+        pillow, "rain cover", state,
+    )
+    assert ProductSelectorAgent._choice_has_role_evidence(
+        cover, "rain cover", state,
+    )
+
+
 def test_product_ranking_uses_whole_terms_not_substrings():
     state = initial_shopping_state("car cleaner")
     products = [
@@ -58,6 +130,23 @@ def test_product_ranking_uses_whole_terms_not_substrings():
 
     assert ranked[0]["product"]["id"] == "car"
     assert ranked[1]["reasons"] == ["in stock"]
+
+
+def test_product_retrieval_keeps_options_up_to_the_configured_budget_tolerance():
+    state = initial_shopping_state("Recommend a camera near my stated budget")
+    state.update({"budget": 100})
+    products = [
+        {"id": "target", "name": "Target Camera", "brand": "Test", "category": "Cameras", "price": "100", "inventory_quantity": 1},
+        {"id": "tolerated", "name": "Tolerated Camera", "brand": "Test", "category": "Cameras", "price": "140", "inventory_quantity": 1},
+        {"id": "outside", "name": "Outside Camera", "brand": "Test", "category": "Cameras", "price": "140.01", "inventory_quantity": 1},
+    ]
+
+    ranked = ProductSearchAgent._rank(products, state, include_out_of_stock=False)
+
+    assert {item["product"]["id"] for item in ranked} == {"target", "tolerated"}
+    assert next(
+        item for item in ranked if item["product"]["id"] == "tolerated"
+    )["reasons"] == ["in stock", "within recommendation tolerance", "matches mission terms: camera"]
 
 
 def test_search_requirement_keeps_dynamic_aliases_for_lexical_role_variant():
@@ -74,6 +163,46 @@ def test_search_requirement_keeps_dynamic_aliases_for_lexical_role_variant():
     assert result[0].search_queries == [
         "lighting", "light", "desk light", "ambient lighting", "RGB light", "LED light",
     ]
+
+
+def test_search_requirement_separates_dynamic_base_role_from_explicit_feature():
+    requirement = SearchRequirement(
+        original_text="noise-cancelling headphones",
+        canonical_role="noise-cancelling headphones",
+        required_features=["noise cancelling"],
+        search_queries=[
+            "noise-cancelling headphones", "headphones", "wireless headphones",
+        ],
+    )
+
+    result = IntentMissionAgent._normalized_search_requirements(
+        [requirement], ["noise-cancelling headphones"],
+    )
+
+    assert result[0].original_text == "noise-cancelling headphones"
+    assert result[0].canonical_role == "headphone"
+    assert result[0].required_features == ["noise cancelling"]
+    assert result[0].search_queries[0] == "headphone"
+
+
+def test_typed_requirement_can_reconcile_a_base_role_without_product_taxonomy():
+    requirement = SearchRequirement(
+        original_text="water-resistant trail camera",
+        canonical_role="water-resistant trail camera",
+        search_queries=[
+            "water-resistant trail camera", "trail camera", "outdoor trail camera",
+        ],
+    )
+
+    result = IntentMissionAgent._normalized_search_requirements(
+        [requirement], ["water-resistant trail camera"],
+        [FulfillmentRequirement(
+            kind="feature", value="water resistant", field="trail camera",
+        )],
+    )
+
+    assert result[0].canonical_role == "trail camera"
+    assert result[0].search_queries[0] == "trail camera"
 
 
 def test_required_search_feature_becomes_auditable_for_the_same_role():
@@ -104,6 +233,112 @@ def test_required_search_feature_becomes_auditable_for_the_same_role():
         and requirement.quantity == 1
         for requirement in normalized.fulfillment_requirements
     )
+
+
+def test_generic_bundle_normalization_keeps_all_roles_and_only_explicit_hard_features():
+    roles = ["backpack", "packing cube", "power adapter", "power bank", "cover"]
+    mission = MissionInterpretation(
+        mission_type="product_search",
+        recommendation_mode="bundle",
+        goal="Create a travel kit for a weekend trip",
+        requires_planning=True,
+        requires_catalog=True,
+        requested_actions=["search_products"],
+        constraints=["For a weekend trip", "Under $100 budget"],
+        bundle_items=[
+            BundleItemPlan(query=value) for value in (
+                "travel backpack", "packing cubes", "universal power adapter",
+                "portable charger", "waterproof rain cover",
+            )
+        ],
+        search_requirements=[
+            SearchRequirement(
+                original_text=original,
+                canonical_role=role,
+                required_features=features,
+                search_queries=[role, original],
+            )
+            for original, role, features in (
+                ("travel backpack", "backpack", []),
+                ("packing cubes", "packing cube", []),
+                ("universal power adapter", "power adapter", ["universal"]),
+                ("portable charger", "power bank", ["portable"]),
+                ("waterproof rain cover", "cover", ["waterproof", "rain"]),
+            )
+        ],
+        fulfillment_requirements=[
+            FulfillmentRequirement(kind="category", value="backpack"),
+            FulfillmentRequirement(kind="category", value="packing cube"),
+            FulfillmentRequirement(kind="feature", value="universal", field="power adapter"),
+            FulfillmentRequirement(kind="feature", value="portable", field="power bank"),
+            FulfillmentRequirement(kind="feature", value="waterproof", field="cover"),
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="Build me a travel kit for a weekend trip.",
+    )
+
+    assert [
+        requirement.value for requirement in normalized.fulfillment_requirements
+        if requirement.kind == "category"
+    ] == []
+    assert [
+        requirement.canonical_role for requirement in normalized.search_requirements
+    ] == roles
+    assert all(
+        requirement.customer_required is False
+        for requirement in normalized.search_requirements
+    )
+    assert not any(
+        requirement.kind == "feature"
+        for requirement in normalized.fulfillment_requirements
+    )
+    assert normalized.constraints == ["For a weekend trip"]
+    assert normalized.search_requirements[2].preferred_features == ["universal"]
+
+
+@pytest.mark.anyio
+async def test_structured_bundle_contract_overrides_a_contradictory_catalog_flag():
+    class ContradictoryIntentModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mission_type": "planning_request",
+                "recommendation_mode": "bundle",
+                "goal": "Prepare a weekend kit",
+                "requires_planning": True,
+                "requires_catalog": False,
+                "continues_context": False,
+                "catalog_query": None,
+                "catalog_queries": [],
+                "requested_actions": [],
+                "bundle_items": [],
+                "search_requirements": [
+                    {
+                        "original_text": role, "canonical_role": role,
+                        "required_features": [], "preferred_features": [],
+                        "search_queries": [role],
+                    }
+                    for role in ("suitcase", "packing cube", "pillow")
+                ],
+                "budget": None, "preferences": [], "key_requirements": [],
+                "constraints": [], "owned_items": [], "priorities": [],
+                "selection_criteria": [],
+                "fulfillment_requirements": [
+                    {"kind": "category", "value": role, "field": None, "quantity": 1}
+                    for role in ("suitcase", "packing cube", "pillow")
+                ],
+            }))
+
+    mission = await IntentMissionAgent(ContradictoryIntentModel()).interpret(
+        "Build me a travel kit for a weekend trip."
+    )
+
+    assert mission.requires_catalog is True
+    assert mission.catalog_queries == ["suitcase", "packing cube", "pillow"]
+    assert [item.canonical_role for item in mission.search_requirements] == [
+        "suitcase", "packing cube", "pillow",
+    ]
 
 
 @pytest.mark.anyio
@@ -554,7 +789,7 @@ async def test_bundle_optimizer_does_not_fallback_to_an_unrelated_affordable_pro
 
 
 @pytest.mark.anyio
-async def test_product_selector_sees_complete_bundle_shortlist_and_repairs_rejected_choice():
+async def test_product_selector_sees_complete_bundle_shortlist_once():
     class SelectorModel:
         def __init__(self):
             self.calls = 0
@@ -569,17 +804,6 @@ async def test_product_selector_sees_complete_bundle_shortlist_and_repairs_rejec
             assert kwargs["enable_thinking"] is False
             assert kwargs["response_mime_type"] == "application/json"
             assert kwargs["max_output_tokens"] == 3000
-            if self.calls == 1:
-                return AIMessage(content=json.dumps({
-                    "mode": "bundle",
-                    "related_candidate_count": 4,
-                    "choices": [
-                            {"product_id": "soap", "role": "wash soap", "reason": "Cleans paint", "quantity": 1},
-                            {"product_id": "mitt", "role": "wash mitt", "reason": "Applies wash", "quantity": 1},
-                    ],
-                    "unfulfilled_roles": [],
-                }))
-            assert "Bundle mode must select 3" in str(messages[0].content)
             return AIMessage(content=json.dumps({
                 "mode": "bundle",
                 "related_candidate_count": 4,
@@ -601,9 +825,9 @@ async def test_product_selector_sees_complete_bundle_shortlist_and_repairs_rejec
     state.update({"recommendation_mode": "bundle", "candidate_products": products})
     model = SelectorModel()
 
-    result = await ProductSelectorAgent(model, max_attempts=2).run(state)
+    result = await ProductSelectorAgent(model).run(state)
 
-    assert model.calls == 2
+    assert model.calls == 1
     assert result["selection_source"] == "llm_product_selector_v1"
     assert [item["id"] for item in result["selected_products"]] == ["soap", "mitt", "wheel"]
     assert result["bundle"]["product_count"] == 3
@@ -616,6 +840,18 @@ async def test_product_selector_uses_llm_for_single_comparable_choices():
         async def ainvoke(self, messages, **kwargs):
             payload = json.loads(str(messages[1].content))
             assert len(payload["verified_catalog_products"]) == 3
+            assert payload["customer_request"] == "Recommend noise-cancelling headphones"
+            assert payload["role_requirements"] == [{
+                "base_role": "headphones",
+                "original_text": "noise-cancelling headphones",
+                "customer_required": True,
+                "required_features": ["noise cancelling"],
+                "preferred_features": ["wireless"],
+            }]
+            assert payload["explicit_fulfillment_requirements"] == [{
+                "kind": "feature", "value": "noise cancelling",
+                "field": "headphones", "quantity": 1,
+            }]
             return AIMessage(content=json.dumps({
                 "mode": "single",
                 "related_candidate_count": 3,
@@ -626,13 +862,24 @@ async def test_product_selector_uses_llm_for_single_comparable_choices():
                 "unfulfilled_roles": [],
             }))
 
-    state = initial_shopping_state("Recommend headphones")
+    state = initial_shopping_state("Recommend noise-cancelling headphones")
     state.update({
         "recommendation_mode": "single",
-        "candidate_products": [
-            {"id": value, "name": value.title(), "brand": "Test", "category": "Headphones", "price": "100", "currency": "MYR", "inventory_quantity": 5}
-            for value in ("one", "two", "three")
-        ],
+        "search_requirements": [{
+            "original_text": "noise-cancelling headphones",
+            "canonical_role": "headphones",
+            "required_features": ["noise cancelling"],
+            "preferred_features": ["wireless"],
+            "search_queries": ["headphones", "noise-cancelling headphones"],
+        }],
+        "fulfillment_requirements": [{
+            "kind": "feature", "value": "noise cancelling",
+            "field": "headphones", "quantity": 1,
+        }],
+            "candidate_products": [
+                {"id": value, "name": value.title(), "brand": "Test", "category": "Headphones", "price": "100", "currency": "MYR", "inventory_quantity": 5, "specs": [{"label": "Feature", "value": "noise cancelling"}], "attributes": {}}
+                for value in ("one", "two", "three")
+            ],
     })
 
     result = await ProductSelectorAgent(SelectorModel()).run(state)
@@ -642,10 +889,93 @@ async def test_product_selector_uses_llm_for_single_comparable_choices():
     assert result["bundle"] is None
 
 
+def test_single_mode_does_not_hide_base_role_candidates_before_llm_selection():
+    state = initial_shopping_state("Recommend noise-cancelling headphones")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "headphones", "field": None, "quantity": 1},
+            {"kind": "feature", "value": "noise cancelling", "field": "headphones", "quantity": 1},
+        ],
+    })
+    candidates = [
+        {
+            "id": "anc", "name": "Quiet Flight", "category": "Headphones",
+            "description": "Active noise cancelling", "inventory_quantity": 4,
+        },
+        {
+            "id": "open", "name": "Studio Open", "category": "Headphones",
+            "description": "Open-back listening", "inventory_quantity": 4,
+        },
+    ]
+
+    result = ShoppingOrchestrator._role_constrained_candidates(state, candidates)
+
+    assert [product["id"] for product in result] == ["anc", "open"]
+
+
+def test_single_role_prefilter_cannot_erase_a_successful_bounded_search():
+    state = initial_shopping_state("Find equipment for this setup")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [{
+            "kind": "category",
+            "value": "Find equipment for this setup",
+            "field": None,
+            "quantity": 1,
+        }],
+    })
+    candidates = [
+        {
+            "id": "desk", "name": "Utility Gaming Desk", "category": "Gaming",
+            "description": "Stable desk with cable management.", "inventory_quantity": 4,
+        },
+        {
+            "id": "monitor", "name": "27-inch Gaming Monitor", "category": "Gaming",
+            "description": "High refresh display.", "inventory_quantity": 4,
+        },
+    ]
+
+    result = ShoppingOrchestrator._role_constrained_candidates(state, candidates)
+
+    assert result == candidates
+
+
+def test_planning_roles_keep_base_queries_and_role_bound_feature_context():
+    state = initial_shopping_state("Build a quiet travel listening kit")
+    state.update({
+        "required_categories": ["headphones", "protective case"],
+        "catalog_queries": [
+            "noise-cancelling headphones", "hard-shell protective case",
+        ],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "headphones", "field": None, "quantity": 1},
+            {"kind": "category", "value": "protective case", "field": None, "quantity": 1},
+            {"kind": "feature", "value": "noise cancelling", "field": "headphones", "quantity": 1},
+        ],
+    })
+
+    requirements = ShoppingOrchestrator._search_requirements(state)
+
+    assert [item["canonical_role"] for item in requirements] == [
+        "headphones", "protective case",
+    ]
+    assert requirements[0]["search_queries"] == [
+        "headphones", "noise-cancelling headphones",
+    ]
+    assert requirements[1]["search_queries"] == [
+        "protective case", "hard-shell protective case",
+    ]
+
+
 @pytest.mark.anyio
 async def test_product_selector_failure_never_chooses_products_deterministically():
     class InvalidModel:
+        def __init__(self):
+            self.calls = 0
+
         async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
             return AIMessage(content="not json")
 
     state = initial_shopping_state("Recommend a keyboard")
@@ -657,11 +987,62 @@ async def test_product_selector_failure_never_chooses_products_deterministically
         ],
     })
 
-    result = await ProductSelectorAgent(InvalidModel(), max_attempts=2).run(state)
+    model = InvalidModel()
+    result = await ProductSelectorAgent(model).run(state)
 
+    assert model.calls == 1
     assert result["selected_products"] == []
     assert result["selection_source"] == "llm_product_selector_failed"
     assert result["selection_errors"]
+    assert BrandVoiceAgent._response_products({
+        **state, **result,
+    }) == []
+
+
+@pytest.mark.anyio
+async def test_selector_derives_an_omitted_bundle_gap_without_discarding_llm_choices():
+    class PartialBundleModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": 4,
+                "choices": [
+                    {"product_id": "cube", "role": "packing cube", "reason": "Organises clothing", "quantity": 1},
+                    {"product_id": "pillow", "role": "pillow", "reason": "Adds travel comfort", "quantity": 1},
+                    {"product_id": "adapter", "role": "power adapter", "reason": "Powers devices", "quantity": 1},
+                    {"product_id": "shell", "role": "rain cover", "reason": "Adds rain protection", "quantity": 1},
+                ],
+                # Reproduces the production omission: suitcase is absent from
+                # both choices and this advisory list.
+                "unfulfilled_roles": [],
+            }))
+
+    roles = ["suitcase", "packing cube", "pillow", "power adapter", "rain cover"]
+    products = [
+        {"id": product_id, "name": name, "category": category, "price": "50", "currency": "MYR", "inventory_quantity": 5}
+        for product_id, name, category in (
+            ("cube", "Packing Cube Set", "Packing Organiser"),
+            ("pillow", "Travel Pillow", "Travel Pillow"),
+            ("adapter", "Universal Power Adapter", "Travel Adapter"),
+            ("shell", "Packable Backpack Rain Cover", "Rain Covers"),
+        )
+    ]
+    state = initial_shopping_state("Build me a travel kit for a weekend trip.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": roles,
+        "candidate_products": products,
+        "retrieval_role_matches": {
+            role: [product["id"]]
+            for role, product in zip(roles[1:], products, strict=True)
+        },
+    })
+
+    result = await ProductSelectorAgent(PartialBundleModel()).run(state)
+
+    assert len(result["selected_products"]) == 4
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["bundle"]["required_category_coverage"]["missing"] == ["suitcase"]
+    assert result["fulfillment_gaps"] == ["No verified catalog match for: suitcase"]
 
 
 def test_product_selector_accepts_json_wrapped_by_model_explanation():
@@ -675,12 +1056,7 @@ def test_product_selector_accepts_json_wrapped_by_model_explanation():
 @pytest.mark.anyio
 async def test_product_selector_rejects_cross_domain_lexical_false_positive():
     class SelectorModel:
-        def __init__(self):
-            self.calls = 0
-
         async def ainvoke(self, messages, **kwargs):
-            self.calls += 1
-            selected = ["car", "hair"] if self.calls == 1 else ["car", "ceramic"]
             return AIMessage(content=json.dumps({
                 "mode": "single",
                 "related_candidate_count": 2,
@@ -689,7 +1065,7 @@ async def test_product_selector_rejects_cross_domain_lexical_false_positive():
                         "product_id": product_id, "role": "car wash shampoo",
                         "reason": "Candidate comparison", "quantity": 1,
                     }
-                    for product_id in selected
+                    for product_id in ["car", "ceramic"]
                 ],
                 "unfulfilled_roles": [],
             }))
@@ -710,8 +1086,83 @@ async def test_product_selector_rejects_cross_domain_lexical_false_positive():
     })
     model = SelectorModel()
 
-    result = await ProductSelectorAgent(model, max_attempts=2).run(state)
+    result = await ProductSelectorAgent(model).run(state)
 
-    assert model.calls == 2
     assert [item["id"] for item in result["selected_products"]] == ["car", "ceramic"]
     assert result["selection_source"] == "llm_product_selector_v1"
+
+
+@pytest.mark.anyio
+async def test_product_selector_never_sends_an_unbounded_catalog_to_the_llm():
+    class SelectorModel:
+        def __init__(self):
+            self.prompt_count = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            payload = json.loads(str(messages[1].content))
+            self.prompt_count = len(payload["verified_catalog_products"])
+            return AIMessage(content=json.dumps({
+                "mode": "single",
+                "related_candidate_count": self.prompt_count,
+                "choices": [
+                    {
+                        "product_id": product["id"], "role": "headphones",
+                        "reason": "Comparable catalog option", "quantity": 1,
+                    }
+                    for product in payload["verified_catalog_products"][:2]
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Recommend headphones")
+    state["candidate_products"] = [
+        {
+            "id": f"product-{index}", "name": f"Headphones {index}",
+            "category": "Headphones", "price": "100", "currency": "MYR",
+            "inventory_quantity": 5,
+        }
+        for index in range(307)
+    ]
+    model = SelectorModel()
+
+    result = await ProductSelectorAgent(model).run(state)
+
+    assert model.prompt_count == settings.agent_catalog_shortlist_limit
+    assert len(result["selected_products"]) == 2
+
+
+@pytest.mark.anyio
+async def test_product_selector_accepts_runtime_role_retrieval_evidence():
+    class SelectorModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "cubes", "role": "packing cubes", "reason": "Organises luggage", "quantity": 1},
+                    {"product_id": "adapter", "role": "power adapter", "reason": "Charges devices", "quantity": 1},
+                    {"product_id": "bank", "role": "portable charger", "reason": "Provides mobile power", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    roles = ["packing cubes", "power adapter", "portable charger"]
+    state = initial_shopping_state("Build a travel kit")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": roles,
+        "candidate_products": [
+            {"id": "cubes", "name": "Six-Piece Packing Cubes Set", "category": "Packing Organiser", "price": "80", "inventory_quantity": 5},
+            {"id": "adapter", "name": "Universal Power Adapter", "category": "Travel Adapter", "price": "120", "inventory_quantity": 5},
+            {"id": "bank", "name": "Portable Charger", "category": "Portable Chargers", "price": "160", "inventory_quantity": 5},
+        ],
+        "retrieval_role_matches": {
+            "packing cubes": ["cubes"],
+            "power adapter": ["adapter"],
+            "portable charger": ["bank"],
+        },
+    })
+
+    result = await ProductSelectorAgent(SelectorModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["bundle"]["required_category_coverage"]["missing"] == []

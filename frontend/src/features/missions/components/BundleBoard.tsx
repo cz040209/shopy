@@ -31,10 +31,18 @@ function ProductNode({ item, index, adding, showAdd, onAdd, onRemove }: { item: 
 }
 
 export default function BundleBoard({ items, mission, workspace, adding, addingProductId, onAdd, onAddItem, onRemove }: Props) {
-  const isSingleRecommendation = mission.recommendation_mode === "single";
+  // A result is a bundle only when the server explicitly says so.  Multiple
+  // cards alone are alternatives in a single recommendation, never evidence
+  // that their prices should be added together.  The workspace copy supports
+  // restoring results created by an older API gateway.
+  const recommendationMode = mission.recommendation_mode
+    ?? workspace.recommendation_mode
+    ?? workspace.bundle?.mode
+    ?? "single";
+  const isSingleRecommendation = recommendationMode === "single";
   const isComparison = isSingleRecommendation && items.length > 1;
   const total = items.reduce((sum, item) => sum + Number(item.price), 0);
-  const priceSummary = recommendationPriceSummary(items, mission.recommendation_mode);
+  const priceSummary = recommendationPriceSummary(items, recommendationMode);
   const hasBudget = mission.budget !== null && mission.budget !== undefined;
   const budget = hasBudget ? Number(mission.budget) : null;
   const budgetRemaining = budget === null ? null : budget - total;

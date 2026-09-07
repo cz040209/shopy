@@ -16,10 +16,18 @@ class WorkflowManager:
     def plan(self, state: dict[str, Any], actions: list[str]) -> dict[str, Any]:
         mission_type = str(state.get("mission_type", "")).casefold()
         stages: list[str] = []
+        # A pure catalog-discovery request is a recommendation regardless of
+        # the intent model's descriptive mission label. Planning can discover
+        # that catalog products are needed after the initial intent pass, so
+        # routing on a fixed mission-type allowlist can accidentally bypass the
+        # LLM selector (for example, a planning_request that becomes a kit).
         is_recommendation = (
-            "search_products" in actions
-            and mission_type in {"product_search", "build_setup", "bundle"}
+            bool(state.get("requires_catalog"))
+            and "search_products" in actions
             and set(actions) <= {"search_products"}
+            # Product-fact questions can require search only to resolve a
+            # named item; they are not recommendation requests.
+            and mission_type != "information_request"
         )
         if is_recommendation:
             # Both single and bundle recommendations pass through the same

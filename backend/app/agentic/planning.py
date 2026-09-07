@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
@@ -19,6 +19,7 @@ class PlanningOutput(BaseModel):
     plan_type: str = Field(min_length=1, max_length=80)
     summary: str = Field(min_length=1, max_length=800)
     requires_catalog: bool = False
+    recommendation_mode: Literal["single", "bundle"] | None = None
     fulfillment_requirements: list[FulfillmentRequirement] = Field(default_factory=list, max_length=12)
     steps: list[str] = Field(default_factory=list, max_length=12)
     follow_up_questions: list[str] = Field(default_factory=list, max_length=4)
@@ -29,7 +30,7 @@ class PlanningOutput(BaseModel):
 PLANNING_SYSTEM_PROMPT = """You are Shopy's general planning agent. Turn a broad
 customer request into a practical, friendly plan before product shopping begins.
 Return only valid JSON matching this schema:
-{"plan_type":string,"summary":string,"requires_catalog":boolean,"fulfillment_requirements":[{"kind":string,"value":string,"field":string|null,"quantity":integer}],"steps":[string],"follow_up_questions":[string],"suggested_shopping_categories":[string],"catalog_queries":[string]}.
+{"plan_type":string,"summary":string,"requires_catalog":boolean,"recommendation_mode":"single"|"bundle"|null,"fulfillment_requirements":[{"kind":string,"value":string,"field":string|null,"quantity":integer}],"steps":[string],"follow_up_questions":[string],"suggested_shopping_categories":[string],"catalog_queries":[string]}.
 
 Rules:
 - Support any planning domain, including moving preparation, room design,
@@ -46,6 +47,10 @@ Rules:
   the plan and customer goal. Otherwise return an empty list. Do not depend
   solely on mission.requires_catalog: it is an earlier interpretation which may
   be incomplete.
+- For a catalog recommendation, independently choose recommendation_mode from
+  the customer's outcome. Use bundle when different complementary product
+  roles form one useful setup or kit; use single only for comparable options
+  of one product role. This is a semantic decision, not a keyword rule.
 - When requires_catalog is true, also derive fulfillment_requirements for the
   concrete item types or constraints the customer explicitly needs. Use
   category for an item type, feature for a capability, and attribute for a
@@ -57,9 +62,19 @@ Rules:
   Do not invent per-item budgets or numeric limits by dividing the customer's
   overall budget. Only preserve a product-specific numeric requirement when the
   customer actually stated it.
-- A category requirement value must be one concise product role without prices,
-  budget wording, preferences, or multiple roles joined together. Put retrieval
-  wording in catalog_queries, while keeping requirements independently testable.
+- A category requirement value is the base product role used to retrieve a
+  high-recall candidate pool. Make it the shortest catalog-neutral product
+  class that still identifies the independently stocked item. Exclude brand,
+  model, capability, performance, material, style, compatibility, price, and
+  use-case modifiers. Put explicit capabilities in feature requirements, named
+  properties in attribute requirements, and richer retrieval wording in
+  catalog_queries. Include the bare base role among the queries for that item.
+  Apply this separation dynamically; do not use a fixed product taxonomy.
+- Treat an explicitly named manufacturer, brand, model family, or other
+  catalog field as a requirement on that field, not as a generic feature
+  phrase. For example, use an `attribute` requirement with `field` set to the
+  catalog field and `value` containing only the requested value. This lets the
+  selector compare alternatives without losing an explicit customer filter.
 - For a multi-item request such as an outfit, collection, room, or setup,
   derive separate component requirements that can be covered by different
   products. Do not use one umbrella label as a requirement when no single
@@ -156,10 +171,32 @@ class PlanningAgent:
         plan: PlanningOutput | None = None
         last_candidate: PlanningOutput | None = None
         expected_catalog_plan = bool(state.get("requires_catalog"))
+        has_existing_role_contract = bool(
+            state.get("required_categories")
+            or state.get("search_requirements")
+            or any(
+                isinstance(item, dict)
+                and str(item.get("kind", "")).casefold().strip() == "category"
+                for item in state.get("fulfillment_requirements", [])
+            )
+        )
+        # Optional plan enrichment stays time-bounded. When the intent stage
+        # could not produce any usable product roles, planning is the primary
+        # LLM semantic step and receives the normal model deadline.
+        planning_timeout = (
+            settings.agent_model_timeout_seconds
+            if expected_catalog_plan and not has_existing_role_contract
+            else settings.agent_optional_model_timeout_seconds
+        )
         for attempt in range(self.max_format_attempts):
             try:
-                async with asyncio.timeout(settings.agent_optional_model_timeout_seconds):
-                    response = await self.model.ainvoke(messages, enable_thinking=False)
+                async with asyncio.timeout(planning_timeout):
+                    response = await self.model.ainvoke(
+                        messages,
+                        enable_thinking=False,
+                        response_mime_type="application/json",
+                        max_output_tokens=settings.agent_intent_max_output_tokens,
+                    )
                 candidate = PlanningOutput.model_validate(_json_object(response.content))
                 last_candidate = candidate
                 # A catalog-bound planning request needs retrieval terms that
@@ -204,7 +241,7 @@ class PlanningAgent:
                         + json.dumps(payload, ensure_ascii=False, default=str)
                     ),
                 ]
-                break
+                continue
         if plan is None and last_candidate is not None:
             plan = self._sanitized_catalog_plan(last_candidate, state["user_request"])
         if plan is None:
@@ -223,37 +260,83 @@ class PlanningAgent:
             query.strip() for query in plan.catalog_queries if query.strip()
         ))
         requirements = list(plan.fulfillment_requirements)
+        # Planning is optional enrichment. It may broaden a valid mission, but
+        # a provider formatting failure must never revoke a catalog decision
+        # already made by the intent LLM. Reuse only that existing structured
+        # contract; do not invent products in this fallback.
+        if expected_catalog_plan and not catalog_queries:
+            catalog_queries = list(dict.fromkeys(
+                str(query).strip()
+                for query in [
+                    *state.get("catalog_queries", []),
+                    *(item.get("query", "") for item in state.get("bundle_items", []) if isinstance(item, dict)),
+                    *(
+                        item.get("canonical_role", "")
+                        for item in state.get("search_requirements", [])
+                        if isinstance(item, dict)
+                    ),
+                ]
+                if str(query).strip()
+            ))
+        if expected_catalog_plan and not requirements:
+            requirements = [
+                FulfillmentRequirement.model_validate(item)
+                for item in state.get("fulfillment_requirements", [])
+                if isinstance(item, dict)
+                and str(item.get("kind", "")).casefold().strip()
+                in self._SHOPPING_REQUIREMENT_KINDS
+            ]
         category_requirements = [
             item.value.strip() for item in requirements
             if item.kind.casefold().strip() == "category" and item.value.strip()
         ]
+        existing_category_roles = list(dict.fromkeys(
+            str(item.get("value", "")).strip()
+            for item in state.get("fulfillment_requirements", [])
+            if isinstance(item, dict)
+            and str(item.get("kind", "")).casefold().strip() == "category"
+            and str(item.get("value", "")).strip()
+        ))
+        explicit_search_roles = list(dict.fromkeys(
+            str(item.get("canonical_role", "")).strip()
+            for item in state.get("search_requirements", [])
+            if isinstance(item, dict)
+            and bool(item.get("customer_required", True))
+            and str(item.get("canonical_role", "")).strip()
+        ))
+        inferred_search_roles = list(dict.fromkeys(
+            str(item.get("canonical_role", "")).strip()
+            for item in state.get("search_requirements", [])
+            if isinstance(item, dict)
+            and not bool(item.get("customer_required", True))
+            and str(item.get("canonical_role", "")).strip()
+        ))
         mission_bundle_needs = list(dict.fromkeys(
             str(item.get("query", "")).strip()
             for item in state.get("bundle_items", [])
             if isinstance(item, dict) and str(item.get("query", "")).strip()
         ))
 
-        # A multi-item plan occasionally returns useful, concrete retrieval
-        # queries but collapses their requirements into one umbrella label. Do
-        # not pass that contradictory contract to search and optimisation. The
-        # model-derived queries are the most specific available product roles,
-        # so promote them to typed requirements when no equally detailed role
-        # set was supplied. This is based on structure/cardinality, not domains.
+        # One umbrella category cannot be fulfilled by several different
+        # products. When the planning LLM decomposes a broad bundle into
+        # multiple concrete queries, keep those queries as optional discovery
+        # roles and discard the umbrella from the hard requirement contract.
+        # This is based only on output structure, not a product taxonomy.
         if (
             state.get("recommendation_mode") == "bundle"
+            and not existing_category_roles
+            and not explicit_search_roles
             and not mission_bundle_needs
             and len(catalog_queries) > 1
             and len(category_requirements) < 2
         ):
             requirements = [
-                item for item in requirements if item.kind.casefold().strip() != "category"
-            ] + [
-                FulfillmentRequirement(kind="category", value=query, quantity=1)
-                for query in catalog_queries
+                item for item in requirements
+                if item.kind.casefold().strip() != "category"
             ]
-            category_requirements = catalog_queries
+            category_requirements = []
 
-        requires_catalog = bool(catalog_queries)
+        requires_catalog = bool(catalog_queries) or expected_catalog_plan
         normalized_plan = plan.model_copy(update={
             "requires_catalog": requires_catalog,
             "catalog_queries": catalog_queries,
@@ -275,14 +358,33 @@ class PlanningAgent:
             output["fulfillment_requirements"] = list({
                 json.dumps(item, sort_keys=True): item for item in [*existing, *derived]
             }.values())
+        planned_mode = plan.recommendation_mode
+        if planned_mode is None and len(set(category_requirements or catalog_queries)) == 1:
+            planned_mode = "single"
+        if planned_mode is not None:
+            output["recommendation_mode"] = planned_mode
         if catalog_queries or requirements:
             # The bundle optimizer consumes normalized needs created by the
             # LLM planner. This keeps room, outfit, setup, and future domains
             # dynamic while ensuring the selected kit reflects the plan rather
             # than the original broad wording.
-            output["required_categories"] = list(dict.fromkeys(
-                mission_bundle_needs
-                if state.get("recommendation_mode") == "bundle" and mission_bundle_needs
-                else category_requirements or catalog_queries
+            required_roles = list(dict.fromkeys(
+                existing_category_roles
+                or explicit_search_roles
+                or (
+                    mission_bundle_needs
+                    if not state.get("search_requirements")
+                    else []
+                )
+                or category_requirements
             ))
+            optional_roles = list(dict.fromkeys([
+                *inferred_search_roles,
+                *(
+                    query for query in catalog_queries
+                    if query not in required_roles
+                ),
+            ]))
+            output["required_categories"] = required_roles
+            output["optional_categories"] = optional_roles
         return output

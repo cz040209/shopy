@@ -42,6 +42,63 @@ async def test_catalog_bound_planning_retries_for_llm_derived_retrieval_needs():
 
 
 @pytest.mark.anyio
+async def test_llm_planning_resolves_a_broad_setup_into_bundle_roles():
+    class GamingPlanningModel:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        async def ainvoke(self, messages, **kwargs):
+            self.kwargs = kwargs
+            return AIMessage(content=(
+                '{"plan_type":"room_setup","summary":"A coordinated gaming setup.",'
+                '"requires_catalog":true,"recommendation_mode":"bundle",'
+                '"fulfillment_requirements":['
+                '{"kind":"category","value":"desk","field":null,"quantity":1},'
+                '{"kind":"category","value":"monitor","field":null,"quantity":1},'
+                '{"kind":"category","value":"chair","field":null,"quantity":1},'
+                '{"kind":"category","value":"keyboard","field":null,"quantity":1}],'
+                '"steps":[],"follow_up_questions":[],"suggested_shopping_categories":[],'
+                '"catalog_queries":["desk","monitor","chair","keyboard"]}'
+            ))
+
+    model = GamingPlanningModel()
+    state = initial_shopping_state("i need a setup for my gaming room")
+    state.update({
+        "requires_catalog": True,
+        "requires_planning": True,
+        "requested_actions": ["search_products"],
+        "mission": {"goal": "i need a setup for my gaming room"},
+    })
+
+    result = await PlanningAgent(model, max_format_attempts=1).run(state)
+
+    assert result["recommendation_mode"] == "bundle"
+    assert result["required_categories"] == ["desk", "monitor", "chair", "keyboard"]
+    assert model.kwargs["response_mime_type"] == "application/json"
+    assert model.kwargs["max_output_tokens"] >= 3000
+
+
+@pytest.mark.anyio
+async def test_planner_keeps_explicit_single_mode_for_multiple_retrieval_phrasings():
+    class ComparisonPlanningModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=(
+                '{"plan_type":"product_search","summary":"Compare matching phones.",'
+                '"requires_catalog":true,"recommendation_mode":"single",'
+                '"fulfillment_requirements":[{"kind":"category","value":"phone","field":null,"quantity":1}],'
+                '"steps":[],"follow_up_questions":[],"suggested_shopping_categories":[],'
+                '"catalog_queries":["Samsung phone","Samsung smartphone","phone"]}'
+            ))
+
+    state = initial_shopping_state("I want a Samsung phone")
+    state.update({"requires_catalog": True, "requires_planning": True})
+
+    result = await PlanningAgent(ComparisonPlanningModel(), max_format_attempts=1).run(state)
+
+    assert result["recommendation_mode"] == "single"
+
+
+@pytest.mark.anyio
 async def test_bundle_planning_preserves_every_intent_product_role():
     model = RoomPlanningModel()
     state = initial_shopping_state("Build a complete setup")
@@ -59,7 +116,7 @@ async def test_bundle_planning_preserves_every_intent_product_role():
 
 
 @pytest.mark.anyio
-async def test_bundle_planning_expands_an_umbrella_requirement_from_concrete_queries():
+async def test_bundle_planning_keeps_inferred_queries_optional_instead_of_enforcing_an_umbrella():
     class TravelPlanningModel:
         async def ainvoke(self, messages, **kwargs):
             return AIMessage(content=(
@@ -81,11 +138,10 @@ async def test_bundle_planning_expands_an_umbrella_requirement_from_concrete_que
 
     roles = ["travel toiletry bag", "compact first aid kit", "portable charger"]
     assert result["requires_catalog"] is True
-    assert result["required_categories"] == roles
-    assert [item["value"] for item in result["fulfillment_requirements"]] == roles
-    assert [
-        item["value"] for item in result["planning_context"]["fulfillment_requirements"]
-    ] == roles
+    assert result["required_categories"] == []
+    assert result["optional_categories"] == roles
+    assert result.get("fulfillment_requirements", []) == []
+    assert result["planning_context"]["fulfillment_requirements"] == []
 
 
 @pytest.mark.anyio
@@ -137,3 +193,39 @@ async def test_planner_repairs_invented_item_budgets_and_non_product_requirement
     assert result["required_categories"] == ["toiletry bottles", "portable charger"]
     assert {item["kind"] for item in result["fulfillment_requirements"]} == {"category"}
     assert all("50" not in query and "100" not in query for query in result["catalog_queries"])
+
+
+@pytest.mark.anyio
+async def test_optional_planning_format_failure_preserves_existing_catalog_mission():
+    class InvalidPlanningModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            return AIMessage(content="not valid planning json")
+
+    model = InvalidPlanningModel()
+    state = initial_shopping_state("Build me a travel kit for a weekend trip.")
+    state.update({
+        "requires_catalog": True,
+        "recommendation_mode": "bundle",
+        "catalog_queries": ["backpack", "packing cubes", "power adapter"],
+        "bundle_items": [
+            {"query": "backpack", "quantity": 1},
+            {"query": "packing cubes", "quantity": 1},
+            {"query": "power adapter", "quantity": 1},
+        ],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": role, "field": None, "quantity": 1}
+            for role in ("backpack", "packing cubes", "power adapter")
+        ],
+        "mission": {"goal": "Create a weekend travel kit"},
+    })
+
+    result = await PlanningAgent(model, max_format_attempts=2).run(state)
+
+    assert model.calls == 2
+    assert result["requires_catalog"] is True
+    assert result["catalog_queries"] == ["backpack", "packing cubes", "power adapter"]
+    assert result["required_categories"] == ["backpack", "packing cubes", "power adapter"]

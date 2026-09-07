@@ -133,6 +133,18 @@ class PlanningCatalogMissionModel:
                 "steps": ["Choose the first room."], "follow_up_questions": [],
                 "suggested_shopping_categories": ["tool product"], "catalog_queries": ["Tool"],
             }))
+        if "product-selection reasoning agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            product = payload["verified_catalog_products"][0]
+            role = payload["role_requirements"][0]["base_role"]
+            return AIMessage(content=json.dumps({
+                "mode": "single", "related_candidate_count": 1,
+                "choices": [{
+                    "product_id": product["id"], "role": role,
+                    "reason": "It matches the planned catalog need.", "quantity": 1,
+                }],
+                "unfulfilled_roles": [],
+            }))
         if "response-writing agent" in prompt:
             payload = json.loads(str(input[1].content))
             products = payload["verified_catalog_products"]
@@ -156,6 +168,18 @@ class PlanningCatalogRecoveryModel:
                 "follow_up_questions": [], "suggested_shopping_categories": ["tool product"],
                 "catalog_queries": ["Tool"],
             }))
+        if "product-selection reasoning agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            product = payload["verified_catalog_products"][0]
+            role = payload["role_requirements"][0]["base_role"]
+            return AIMessage(content=json.dumps({
+                "mode": "single", "related_candidate_count": 1,
+                "choices": [{
+                    "product_id": product["id"], "role": role,
+                    "reason": "It matches the planned catalog need.", "quantity": 1,
+                }],
+                "unfulfilled_roles": [],
+            }))
         if "response-writing agent" in prompt:
             payload = json.loads(str(input[1].content))
             products = payload["verified_catalog_products"]
@@ -165,6 +189,178 @@ class PlanningCatalogRecoveryModel:
                 "unfulfilled_requirements": [],
             }))
         return AIMessage(content='{"mission_type":"planning_request","goal":"prepare a new house","requires_planning":true,"requires_catalog":false,"catalog_query":null,"catalog_queries":[],"requested_actions":[],"budget":null,"preferences":[],"constraints":[],"owned_items":[],"priorities":[],"fulfillment_requirements":[]}')
+
+
+class CompleteTravelRoleModel:
+    def __init__(self) -> None:
+        self.planning_calls = 0
+        self.selector_calls = 0
+
+    async def ainvoke(self, input, **kwargs):
+        prompt = str(input[0].content)
+        if "general planning agent" in prompt:
+            self.planning_calls += 1
+            return AIMessage(content="invalid planning output")
+        if "product-selection reasoning agent" in prompt:
+            self.selector_calls += 1
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            choices = []
+            used_ids = set()
+            assert payload["required_roles"] == []
+            assert all(
+                requirement["customer_required"] is False
+                for requirement in payload["role_requirements"]
+            )
+            for requirement in payload["role_requirements"]:
+                role = requirement["base_role"]
+                product = next(
+                    item for item in products
+                    if role in item["retrieval_query_matches"] and item["id"] not in used_ids
+                )
+                used_ids.add(product["id"])
+                choices.append({
+                    "product_id": product["id"], "role": role,
+                    "reason": "It fulfills this travel-kit role.", "quantity": 1,
+                })
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": len(products),
+                "choices": choices, "unfulfilled_roles": [],
+            }))
+        if "response-writing agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "Recommended travel kit: " + ", ".join(
+                    product["name"] for product in products
+                ),
+                "product_ids": [product["id"] for product in products],
+                "unfulfilled_requirements": [],
+            }))
+        return AIMessage(content=json.dumps({
+            "mission_type": "product_search",
+            "recommendation_mode": "bundle",
+            "goal": "Create a travel kit for a weekend trip",
+            "requires_planning": False,
+            "requires_catalog": True,
+            "continues_context": False,
+            "catalog_query": None,
+            "catalog_queries": ["backpack", "packing cubes", "power adapter"],
+            "requested_actions": ["search_products"],
+            "budget": None,
+            "bundle_items": [
+                {"query": "travel backpack", "quantity": 1},
+                {"query": "packing cubes", "quantity": 1},
+                {"query": "universal power adapter", "quantity": 1},
+            ],
+            "search_requirements": [
+                {
+                    "original_text": "travel backpack", "canonical_role": "backpack",
+                    "customer_required": False,
+                    "required_features": [], "preferred_features": ["travel"],
+                    "search_queries": ["backpack", "travel backpack"],
+                },
+                {
+                    "original_text": "packing cubes", "canonical_role": "packing cube",
+                    "customer_required": False,
+                    "required_features": [], "preferred_features": ["compact"],
+                    "search_queries": ["packing cube", "packing cubes"],
+                },
+                {
+                    "original_text": "universal power adapter", "canonical_role": "power adapter",
+                    "customer_required": False,
+                    "required_features": ["universal"], "preferred_features": [],
+                    "search_queries": ["power adapter", "universal power adapter"],
+                },
+            ],
+            "preferences": [], "key_requirements": [],
+            "constraints": [], "owned_items": [], "priorities": [],
+            "selection_criteria": [],
+            # Deliberately incomplete, matching the production failure. Intent
+            # normalization must restore the other role identities.
+            "fulfillment_requirements": [
+                {"kind": "category", "value": "backpack", "field": None, "quantity": 1}
+            ],
+        }))
+
+
+class BroadGamingRecoveryModel:
+    def __init__(self) -> None:
+        self.intent_calls = 0
+        self.planning_calls = 0
+        self.selector_payload = None
+
+    async def ainvoke(self, input, **kwargs):
+        prompt = str(input[0].content)
+        if "general planning agent" in prompt:
+            self.planning_calls += 1
+            return AIMessage(content=json.dumps({
+                "plan_type": "gaming_room_setup",
+                "summary": "Build a coordinated setup.",
+                "requires_catalog": True,
+                "recommendation_mode": "bundle",
+                "fulfillment_requirements": [
+                    {"kind": "category", "value": role, "field": None, "quantity": 1}
+                    for role in ("desk", "monitor", "chair", "keyboard")
+                ],
+                "steps": [], "follow_up_questions": [],
+                "suggested_shopping_categories": [],
+                "catalog_queries": ["desk", "monitor", "chair", "keyboard"],
+            }))
+        if "product-selection reasoning agent" in prompt:
+            self.selector_payload = json.loads(str(input[1].content))
+            products = self.selector_payload["verified_catalog_products"]
+            choices = []
+            for role in self.selector_payload["required_roles"]:
+                product = next(item for item in products if role in item["retrieval_query_matches"])
+                choices.append({
+                    "product_id": product["id"], "role": role,
+                    "reason": "It fulfills this setup role.", "quantity": 1,
+                })
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": len(products),
+                "choices": choices, "unfulfilled_roles": [],
+            }))
+        if "response-writing agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            return AIMessage(content=json.dumps({
+                "response": "Recommended setup: " + ", ".join(
+                    product["name"] for product in products
+                ),
+                "product_ids": [product["id"] for product in products],
+                "unfulfilled_requirements": [],
+            }))
+        if "final brand-voice editor" in prompt:
+            payload = json.loads(str(input[1].content))
+            return AIMessage(content=json.dumps({
+                "response": payload["draft_response"],
+            }))
+        self.intent_calls += 1
+        # This mirrors the production trace: useful catalog intent survived,
+        # but one invalid field made the schema fail and the model represented
+        # the whole sentence as one unusable product role.
+        return AIMessage(content=json.dumps({
+            "mission_type": "product_search",
+            "recommendation_mode": "single",
+            "goal": "i need a setup for my gaming room",
+            "requires_planning": False,
+            "requires_catalog": True,
+            "requested_actions": ["search_products"],
+            "catalog_query": "i need a setup for my gaming room",
+            "catalog_queries": ["i need a setup for my gaming room"],
+            "search_requirements": [{
+                "original_text": "i need a setup for my gaming room",
+                "canonical_role": "i need a setup for my gaming room",
+                "required_features": [], "preferred_features": [],
+                "search_queries": ["i need a setup for my gaming room"],
+            }],
+            "fulfillment_requirements": [{
+                "kind": "category", "value": "i need a setup for my gaming room",
+                "field": None, "quantity": 1,
+            }],
+            "budget": "invalid",
+        }))
 
 
 class AlwaysFailAuditor:
@@ -390,6 +586,74 @@ async def test_planning_agent_recovers_a_missing_catalog_flag_dynamically(db_ses
 
 
 @pytest.mark.anyio
+async def test_complete_travel_roles_reach_search_and_selector_without_optional_planning(db_session):
+    seller = Seller(name="Travel Seller", slug="travel-seller", status=SellerStatus.ACTIVE)
+    category = Category(name="Travel", slug="travel")
+    products = [
+        Product(
+            seller=seller, category=category, sku=sku, slug=slug, name=name,
+            brand="Travel Brand", description=description, price=Decimal(price),
+            status=ProductStatus.ACTIVE, inventory_quantity=10,
+        )
+        for sku, slug, name, description, price in (
+            ("TRAVEL-1", "weekend-backpack", "Weekend Travel Backpack", "Compact luggage backpack", "180"),
+            ("TRAVEL-2", "packing-cube-set", "Packing Cube Set", "Organises clothes", "60"),
+            ("TRAVEL-3", "universal-power-adapter", "Universal Power Adapter", "International plug adapter", "90"),
+        )
+    ]
+    db_session.add_all(products)
+    db_session.commit()
+    model = CompleteTravelRoleModel()
+    registry = CommerceToolRegistry(db_session, "complete-travel-flow", max_calls=20)
+
+    result = await ShoppingOrchestrator(model, tool_registry=registry).ainvoke(
+        "Build me a travel kit for a weekend trip."
+    )
+
+    assert model.planning_calls == 0
+    assert model.selector_calls == 1
+    assert len(result["selected_products"]) == 3
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_broad_gaming_request_recovers_through_llm_roles_and_selector(db_session):
+    seller = Seller(name="Gaming Seller", slug="gaming-seller", status=SellerStatus.ACTIVE)
+    category = Category(name="Gaming", slug="gaming-recovery")
+    products = [
+        Product(
+            seller=seller, category=category, sku=f"GAMING-{index}",
+            slug=f"gaming-{role}", name=f"Gaming {role.title()}",
+            brand="Gaming Brand", description=f"Purpose-built {role} for a gaming room.",
+            price=Decimal("200.00"), status=ProductStatus.ACTIVE,
+            inventory_quantity=10,
+        )
+        for index, role in enumerate(("desk", "monitor", "chair", "keyboard"), start=1)
+    ]
+    db_session.add_all(products)
+    db_session.commit()
+    model = BroadGamingRecoveryModel()
+    registry = CommerceToolRegistry(db_session, "broad-gaming-recovery", max_calls=20)
+
+    result = await ShoppingOrchestrator(model, tool_registry=registry).ainvoke(
+        "i need a setup for my gaming room"
+    )
+
+    assert model.intent_calls == 2
+    assert model.planning_calls == 1
+    assert result["recommendation_mode"] == "bundle"
+    assert result["required_categories"] == ["desk", "monitor", "chair", "keyboard"]
+    assert [item["base_role"] for item in model.selector_payload["role_requirements"]] == [
+        "desk", "monitor", "chair", "keyboard",
+    ]
+    assert len(model.selector_payload["verified_catalog_products"]) == 4
+    assert len(result["selected_products"]) == 4
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
 async def test_auditor_allows_a_response_to_repeat_the_verified_customer_budget(db_session):
     registry = CommerceToolRegistry(db_session, "budget-echo", max_calls=20)
 
@@ -536,12 +800,12 @@ async def test_auditor_rejects_response_claims_that_do_not_match_catalog(db_sess
 
 
 @pytest.mark.anyio
-async def test_repair_routing_and_repair_limit():
-    orchestrator = ShoppingOrchestrator(FakeChatModel(), auditor=AlwaysFailAuditor(), max_repairs=2, max_graph_iterations=20)
+async def test_failed_audit_is_terminal_and_does_not_start_a_repair_cycle():
+    orchestrator = ShoppingOrchestrator(FakeChatModel(), auditor=AlwaysFailAuditor(), max_graph_iterations=20)
     result = await orchestrator.ainvoke("Build a gaming setup")
 
-    assert result["repair_count"] == 2
     assert result["audit_result"]["status"] == "fail"
+    assert "repair_count" not in result
 
 
 @pytest.mark.anyio

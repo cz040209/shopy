@@ -80,6 +80,43 @@ def test_need_planner_does_not_rebuy_a_more_specific_owned_item():
     assert result.required_categories == ["white sneakers"]
 
 
+def test_inferred_bundle_roles_expand_search_without_becoming_hard_requirements():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="Build a useful weekend travel kit", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[
+            {"query": "travel adapter"},
+            {"query": "packing cubes"},
+            {"query": "portable charger"},
+        ],
+        search_requirements=[
+            {
+                "original_text": role,
+                "canonical_role": role,
+                "customer_required": False,
+                "search_queries": [role],
+            }
+            for role in ("travel adapter", "packing cubes", "portable charger")
+        ],
+        fulfillment_requirements=[
+            {"kind": "category", "value": role, "quantity": 1}
+            for role in ("travel adapter", "packing cubes", "portable charger")
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission, None, user_request="Build me a travel kit for a weekend trip.",
+    )
+    plan = NeedPlannerAgent().plan(normalized)
+
+    assert normalized.fulfillment_requirements == []
+    assert plan.required_categories == []
+    assert plan.optional_categories == [
+        "travel adapter", "packing cubes", "portable charger",
+    ]
+
+
 def test_intent_normalization_removes_a_structural_bundle_wrapper_after_decomposition():
     mission = MissionInterpretation(
         mission_type="product_search", recommendation_mode="bundle",
@@ -121,9 +158,14 @@ def test_intent_normalization_removes_a_structural_bundle_wrapper_after_decompos
     assert [item.canonical_role for item in normalized.search_requirements] == [
         "Car Wash Mitt", "Car Shampoo", "Microfiber Drying Towel", "Wheel Cleaner",
     ]
-    assert [item.value for item in normalized.fulfillment_requirements] == [
-        "Car Wash Mitt", "Car Shampoo", "Microfiber Drying Towel", "Wheel Cleaner",
-    ]
+    # The customer requested an outcome-level kit, not these particular
+    # model-inferred components. They broaden retrieval without becoming
+    # mandatory missing-item claims.
+    assert normalized.fulfillment_requirements == []
+    assert all(
+        requirement.customer_required is False
+        for requirement in normalized.search_requirements
+    )
 
 
 def test_intent_normalization_reconciles_vision_and_malformed_duplicate_requirements():
@@ -319,13 +361,15 @@ def test_intent_normalization_repairs_invented_combo_and_duplicate_role_mapping(
         "monitor stand for gaming desk", "keyboard", "mouse",
     ]
     assert [item.value for item in normalized.fulfillment_requirements] == [
-        "Gaming Chair", "Gaming Desk", "Monitor Stand", "Keyboard", "Mouse",
+        "Gaming Desk",
     ]
     assert [item.canonical_role for item in normalized.search_requirements] == [
         "gaming chair", "gaming desk", "Monitor Stand", "Keyboard", "Mouse",
     ]
-    assert NeedPlannerAgent().plan(normalized).required_categories == [
-        "Gaming Chair", "Gaming Desk", "Monitor Stand", "Keyboard", "Mouse",
+    plan = NeedPlannerAgent().plan(normalized)
+    assert plan.required_categories == ["Gaming Desk"]
+    assert plan.optional_categories == [
+        "gaming chair", "Monitor Stand", "Keyboard", "Mouse",
     ]
 
 
@@ -346,7 +390,7 @@ def test_intent_normalization_does_not_invent_bundle_quantities():
     )
 
     assert inferred.bundle_items[0].quantity == 1
-    assert inferred.fulfillment_requirements[0].quantity == 1
+    assert inferred.fulfillment_requirements == []
     assert explicit.bundle_items[0].quantity == 2
     assert explicit.fulfillment_requirements[0].quantity == 2
 
@@ -471,7 +515,6 @@ def test_initial_state_is_complete_and_mutable_fields_are_not_shared():
     second = initial_shopping_state("Find a travel kit")
     first["preferences"].append("wireless")
 
-    assert first["repair_count"] == 0
     assert second["preferences"] == []
     assert first["candidate_products"] == []
 
@@ -501,6 +544,64 @@ async def test_invalid_intent_model_output_uses_a_safe_fallback():
     assert result.mission_type == "information_request"
     assert result.goal == "Build a setup"
     assert result.requested_actions == []
+
+
+@pytest.mark.anyio
+async def test_invalid_broad_catalog_role_is_deferred_to_llm_planning():
+    class SearchArgs(BaseModel):
+        query: str | None = None
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    # The catalog fields are independently readable, but an invalid budget
+    # makes the overall model response fail validation. The preserved role is
+    # merely the whole customer sentence and must not become a literal filter.
+    response = json.dumps({
+        "mission_type": "product_search",
+        "recommendation_mode": "single",
+        "goal": "i need a setup for my gaming room",
+        "requires_catalog": True,
+        "requires_planning": False,
+        "requested_actions": ["search_products"],
+        "catalog_query": "i need a setup for my gaming room",
+        "catalog_queries": ["i need a setup for my gaming room"],
+        "search_requirements": [{
+            "original_text": "i need a setup for my gaming room",
+            "canonical_role": "i need a setup for my gaming room",
+            "search_queries": ["i need a setup for my gaming room"],
+        }],
+        "fulfillment_requirements": [{
+            "kind": "category",
+            "value": "i need a setup for my gaming room",
+            "quantity": 1,
+        }],
+        "budget": "invalid",
+    })
+
+    result = await IntentMissionAgent(
+        FakeChatModel(response), tools=[SearchTool()],
+    ).interpret("i need a setup for my gaming room")
+
+    assert result.requires_catalog is True
+    assert result.requires_planning is True
+    assert result.requested_actions == ["search_products"]
+    assert result.catalog_query is None
+    assert result.catalog_queries == []
+    assert result.search_requirements == []
+    assert not any(
+        item.kind == "category" for item in result.fulfillment_requirements
+    )
+
+
+def test_structured_json_parser_accepts_a_harmless_provider_wrapper():
+    from app.agentic.intent import _json_object
+
+    assert _json_object('Result follows:\n{"mission_type":"product_search"}\nDone.') == {
+        "mission_type": "product_search",
+    }
 
 
 @pytest.mark.anyio
@@ -572,7 +673,7 @@ async def test_intent_fallback_preserves_valid_dynamic_role_expansions():
     assert result.search_requirements[0].search_queries == [
         "car shampoo", "car wash soap", "car cleaning shampoo",
     ]
-    assert result.fulfillment_requirements[0].value == "car shampoo"
+    assert result.fulfillment_requirements == []
 
 
 @pytest.mark.anyio
@@ -1227,8 +1328,8 @@ def test_single_recommendation_allows_a_configured_near_budget_option_but_not_a_
         "budget": 5_000,
         "fulfillment_requirements": [{"kind": "category", "value": "phone", "field": None, "quantity": 1}],
         "candidate_products": [
-            {"id": "near-budget", "name": "Near Budget Phone", "category": "Phones", "price": "6500", "inventory_quantity": 4, "specs": [], "attributes": {}},
-            {"id": "too-far", "name": "Too Far Phone", "category": "Phones", "price": "6500.01", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "near-budget", "name": "Near Budget Phone", "category": "Phones", "price": "7000", "inventory_quantity": 4, "specs": [], "attributes": {}},
+            {"id": "too-far", "name": "Too Far Phone", "category": "Phones", "price": "7000.01", "inventory_quantity": 4, "specs": [], "attributes": {}},
         ],
     })
 
@@ -1350,7 +1451,7 @@ async def test_bundle_resolves_generic_product_form_terms_from_catalog_evidence(
         }],
     )
     normalized = IntentMissionAgent._normalize_mission(
-        mission, None, user_request="Build a weekly wash kit",
+        mission, None, user_request="Recommend car wash soap for a weekly wash",
     )
     role = normalized.fulfillment_requirements[0].value
     assert role == "car shampoo"
@@ -1557,10 +1658,67 @@ def test_bundle_refinement_inherits_the_complete_prior_mission_contract():
     assert merged.selection_criteria == follow_up.selection_criteria
 
 
+def test_new_disjoint_role_contract_does_not_inherit_stale_active_mission():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="Build a weekend travel kit", requires_catalog=True,
+        continues_context=True, requested_actions=["search_products"],
+        bundle_items=[
+            {"query": "travel adapter"},
+            {"query": "packing cubes"},
+            {"query": "portable charger"},
+        ],
+        search_requirements=[
+            {
+                "original_text": role,
+                "canonical_role": role,
+                "customer_required": False,
+                "search_queries": [role],
+            }
+            for role in ("travel adapter", "packing cubes", "portable charger")
+        ],
+        key_requirements=["Weekend travel", "Travel skincare kit"],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "skincare", "quantity": 1},
+            {"kind": "category", "value": "travel adapter", "quantity": 1},
+            {"kind": "category", "value": "packing cubes", "quantity": 1},
+            {"kind": "category", "value": "portable charger", "quantity": 1},
+        ],
+    )
+    memory = {
+        "current_mission": {
+            "search_requirements": [{
+                "original_text": "skincare",
+                "canonical_role": "skincare",
+                "search_queries": ["skincare"],
+            }],
+            "bundle_items": [{"query": "skincare"}],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": "skincare", "quantity": 1},
+            ],
+        },
+    }
+
+    fresh = ShoppingOrchestrator._validate_continuation_boundary(
+        mission, memory, "Build me a travel kit for a weekend trip.",
+    )
+
+    assert fresh.continues_context is False
+    assert all(
+        requirement.value != "skincare"
+        for requirement in fresh.fulfillment_requirements
+    )
+    assert all("skincare" not in item.casefold() for item in fresh.key_requirements)
+    assert [item.canonical_role for item in fresh.search_requirements] == [
+        "travel adapter", "packing cubes", "portable charger",
+    ]
+
+
 def test_manager_always_runs_llm_selector_for_bundle_mode_even_with_one_planned_role():
     plan = WorkflowManager().plan({
         "mission_type": "product_search", "recommendation_mode": "bundle",
         "required_categories": ["travel setup"], "owned_items": [],
+        "requires_catalog": True,
     }, ["search_products"])
 
     assert plan["stages"] == ["product_selector"]
@@ -1570,9 +1728,53 @@ def test_manager_does_not_schedule_review_intelligence_for_aggregate_ratings():
     plan = WorkflowManager().plan({
         "mission_type": "product_search", "recommendation_mode": "single",
         "required_categories": ["headphones"], "owned_items": [],
+        "requires_catalog": True,
     }, ["search_products", "get_product_reviews"])
 
     assert plan["stages"] == []
+
+
+def test_manager_routes_planned_catalog_recommendations_through_llm_selector():
+    plan = WorkflowManager().plan({
+        "mission_type": "planning_request", "recommendation_mode": "bundle",
+        "required_categories": ["generated role"], "owned_items": [],
+        "requires_catalog": True,
+    }, ["search_products"])
+
+    assert plan["stages"][0] == "product_selector"
+
+
+def test_complete_llm_role_contract_skips_redundant_planning_call():
+    state = initial_shopping_state("Build me a travel kit")
+    state.update({
+        "requires_planning": True,
+        "requires_catalog": True,
+        "required_categories": ["backpack", "packing cube", "power adapter"],
+        "search_requirements": [
+            {
+                "original_text": role,
+                "canonical_role": role,
+                "required_features": [],
+                "preferred_features": [],
+                "search_queries": [role],
+            }
+            for role in ("backpack", "packing cube", "power adapter")
+        ],
+    })
+
+    assert ShoppingOrchestrator._after_need_planner(state) == "manager"
+
+
+def test_incomplete_catalog_role_contract_still_uses_llm_planning():
+    state = initial_shopping_state("Help me prepare a new home")
+    state.update({
+        "requires_planning": True,
+        "requires_catalog": True,
+        "required_categories": ["new home preparation"],
+        "search_requirements": [],
+    })
+
+    assert ShoppingOrchestrator._after_need_planner(state) == "planning"
 
 
 def test_bundle_price_refinement_uses_prior_total_without_filtering_product_roles():
@@ -1602,6 +1804,108 @@ def test_bundle_price_refinement_uses_prior_total_without_filtering_product_role
         "field": "price", "operator": "lower_than_reference", "reference_value": "500.00",
         "scope": "bundle_total", "eligible_count": 4,
     }]
+
+
+def test_bundle_numeric_refinement_uses_an_aggregate_without_removing_other_roles():
+    state = initial_shopping_state("Prioritize better reviewed options")
+    state.update({
+        "continues_context": True,
+        "recommendation_mode": "bundle",
+        "selection_criteria": [{
+            "field": "rating_average",
+            "operator": "higher_than_reference",
+            "value": None,
+            "weight": 5,
+        }],
+        "memory_context": {
+            "selected_products": [{"id": "old-bag"}, {"id": "old-adapter"}],
+            "current_bundle": {"total": "500.00"},
+        },
+    })
+    candidates = [
+        {"id": "old-bag", "name": "Old Bag", "rating_average": "4.0"},
+        {"id": "new-bag", "name": "New Bag", "rating_average": "4.7"},
+        {"id": "old-adapter", "name": "Old Adapter", "rating_average": "4.4"},
+        {"id": "new-adapter", "name": "New Adapter", "rating_average": "4.8"},
+    ]
+
+    alternatives, context = ShoppingOrchestrator._apply_optimization_context(
+        state, candidates,
+    )
+
+    assert {item["id"] for item in alternatives} == {
+        "old-bag", "new-bag", "old-adapter", "new-adapter",
+    }
+    assert context["applied_comparisons"] == [{
+        "field": "rating_average",
+        "operator": "higher_than_reference",
+        "reference_value": "4.2",
+        "scope": "bundle_average",
+        "eligible_count": 4,
+    }]
+
+
+def test_bundle_refinement_reclassifies_legacy_inferred_roles_from_original_request():
+    follow_up = MissionInterpretation(
+        mission_type="product_search",
+        recommendation_mode="single",
+        goal="Make it cheaper",
+        continues_context=True,
+        optimization_mode="cheaper",
+        requires_catalog=True,
+        catalog_query="Make it cheaper",
+        requested_actions=["search_products"],
+        selection_criteria=[{
+            "field": "price",
+            "operator": "lower_than_reference",
+            "value": 1605,
+            "weight": 10,
+        }],
+    )
+    prior_roles = ["backpack", "packing cubes", "power adapter", "rain cover"]
+    memory = {
+        "current_mission": {
+            "mission_type": "product_search",
+            "recommendation_mode": "bundle",
+            "goal": "Build a travel kit for a weekend trip",
+            "requires_catalog": True,
+            "catalog_query": None,
+            "catalog_queries": prior_roles,
+            "requested_actions": ["search_products"],
+            "bundle_items": [{"query": role} for role in prior_roles],
+            # Legacy memory predates customer_required, so schema parsing would
+            # otherwise default every inferred component to mandatory.
+            "search_requirements": [
+                {
+                    "original_text": role,
+                    "canonical_role": role,
+                    "search_queries": [role],
+                }
+                for role in prior_roles
+            ],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": role} for role in prior_roles
+            ],
+        },
+        "recent_messages": [
+            {"role": "user", "content": "Build me a travel kit for a weekend trip."},
+            {"role": "user", "content": "Show a best value alternative."},
+        ],
+        "current_bundle": {"total": "1605.00"},
+    }
+
+    merged = ShoppingOrchestrator._merge_continuation_mission(follow_up, memory)
+
+    assert merged.recommendation_mode == "bundle"
+    assert merged.catalog_query is None
+    assert all(
+        requirement.customer_required is False
+        for requirement in merged.search_requirements
+    )
+    assert merged.fulfillment_requirements == []
+    plan = NeedPlannerAgent().plan(merged)
+    assert plan.required_categories == []
+    assert plan.optional_categories == prior_roles
 
 
 @pytest.mark.anyio

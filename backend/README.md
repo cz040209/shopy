@@ -3,9 +3,9 @@
 The FastAPI server keeps provider API keys on the server, uses Qwen as the primary provider for chat and vision, and falls back to Gemini when Qwen is unavailable.
 
 ```bash
-cp backend/.env.example backend/.env
-# Edit backend/.env and replace the example PostgreSQL password.
-docker compose --env-file backend/.env up -d postgres
+cp .env.example .env
+# Edit the root .env and replace the example PostgreSQL password.
+docker compose up -d postgres
 
 cd backend
 poetry install
@@ -98,7 +98,8 @@ cd backend
 poetry run pytest
 ```
 
-Copy `.env.example` to `.env` and set the required values before running in a new environment. The local `.env` is ignored by Git.
+From the repository root, copy `.env.example` to `.env` and set the required
+values before running in a new environment. The root `.env` is ignored by Git.
 
 ## Persistent avatar uploads
 

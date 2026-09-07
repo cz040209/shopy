@@ -7,6 +7,7 @@ from typing import Any
 
 from app.config import settings
 
+from .budgeting import recommendation_budget_limit
 from .state import ShoppingAgentState
 from .tools import CommerceToolRegistry, ToolExecutionError
 
@@ -61,12 +62,22 @@ class ProductSearchAgent:
         ranked = self._rank(result["products"], state, include_out_of_stock=include_out_of_stock)
         shortlist_limit = max(1, settings.agent_catalog_shortlist_limit)
         by_id = {str(item["product"]["id"]): item for item in ranked}
-        role_ids = [
-            str(product_id)
+        # Fill the shortlist round-robin across the model-generated roles.
+        # This keeps later roles visible even when earlier queries have many
+        # matches, without embedding any product taxonomy in retrieval.
+        role_pools = [
+            list(dict.fromkeys(
+                str(product_id)
+                for product_id in result.get("query_matches", {}).get(group["role"], [])
+                if str(product_id) in by_id
+            ))
             for group in groups
-            for product_id in result.get("query_matches", {}).get(group["role"], [])
-            if str(product_id) in by_id
         ]
+        role_ids: list[str] = []
+        for index in range(max(map(len, role_pools), default=0)):
+            for pool in role_pools:
+                if index < len(pool):
+                    role_ids.append(pool[index])
         memory = state.get("memory_context")
         prior = memory.get("selected_products", []) if isinstance(memory, dict) else []
         reference_ids = [
@@ -74,7 +85,7 @@ class ProductSearchAgent:
             if isinstance(item, dict) and str(item.get("id")) in by_id
         ]
         ranked_ids = [str(item["product"]["id"]) for item in ranked]
-        chosen = list(dict.fromkeys([*role_ids, *reference_ids, *ranked_ids]))[:shortlist_limit]
+        chosen = list(dict.fromkeys([*reference_ids, *role_ids, *ranked_ids]))[:shortlist_limit]
         shortlisted = [by_id[product_id] for product_id in chosen]
         return self._result(
             shortlisted,
@@ -142,7 +153,7 @@ class ProductSearchAgent:
 
     @classmethod
     def _rank(cls, products: list[dict[str, Any]], state: ShoppingAgentState, *, include_out_of_stock: bool) -> list[dict[str, Any]]:
-        budget = Decimal(str(state["budget"])) if state.get("budget") is not None else None
+        budget_limit = recommendation_budget_limit(state.get("budget"))
         intent_terms = cls._intent_terms(state)
         owned = " ".join(map(str, state.get("owned_items", []))).lower()
         ranked: list[dict[str, Any]] = []
@@ -159,11 +170,12 @@ class ProductSearchAgent:
             score, reasons = (20, ["in stock"]) if int(product.get("inventory_quantity", 0)) > 0 else (0, ["stock status checked"])
             try:
                 price = Decimal(str(product["price"]))
-                if budget is not None:
-                    if price > budget:
+                if budget_limit is not None:
+                    if price > budget_limit:
                         continue
-                    score += 20
-                    reasons.append("within budget")
+                    target = Decimal(str(state["budget"]))
+                    score += 20 if price <= target else 5
+                    reasons.append("within budget" if price <= target else "within recommendation tolerance")
             except Exception:
                 continue
             fact_terms = {

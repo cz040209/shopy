@@ -201,6 +201,7 @@ async def analyze_shopping_photo(
         "priorities": state.get("priorities", []),
     }
     workspace = {
+        "recommendation_mode": state.get("recommendation_mode"),
         "bundle": state.get("bundle"),
         "compatibility": state.get("compatibility_results", []),
         "product_rankings": state.get("product_rankings", []),

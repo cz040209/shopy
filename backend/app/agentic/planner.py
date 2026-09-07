@@ -17,14 +17,26 @@ class NeedPlannerAgent:
             item.value.strip() for item in mission.fulfillment_requirements
             if item.kind.casefold().strip() == "category" and item.value.strip()
         ]
+        inferred = [
+            item.canonical_role.strip() for item in mission.search_requirements
+            if not item.customer_required and item.canonical_role.strip()
+        ]
         if not required:
+            required = [
+                item.canonical_role.strip() for item in mission.search_requirements
+                if item.customer_required and item.canonical_role.strip()
+            ]
+        if not required and not mission.search_requirements:
             required = [item.query.strip() for item in mission.bundle_items if item.query.strip()]
         if mission.recommendation_mode == "bundle" and not required:
             # A formatting failure can preserve the customer's explicit kit
             # intent while leaving no independently verified component roles.
             # Keep the broad catalog query for retrieval, but do not turn that
             # outcome phrase into one impossible mandatory product identity.
-            return NeedPlan(required_categories=[], optional_categories=[])
+            return NeedPlan(
+                required_categories=[],
+                optional_categories=list(dict.fromkeys(inferred)),
+            )
         if not required:
             required = [query.strip() for query in mission.catalog_queries if query.strip()]
         if not required and mission.catalog_query:
@@ -48,4 +60,7 @@ class NeedPlannerAgent:
             item for item in required
             if not terms(item) or not any(terms(item).issubset(owned_item) for owned_item in owned)
         ))
-        return NeedPlan(required_categories=required, optional_categories=[])
+        return NeedPlan(
+            required_categories=required,
+            optional_categories=list(dict.fromkeys(inferred)),
+        )

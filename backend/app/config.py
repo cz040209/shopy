@@ -4,8 +4,9 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-BACKEND_DIRECTORY = ENV_FILE.parent
+BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
+PROJECT_DIRECTORY = BACKEND_DIRECTORY.parent
+ENV_FILE = PROJECT_DIRECTORY / ".env"
 DEFAULT_UPLOAD_DIRECTORY = BACKEND_DIRECTORY / "data" / "uploads"
 
 
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.7-flash"
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3.6-flash"
+    qwen_model: str = "qwen-vl-plus"
     # Available in the Model Studio free quota and accepts image input through
     # the OpenAI-compatible chat-completions endpoint.
     qwen_vision_model: str = "qwen3.5-omni-plus"
@@ -37,30 +38,32 @@ class Settings(BaseSettings):
     ai_log_agent_node_payloads: bool = True
     auth_cookie_secure: bool = False
     auth_session_days: int = 7
-    # A catalog run uses ten graph nodes before a retry. Leave room for two
-    # targeted repair cycles instead of failing with a graph recursion error.
+    # Covers the longest vision + planning + compatibility + final-audit path.
+    # This is a node safety bound, not a retry count.
     agent_max_graph_iterations: int = 24
     agent_max_tool_calls: int = 8
     # Retrieval asks the database for a bounded set per intent-derived product
     # role. The full catalog is never copied into an LLM prompt.
-    agent_catalog_shortlist_limit: int = 60
-    agent_catalog_role_matches_per_need: int = 12
+    agent_catalog_shortlist_limit: int = 36
+    agent_catalog_role_matches_per_need: int = 8
     agent_bundle_options_per_need: int = 12
     agent_bundle_beam_width: int = 800
-    agent_max_repair_attempts: int = 2
     agent_response_format_attempts: int = 2
-    # Product selection is always performed by the configured LLM. The first
-    # attempt receives the complete verified shortlist; later attempts receive
-    # the same shortlist plus deterministic validation errors.
-    agent_selector_max_attempts: int = 3
+    # Product selection is always performed once by the configured LLM. A
+    # failed selection is surfaced; it is never replaced or retried by a
+    # deterministic recommendation path.
     # Near-budget alternatives can be shown when they are explicitly disclosed
     # to the shopper; the customer budget remains the primary target.
-    agent_recommendation_budget_tolerance_percent: float = 30
+    agent_recommendation_budget_tolerance_percent: float = 40
     agent_model_timeout_seconds: float = 30
     # Intent extraction can contain six roles with several query variants, and
     # product selection includes a reason for every chosen catalog ID.
     agent_model_max_output_tokens: int = 1600
-    agent_selector_max_output_tokens: int = 3000
+    # A complete multi-role intent contract is larger than ordinary response
+    # prose. A separate ceiling prevents valid JSON from being cut off without
+    # making every other LLM call unnecessarily verbose.
+    agent_intent_max_output_tokens: int = 5000
+    agent_selector_max_output_tokens: int = 5000
     # Optional semantic enrichments must never hold the verified deterministic
     # workflow open for a full provider timeout.
     agent_optional_model_timeout_seconds: float = 8

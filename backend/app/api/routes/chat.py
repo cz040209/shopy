@@ -293,6 +293,9 @@ async def chat(
         "priorities": trace.state.get("priorities", []),
     }
     workspace = {
+        # Redundant presentation metadata protects clients restoring a stored
+        # response if an older gateway omitted the nested mission object.
+        "recommendation_mode": trace.state.get("recommendation_mode"),
         "bundle": trace.state.get("bundle"),
         "compatibility": trace.state.get("compatibility_results", []),
         "product_rankings": trace.state.get("product_rankings", []),

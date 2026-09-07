@@ -49,6 +49,7 @@ Return only valid JSON, without Markdown.
     {
       "original_text": string,
       "canonical_role": string,
+      "customer_required": boolean,
       "required_features": [string],
       "preferred_features": [string],
       "search_queries": [string]
@@ -110,6 +111,11 @@ Return only valid JSON, without Markdown.
 
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
+* Interpret monetary limits semantically from the customer's complete message,
+  regardless of phrasing, word order, currency notation, punctuation, or
+  language. When the customer states a spending target or ceiling, place its
+  normalized numeric amount in `budget`; otherwise return null. Do not mistake
+  model numbers, quantities, dates, or product specifications for a budget.
 * Be bundle-minded for commerce missions: when complementary product types would materially improve the customer’s stated outcome, return `"bundle"` and plan a practical kit. Consider the goal, use case, budget, owned items, and constraints; do not rely on a fixed list of add-ons or product categories.
 * Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–6 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
 * A bundle must contain only complementary items that help achieve the requested outcome. Do not pad a basket with unrelated products, duplicate alternatives, or items the customer already owns.
@@ -120,6 +126,12 @@ Return only valid JSON, without Markdown.
   or feature part of the mandatory role; keep such distinctions in preferred
   features or search-query variants. This prevents an optional planning choice
   from becoming a false catalog requirement.
+* Every inferred bundle role must still describe one concrete independently
+  stocked product form. If a phrase could describe a department, collection,
+  assortment, or many unrelated product forms, it is too abstract to be a
+  component role. Replace it with a concrete product form chosen semantically
+  for the customer's outcome. Apply this test in any domain without relying on
+  a fixed catalog taxonomy.
 
 ### Customer Requirements for the Mission UI (`key_requirements`)
 * Extract the 3–6 most decision-relevant facts explicitly stated or clearly implied by the customer. These are shown back to the customer as their AI-read mission brief.
@@ -159,10 +171,19 @@ Available runtime tools (the source of truth for requested_actions):
   itself is the requested deliverable.
 
 ### Workflow & Planning Flags
-* **requires_planning**: Set requires_planning=true when the answer needs an ordered plan, checklist, or design direction.
+* **requires_planning**: Set requires_planning=true only when the customer needs an ordered plan, checklist, or design direction that must be generated before product roles can be known. Building or recommending a bundle does not by itself require a separate planning stage. When you can already return complete bundle_items and search_requirements for the requested shopping outcome, set requires_planning=false and proceed to catalog selection.
 * **requires_catalog**: Set requires_catalog=true when the customer asks to see, find, buy, recommend, compare, or price actual products.
+* `requires_catalog` must be true whenever you emit recommendation_mode bundle
+  together with concrete search_requirements or category fulfillment
+  requirements. Those fields are a product-selection contract and cannot be
+  combined with requires_catalog=false.
 * *Note*: Both flags may be true: first create the plan, then use its generated shopping needs to search the catalog.
 * **continues_context**: When runtime_context includes an active shopping mission, decide whether this message continues that mission. Set continues_context=true only when its meaning depends on the active mission; set it false for a distinct new goal, even in the same conversation. Resolve follow-up references and preserve prior budget, preferences, constraints, and product target only when continues_context=true.
+* A self-contained request that supplies a new shopping outcome is a new
+  mission even when it appears in the same conversation. Do not carry a prior
+  product role merely because both missions are shopping-related or could
+  plausibly be used together. Continuation requires a semantic reference to,
+  refinement of, or dependency on the earlier mission.
 * A message that changes the prior recommendation without restating its product
   roles (for example a request for a lower price, different style, higher
   quality, or another comparative direction) is a continuation. Preserve the
@@ -182,12 +203,33 @@ Available runtime tools (the source of truth for requested_actions):
   a continuation and preserve its product roles, bundle shape, budget, and
   constraints. Never search the catalog for preference words as though they
   were a new product type.
+* For a continuation that asks to recompose the current result, preserve the
+  existing role contract and translate the new direction into concrete
+  selection_criteria. Price directions apply to the whole bundle total in
+  bundle mode. For quality, comfort, appearance, ratings, reviews, or any other
+  direction, choose fields and desired evidence dynamically from the customer
+  language and catalog-shaped mission context; do not use a product taxonomy.
+* A value-oriented refinement must balance verified suitability and cost. A
+  premium refinement should favor verified quality or performance evidence.
+  Do not interpret either direction as a new product search role.
 
 ### Catalog Queries & Fulfillment Requirements
 * Set catalog_query to null, requested_actions to [], and bundle_items to [] when the request does not need a catalog lookup.
 * For a comparison, catalog_queries should contain one search phrase per product when possible. For other catalog tasks, include the one or more product phrases needed to resolve the request. Never put tool arguments, SQL, or invented product IDs in the plan.
-* For every product role in a catalog-backed mission, add one search_requirements entry. `original_text` preserves the customer's wording and `canonical_role` is the concise product type, not a specific product name.
-* `canonical_role` must identify the product itself using catalog-neutral wording. Remove use-case modifiers that catalog products may not repeat. Do not map an accessory to the product it supports: keep the accessory as its own role.
+* For every product role in a catalog-backed mission, add one search_requirements entry. `original_text` preserves the customer's complete wording, including explicit capabilities and preferences. `canonical_role` is only the base product type, not a specific product name.
+* Set `customer_required=true` only when the customer explicitly named that
+  independently purchasable product role (or deliberately submitted a
+  shop_object target to find it). Set it false for every complementary role
+  that you inferred to make an open-ended outcome, setup, bundle, or kit more
+  useful. For example, the components you devise for a broadly requested trip
+  kit are discovery roles, not individually demanded items. Make this decision
+  from the supplied meaning; do not use a fixed product or category list.
+* Add a category fulfillment_requirement only for a customer_required role.
+  Inferred roles must remain search directions: their absence must not be
+  reported as failure to satisfy the customer's request.
+* Treat `canonical_role` as a retrieval key, not as a summary of everything the customer wants. It must be the shortest catalog-neutral, independently stocked product class that still identifies the requested item. Remove brand/model names and capability, performance, material, style, compatibility, price, and use-case modifiers. Put those details in `required_features`, `preferred_features`, preferences, constraints, or typed fulfillment requirements instead. Do not map an accessory to the product it supports: keep the accessory as its own role.
+* The first search_queries entry must be the bare canonical_role. Later queries may combine that base role with customer wording or explicit features to improve recall, but those variants never replace the broad base query.
+* Structural example (apply this separation dynamically to every domain): for customer wording "noise-cancelling headphones", preserve that phrase in original_text, use "headphones" as canonical_role, put "noise cancelling" in required_features when explicitly mandatory, and search both "headphones" and more specific variants. The example illustrates field responsibilities; it is not a product taxonomy.
 * Return exactly one search_requirements entry per bundle_items entry, in the same order, with no duplicate canonical role for different requested product types.
 * Produce 3–6 concise `search_queries` for that role when useful: include the canonical role plus close product-type variants or common catalog wording. At least two variants should end with the same broad catalog product noun, and `canonical_role` should use that shared noun. For example, derive the stable noun from the variants themselves instead of relying on a built-in product dictionary. Expand vocabulary without changing the requested role, inventing brands/models, or adding unrelated accessories.
 * For an image mission, use the runtime shopping target, detected-object wording,
@@ -232,7 +274,23 @@ def _json_object(content: object) -> dict[str, object]:
     try:
         value = json.loads(text)
     except json.JSONDecodeError as error:
-        raise StructuredOutputError("Intent model returned invalid JSON.") from error
+        # Providers occasionally wrap a complete JSON object with a short
+        # acknowledgement. Recover only a fully decodable object; never repair
+        # a truncated response or invent schema fields.
+        decoder = json.JSONDecoder()
+        value = None
+        for index, character in enumerate(text):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                value = candidate
+                break
+        if value is None:
+            raise StructuredOutputError("Intent model returned invalid JSON.") from error
     if not isinstance(value, dict):
         raise StructuredOutputError("Intent model must return a JSON object.")
     return value
@@ -277,14 +335,19 @@ class IntentMissionAgent:
         for attempt in range(max(1, settings.agent_response_format_attempts)):
             correction = "" if attempt == 0 else (
                 "\nYour previous answer was invalid. Return one JSON object that exactly follows "
-                "the output schema and uses only the listed runtime tool names. A catalog-backed "
+                "the output schema and uses only the listed runtime tool names. Re-read the complete "
+                "customer message and preserve any explicitly stated monetary limit as numeric budget. A catalog-backed "
                 "optimization continuation must include at least one verifiable selection_criteria entry."
             )
             try:
                 response = await self.model.ainvoke([
                     SystemMessage(content=self.system_prompt + correction),
                     HumanMessage(content=request_payload),
-                ], enable_thinking=False)
+                ],
+                    enable_thinking=False,
+                    response_mime_type="application/json",
+                    max_output_tokens=settings.agent_intent_max_output_tokens,
+                )
                 last_data = _json_object(response.content)
                 mission = MissionInterpretation.model_validate(last_data)
                 # `requires_catalog` is the workflow authorization boundary.
@@ -298,6 +361,30 @@ class IntentMissionAgent:
                     or mission.catalog_queries
                 ):
                     mission = mission.model_copy(update={"requires_catalog": True})
+                category_roles = [
+                    requirement.value
+                    for requirement in mission.fulfillment_requirements
+                    if requirement.kind.casefold().strip() == "category"
+                ]
+                has_structured_recommendation_contract = bool(
+                    mission.recommendation_mode == "bundle"
+                    and (mission.search_requirements or category_roles)
+                )
+                if not mission.requires_catalog and has_structured_recommendation_contract:
+                    # Reconcile the model's own structured fields. A complete
+                    # recommendation contract is stronger evidence than one
+                    # contradictory boolean and contains no inferred taxonomy.
+                    actions = list(mission.requested_actions)
+                    if "search_products" in self.tool_names:
+                        actions.append("search_products")
+                    mission = mission.model_copy(update={
+                        "requires_catalog": True,
+                        "requested_actions": list(dict.fromkeys(actions)),
+                        "catalog_queries": mission.catalog_queries or [
+                            requirement.canonical_role
+                            for requirement in mission.search_requirements[:4]
+                        ],
+                    })
                 unknown_actions = set(mission.requested_actions) - self.tool_names
                 if unknown_actions:
                     valid_actions = [
@@ -392,6 +479,13 @@ class IntentMissionAgent:
                 # Provider errors must not make the storefront unavailable.
                 last_error = error
                 break
+            log_ai_event(
+                "agent.intent.attempt_rejected",
+                request_id="intent",
+                attempt=attempt + 1,
+                error_type=type(last_error).__name__,
+                error_message=str(last_error)[:500],
+            )
         assert last_error is not None
         # A provider-formatting failure must not make the storefront unavailable.
         # Salvage only schema-validated fields. An active shopping mission keeps
@@ -541,6 +635,7 @@ class IntentMissionAgent:
         roles: list[str],
         vision: dict[str, Any],
         visual_targets: list[str],
+        fulfillment_requirements: list[FulfillmentRequirement] | None = None,
     ) -> list[SearchRequirement]:
         """Build recall-oriented image queries only from runtime evidence.
 
@@ -555,7 +650,7 @@ class IntentMissionAgent:
             or cls._matches_visual_target(item.canonical_role, visual_targets)
         ]
         normalized = cls._normalized_search_requirements(
-            relevant_requirements, roles,
+            relevant_requirements, roles, fulfillment_requirements,
         )
         runtime_phrases = [
             str(item).strip()
@@ -654,6 +749,30 @@ class IntentMissionAgent:
         return bool(requested) and requested.issubset(cls._terms(user_request or ""))
 
     @classmethod
+    def _ground_customer_required_roles(
+        cls, requirements: list[SearchRequirement], source_request: str | None,
+    ) -> list[SearchRequirement]:
+        """Keep hard roles tied to customer wording, without a product dictionary."""
+        if not source_request:
+            return requirements
+        return [
+            requirement.model_copy(update={
+                "customer_required": bool(
+                    requirement.customer_required
+                    and (
+                        cls._request_explicitly_mentions(
+                            requirement.original_text, source_request,
+                        )
+                        or cls._request_explicitly_mentions(
+                            requirement.canonical_role, source_request,
+                        )
+                    )
+                ),
+            })
+            for requirement in requirements
+        ]
+
+    @classmethod
     def _ui_requirements(
         cls, mission: MissionInterpretation, bundle_items: list[BundleItemPlan], owned_items: list[str],
         *, include_model_requirements: bool = True,
@@ -742,6 +861,19 @@ class IntentMissionAgent:
             if not photo_mission
             or cls._request_explicitly_mentions(preference, user_request)
             or cls._matches_visual_target(preference, visual_preferences)
+        ]
+        request_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", user_request or ""))
+
+        def has_only_grounded_numbers(value: str) -> bool:
+            return not (
+                set(re.findall(r"\d+(?:[.,]\d+)?", value)) - request_numbers
+            )
+
+        preferences = [
+            value for value in preferences if has_only_grounded_numbers(value)
+        ]
+        constraints = [
+            value for value in mission.constraints if has_only_grounded_numbers(value)
         ]
 
         vision_needs = [
@@ -850,24 +982,41 @@ class IntentMissionAgent:
         search_requirements = (
             cls._visual_search_requirements(
                 mission.search_requirements, role_phrases, vision, visual_targets,
+                mission.fulfillment_requirements,
             )
             if object_photo and isinstance(vision, dict)
             else cls._normalized_search_requirements(
                 mission.search_requirements, role_phrases,
+                mission.fulfillment_requirements,
             )
         )
-        if photo_mission:
-            # Model-generated image features are useful retrieval hints, but
-            # only customer-written requirements may become hard constraints.
+        if not mission.continues_context:
+            # Model-inferred qualities remain useful ranking signals, but only
+            # customer-written requirements may become hard constraints.
             search_requirements = [
                 item.model_copy(update={
                     "required_features": [
                         feature for feature in item.required_features
                         if cls._request_explicitly_mentions(feature, user_request)
                     ],
+                    "preferred_features": list(dict.fromkeys([
+                        *item.preferred_features,
+                        *(
+                            feature for feature in item.required_features
+                            if not cls._request_explicitly_mentions(feature, user_request)
+                        ),
+                    ]))[:8],
                 })
                 for item in search_requirements
             ]
+            if not photo_mission:
+                # The model distinguishes explicit and inferred roles, while
+                # this evidence boundary prevents an inferred component from
+                # becoming mandatory merely because a malformed output marked
+                # every role true. Product vocabulary remains model-generated.
+                search_requirements = cls._ground_customer_required_roles(
+                    search_requirements, user_request,
+                )
 
         def canonical_category_value(value: str) -> str:
             value_terms = cls._terms(value)
@@ -926,8 +1075,19 @@ class IntentMissionAgent:
                 expanded_requirements.append(requirement.model_copy(update={"value": value}))
                 continue
             normalized_value = canonical_category_value(value)
+            matching_search = next((
+                item for item in search_requirements
+                if cls._terms(value)
+                and (
+                    cls._terms(value) <= cls._terms(item.canonical_role)
+                    or cls._terms(item.canonical_role) <= cls._terms(value)
+                    or cls._terms(value) <= cls._terms(item.original_text)
+                    or cls._terms(item.original_text) <= cls._terms(value)
+                )
+            ), None)
             if align_categories_by_position:
                 search_role = search_requirements[category_index]
+                matching_search = search_role
                 value_terms = cls._terms(value)
                 role_terms = cls._terms(search_role.canonical_role)
                 original_terms = cls._terms(search_role.original_text)
@@ -938,6 +1098,8 @@ class IntentMissionAgent:
                 if not role_equivalent:
                     normalized_value = search_role.canonical_role
             category_index += 1
+            if matching_search is not None and not matching_search.customer_required:
+                continue
             expanded_requirements.append(requirement.model_copy(update={
                 "value": normalized_value,
             }))
@@ -951,7 +1113,11 @@ class IntentMissionAgent:
                 requirement.value, [item.query for item in bundle_items]
             ):
                 continue
-            if photo_mission and kind in {"attribute", "feature"} and not cls._request_explicitly_mentions(requirement.value, user_request):
+            if (
+                not mission.continues_context
+                and kind in {"attribute", "feature"}
+                and not cls._request_explicitly_mentions(requirement.value, user_request)
+            ):
                 continue
             field = requirement.field.casefold().strip() if requirement.field else None
             # Category is the requirement kind, not an attribute field. Generic
@@ -996,6 +1162,49 @@ class IntentMissionAgent:
                 requirements.append(normalized)
                 seen_requirements.add(key)
 
+        recommendation_actions = set(mission.requested_actions)
+        is_recommendation_contract = bool(
+            mission.recommendation_mode == "bundle"
+            or (
+                mission.mission_type.casefold() == "product_search"
+                and recommendation_actions
+                and recommendation_actions <= {"search_products"}
+            )
+        )
+        if is_recommendation_contract:
+            # Every recommendation search role needs a corresponding product-
+            # identity requirement. Factual lookup/search missions deliberately
+            # remain exempt because they resolve products without selecting a
+            # recommendation set.
+            for search_requirement in search_requirements:
+                if not search_requirement.customer_required:
+                    continue
+                role_terms = cls._terms(search_requirement.canonical_role)
+                already_present = any(
+                    requirement.kind == "category"
+                    and role_terms
+                    and (
+                        role_terms <= cls._terms(requirement.value)
+                        or cls._terms(requirement.value) <= role_terms
+                    )
+                    for requirement in requirements
+                )
+                if already_present:
+                    continue
+                matching_item = next((
+                    item for item in bundle_items
+                    if role_terms and role_terms <= cls._terms(item.query)
+                ), None)
+                normalized = FulfillmentRequirement(
+                    kind="category",
+                    value=search_requirement.canonical_role,
+                    quantity=matching_item.quantity if matching_item is not None else 1,
+                )
+                key = (normalized.kind, normalized.value.casefold(), "", normalized.quantity)
+                if key not in seen_requirements:
+                    requirements.append(normalized)
+                    seen_requirements.add(key)
+
         # Required search features come from explicit customer constraints in
         # the intent contract. Mirror them into the auditable requirement set;
         # query expansion alone is never treated as proof of a product fact.
@@ -1023,6 +1232,18 @@ class IntentMissionAgent:
         # Vision shopping needs are runtime-derived roles. Adding them here keeps
         # retrieval, optimization, response disclosure, and audit on one contract.
         for need in vision_needs:
+            matching_search = next((
+                item for item in search_requirements
+                if cls._terms(need)
+                and (
+                    cls._terms(need) <= cls._terms(item.canonical_role)
+                    or cls._terms(item.canonical_role) <= cls._terms(need)
+                    or cls._terms(need) <= cls._terms(item.original_text)
+                    or cls._terms(item.original_text) <= cls._terms(need)
+                )
+            ), None)
+            if matching_search is not None and not matching_search.customer_required:
+                continue
             normalized = FulfillmentRequirement(
                 kind="category", value=canonical_category_value(need), quantity=1,
             )
@@ -1042,6 +1263,7 @@ class IntentMissionAgent:
         data.update({
             "owned_items": owned[:30],
             "preferences": preferences[:20],
+            "constraints": constraints[:20],
             "bundle_items": [item.model_dump() for item in bundle_items[:20]],
             "search_requirements": [item.model_dump() for item in search_requirements[:20]],
             "catalog_queries": list(dict.fromkeys(catalog_queries))[:4],
@@ -1062,15 +1284,22 @@ class IntentMissionAgent:
             data["catalog_query"] = bundle_items[0].query if object_photo and bundle_items else None
         if mission.catalog_query and cls._covered_by_owned(mission.catalog_query, owned):
             data["catalog_query"] = None
-        if len(bundle_items) > 1:
-            data["recommendation_mode"] = "bundle"
+        # Item-plan cardinality is not presentation mode: a model can include
+        # several search phrasings or comparable alternatives for one product
+        # need.  Keep the LLM's semantic single/bundle decision rather than
+        # turning every multi-query plan into an additive basket.
         return MissionInterpretation.model_validate(data)
 
     @classmethod
     def _normalized_search_requirements(
-        cls, requirements: list[SearchRequirement], roles: list[str]
+        cls, requirements: list[SearchRequirement], roles: list[str],
+        fulfillment_requirements: list[FulfillmentRequirement] | None = None,
     ) -> list[SearchRequirement]:
-        """Keep model expansions role-bound and supply a safe dynamic fallback."""
+        """Separate base product identity from request-specific modifiers.
+
+        The LLM supplies the semantic split. This normalization only reconciles
+        its generated fields by term evidence, without a product taxonomy.
+        """
         normalized: list[SearchRequirement] = []
         used_canonical_roles: set[str] = set()
         unique_roles = list(dict.fromkeys(item.strip() for item in roles if item.strip()))
@@ -1094,10 +1323,39 @@ class IntentMissionAgent:
                     search_queries=[role],
                 ))
                 continue
+            role_phrases = [role, matching.original_text, matching.canonical_role]
+            modifier_values = [
+                *matching.required_features,
+                *matching.preferred_features,
+            ]
+            for requirement in fulfillment_requirements or []:
+                if requirement.kind.casefold().strip() == "category":
+                    continue
+                value_terms = cls._terms(requirement.value)
+                field_terms = cls._terms(requirement.field or "")
+                applies_to_role = bool(
+                    field_terms
+                    and any(
+                        field_terms <= cls._terms(phrase)
+                        or cls._terms(phrase) <= field_terms
+                        for phrase in role_phrases if cls._terms(phrase)
+                    )
+                )
+                embedded_in_role = bool(
+                    value_terms
+                    and any(
+                        value_terms <= cls._terms(phrase)
+                        for phrase in role_phrases
+                    )
+                )
+                if applies_to_role or embedded_in_role or (
+                    not requirement.field and len(unique_roles) == 1
+                ):
+                    modifier_values.append(requirement.value)
             canonical_role = cls._consensus_canonical_role(
                 matching.canonical_role,
                 matching.search_queries,
-                [*matching.required_features, *matching.preferred_features],
+                modifier_values,
             )
             canonical_key = " ".join(sorted(cls._terms(canonical_role)))
             is_invented_package = len(
@@ -1113,7 +1371,9 @@ class IntentMissionAgent:
                 ] if query.strip()
             ))[:6]
             normalized.append(matching.model_copy(update={
-                "original_text": role,
+                # Preserve the exact semantic input for the selector. The
+                # normalized role is represented separately by canonical_role.
+                "original_text": matching.original_text,
                 "canonical_role": canonical_role,
                 "search_queries": queries,
             }))
@@ -1185,7 +1445,11 @@ class IntentMissionAgent:
         goal_value = partial.get("goal")
         goal = str(goal_value).strip()[:300] if isinstance(goal_value, str) and goal_value.strip() else user_request.strip()[:300]
         budget_value = partial.get("budget")
-        budget = float(budget_value) if isinstance(budget_value, (int, float)) and budget_value >= 0 else None
+        budget = (
+            float(budget_value)
+            if isinstance(budget_value, (int, float)) and budget_value >= 0
+            else None
+        )
         bundle_items: list[BundleItemPlan] = []
         for item in partial.get("bundle_items", []) if isinstance(partial.get("bundle_items"), list) else []:
             try:
@@ -1285,6 +1549,39 @@ class IntentMissionAgent:
                 search_queries=[catalog_query],
             )] if catalog_query else []),
         )
+        vision = runtime_context.get("vision_context") if isinstance(runtime_context, dict) else None
+        fallback_roles = list(dict.fromkeys([
+            *(item.canonical_role for item in fallback.search_requirements),
+            *(
+                item.value for item in fallback.fulfillment_requirements
+                if item.kind.casefold().strip() == "category"
+            ),
+            *fallback.catalog_queries,
+            *([fallback.catalog_query] if fallback.catalog_query else []),
+        ]))
+        request_terms = self._ordered_terms(user_request)
+        sole_role_terms = self._ordered_terms(fallback_roles[0]) if len(fallback_roles) == 1 else []
+        unresolved_sentence_role = bool(
+            not vision
+            and len(request_terms) >= 4
+            and sole_role_terms == request_terms
+        )
+        if fallback.requires_catalog and unresolved_sentence_role:
+            # A schema-invalid intent response can preserve the entire customer
+            # sentence as one category. That is not a usable product identity.
+            # Route it through the existing LLM planning stage so real product
+            # roles are derived from the request instead of literal matching.
+            fallback = fallback.model_copy(update={
+                "requires_planning": True,
+                "catalog_query": None,
+                "catalog_queries": [],
+                "bundle_items": [],
+                "search_requirements": [],
+                "fulfillment_requirements": [
+                    item for item in fallback.fulfillment_requirements
+                    if item.kind.casefold().strip() != "category"
+                ],
+            })
         if has_active_mission and not bundle_items and not requirements:
             # A malformed response for a terse follow-up must not turn words
             # such as "better" or "performance" into a global catalog role.

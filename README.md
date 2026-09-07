@@ -13,7 +13,7 @@ Shopy AI is a full-stack e-commerce platform: a Next.js storefront, FastAPI comm
 - Text chat, local voice transcription, and image shopping
 - Agentic catalog search, planning, bundle support, and final response auditing
 - Redis-backed 30-minute shopping memory for mission, budget, preferences, constraints, bundle state, and product decisions
-- Persisted agent-run observability for nodes, tools, audits, and repairs
+- Persisted agent-run observability for nodes, tools, selections, and audits
 
 ## Architecture
 
@@ -63,6 +63,8 @@ docker-compose.yml        Complete local application stack
 Run the entire application with one command:
 
 ```bash
+cp .env.example .env
+# Put the real QWEN_API_KEY or GEMINI_API_KEY in the root .env only.
 docker compose up --build
 ```
 
@@ -71,18 +73,17 @@ migrations automatically but does not modify catalog data. PostgreSQL, Redis,
 the API, and the Celery worker remain private to the Docker network; the frontend proxies `/api`
 and `/uploads` to the API, so the browser has one origin.
 
-To enable AI features, supply a provider key when starting:
+All configuration lives in the root `.env`. Compose injects server credentials
+only into backend services and explicitly passes only browser-safe frontend
+settings such as `NEXT_PUBLIC_ASSISTANT_API_URL` to the Next.js build.
 
-```bash
-QWEN_API_KEY=your_key docker compose up --build
-```
-
-You can likewise set `POSTGRES_PASSWORD`; otherwise Compose uses the
-development-only default `shopy_local_password`.
+The PostgreSQL password is applied when the named database volume is first
+created. Do not change it later without also updating the existing PostgreSQL
+role; Compose intentionally preserves the database instead of reinitializing it.
 
 ## Configuration
 
-Never commit `backend/.env` or `frontend/.env.local`.
+Never commit the root `.env`; use `.env.example` as the safe template.
 
 | Variable | Purpose | Local default |
 | --- | --- | --- |
@@ -90,9 +91,9 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `GEMINI_MODEL` | Gemini model | `gemini-3.7-flash` |
 | `QWEN_API_KEY` | Alibaba Cloud Model Studio credential | required for the primary provider |
 | `QWEN_BASE_URL` | Qwen OpenAI-compatible endpoint | Singapore DashScope endpoint |
-| `QWEN_MODEL` | Primary Qwen thinking model | `qwen3.6-flash` |
+| `QWEN_MODEL` | Primary Qwen thinking model | `qwen-vl-plus` |
 | `QWEN_AUDIO_MODEL` | Qwen audio caption/transcription model | `qwen3-omni-30b-a3b-captioner` |
-| `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:3002` |
+| `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:8002` |
 | `DATABASE_URL` | PostgreSQL connection URL | Postgres on `5433` |
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
 | `REDIS_URL` | Redis memory URL | `redis://localhost:6380/0` |
@@ -103,7 +104,7 @@ Never commit `backend/.env` or `frontend/.env.local`.
 | `AI_LOG_CUSTOMER_INPUT` | Log customer text locally | `true` |
 | `AI_LOG_AGENT_NODE_PAYLOADS` | Log each agent node's safe input/output payload in the terminal | `true` |
 
-Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_CATALOG_ROLE_MATCHES_PER_NEED`, `AGENT_CATALOG_SHORTLIST_LIMIT`, `AGENT_MAX_REPAIR_ATTEMPTS`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS`, `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`. Catalog retrieval uses one grouped tool call with intent-derived query variants and bounded database results for every product role; it does not send the complete catalog to an LLM. Optional semantic ranking, resolution, and wording calls are bounded and fall back to verified deterministic behavior; Qwen-to-Gemini fallback shares one total per-call deadline. Audit nodes never call an LLM.
+Agent limits are configurable with `AGENT_MAX_GRAPH_ITERATIONS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_CATALOG_ROLE_MATCHES_PER_NEED`, `AGENT_CATALOG_SHORTLIST_LIMIT`, `AGENT_RESPONSE_FORMAT_ATTEMPTS`, `AGENT_MODEL_TIMEOUT_SECONDS`, `AGENT_OPTIONAL_MODEL_TIMEOUT_SECONDS`, `AGENT_RESPONSE_SOFT_DEADLINE_SECONDS`, and `AGENT_TOOL_TIMEOUT_SECONDS`. Catalog retrieval uses one grouped tool call with LLM-generated query variants and bounded, round-robin database results for every generated product role; it does not send the complete catalog to an LLM. Recommendation choices are made in one LLM selector call, while deterministic validation only accepts or rejects that choice and never substitutes products. Audit nodes never call an LLM.
 
 ## Redis short-term memory
 
@@ -153,7 +154,7 @@ The vision endpoint accepts JPEG, PNG, and WebP images up to 10 MB for room shop
 
 ## Observability
 
-Each request has a short request ID. `orchestration_runs` and `orchestration_run_events` store observable node transitions, tool activity, audits, repairs, and outputs. Hidden chain-of-thought is not stored.
+Each request has a short request ID. `orchestration_runs` and `orchestration_run_events` store observable node transitions, tool activity, selection summaries, audits, and outputs. Hidden chain-of-thought is not stored.
 
 Set `AI_LOG_CUSTOMER_INPUT=false` to redact customer text from terminal logs. Set `AI_LOG_AGENT_NODE_PAYLOADS=false` to disable the per-node terminal payload trace.
 
@@ -180,7 +181,7 @@ npm run lint
 npm run build
 
 # Infrastructure
-docker compose --env-file backend/.env up -d
+docker compose up -d --build
 docker compose logs -f postgres redis
 docker compose down
 ```
@@ -205,7 +206,10 @@ docker compose logs postgres redis
 curl http://localhost:8000/health/database
 ```
 
-Ensure `POSTGRES_PASSWORD` matches `DATABASE_URL`, and use `REDIS_URL=redis://localhost:6380/0` when FastAPI runs on your host machine.
+Ensure `POSTGRES_PASSWORD` matches `DATABASE_URL`. An existing Docker volume
+keeps the role password from its first initialization, even when an environment
+file is edited later. Use `REDIS_URL=redis://localhost:6380/0` when FastAPI runs
+on your host machine.
 
 ### Browser CORS error
 
@@ -213,12 +217,12 @@ Set `FRONTEND_ORIGIN` to the frontend URL, restart FastAPI, and verify `NEXT_PUB
 
 ### Gemini error
 
-Confirm `GEMINI_API_KEY` is set in `backend/.env`, restart the backend, and never place it in a frontend variable.
+Confirm `GEMINI_API_KEY` is set in the root `.env`, restart the backend, and never place it in a `NEXT_PUBLIC_` variable.
 
 ## Before pushing to GitHub
 
-- [ ] Keep `.env`, `.env.local`, credentials, virtual environments, and build output out of Git
-- [ ] Update `.env.example` files without real secrets
+- [ ] Keep `.env`, credentials, virtual environments, and build output out of Git
+- [ ] Update the root `.env.example` without real secrets
 - [ ] Run `poetry run pytest` in `backend/`
 - [ ] Run `npm run lint` and `npm run build` in `frontend/`
 - [ ] Review `git status` and commit only intended files

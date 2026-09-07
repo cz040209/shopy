@@ -52,7 +52,6 @@ class ShoppingAgentState(TypedDict):
     selection_errors: list[str]
     tool_results: list[dict[str, Any]]
     audit_result: dict[str, Any] | None
-    repair_count: int
     final_response: str | None
     audited_response: str | None
     response_claims: list[dict[str, Any]]
@@ -60,7 +59,6 @@ class ShoppingAgentState(TypedDict):
     attachments: list[dict[str, Any]]
     next_stage: str | None
     errors: list[str]
-    repair_feedback: list[dict[str, Any]]
     excluded_product_ids: list[str]
     graph_iterations: int
     run_id: str
@@ -114,7 +112,6 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "selection_errors": [],
         "tool_results": [],
         "audit_result": None,
-        "repair_count": 0,
         "final_response": None,
         "audited_response": None,
         "response_claims": [],
@@ -122,7 +119,6 @@ def initial_shopping_state(user_request: str) -> ShoppingAgentState:
         "attachments": [],
         "next_stage": None,
         "errors": [],
-        "repair_feedback": [],
         "excluded_product_ids": [],
         "graph_iterations": 0,
         "run_id": "",
