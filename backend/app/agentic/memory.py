@@ -170,7 +170,25 @@ def memory_from_state(previous: ShoppingSessionMemory | None, state: Mapping[str
         limit=30,
     )
     rejected = _unique_strings([*prior.rejected_product_ids, *state.get("excluded_product_ids", [])], limit=30)
-    selected = state.get("selected_products") if isinstance(state.get("selected_products"), list) else prior.selected_products
+    current_selected = (
+        state.get("selected_products")
+        if isinstance(state.get("selected_products"), list)
+        else None
+    )
+    no_eligible_refinement = bool(
+        state.get("continues_context")
+        and isinstance(state.get("selection_context"), dict)
+        and state["selection_context"].get("no_eligible_alternative") is True
+    )
+    # A completed "no cheaper/better alternative" response describes the
+    # comparison result; it does not discard the last audited selection. Keep
+    # that reference so another refinement button can still compare against it.
+    selected = (
+        prior.selected_products
+        if no_eligible_refinement and not current_selected
+        else current_selected if current_selected is not None
+        else prior.selected_products
+    )
     bundle = state.get("bundle") if isinstance(state.get("bundle"), dict) else prior.current_bundle
     budget = state.get("budget") if state.get("budget") is not None else prior.budget
     optimization_mode = state.get("optimization_mode") or prior.optimization_mode

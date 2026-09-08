@@ -63,7 +63,11 @@ class MissionInterpretation(BaseModel):
     continues_context: bool = False
     optimization_mode: str | None = Field(default=None, max_length=80)
     catalog_query: str | None = Field(default=None, min_length=1, max_length=160)
-    catalog_queries: list[str] = Field(default_factory=list, max_length=4)
+    # A bundle can contain up to six roles and a single-role search can use
+    # several recall-oriented phrasings. Keep this bounded, but do not reject
+    # an otherwise valid LLM mission merely because it supplied more than four
+    # grounded queries.
+    catalog_queries: list[str] = Field(default_factory=list, max_length=12)
     requested_actions: list[str] = Field(default_factory=list, max_length=7)
     bundle_items: list[BundleItemPlan] = Field(default_factory=list, max_length=20)
     search_requirements: list[SearchRequirement] = Field(default_factory=list, max_length=20)

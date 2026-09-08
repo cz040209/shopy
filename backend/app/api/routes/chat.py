@@ -18,6 +18,7 @@ from app.agentic.observability import OrchestrationRecorder
 from app.agentic.memory import build_memory_scope, get_shopping_memory_store
 from app.agentic.orchestrator import ShoppingOrchestrator
 from app.agentic.state import ShoppingAgentState
+from app.agentic.schemas import SelectionCriterion
 from app.agentic.tools import CommerceToolRegistry
 from app.config import settings
 from app.database import get_db
@@ -50,11 +51,34 @@ async def start_chat_orchestration(
     user_request: str,
     conversation: AIConversation,
     memory_session_scope: str,
+    input_payload: dict[str, object] | None = None,
 ) -> ChatOrchestrationTrace:
     """Run the widget through the only permitted response-generation path."""
 
     recorder = OrchestrationRecorder(db, request_id=request_id, user=user, conversation=conversation)
     registry = CommerceToolRegistry(db, request_id=request_id, recorder=recorder)
+    interaction_context: dict[str, object] = {}
+    raw_optimization = (input_payload or {}).get("optimization")
+    if isinstance(raw_optimization, dict):
+        raw_criteria = raw_optimization.get("selection_criteria", [])
+        criteria: list[dict[str, object]] = []
+        for item in raw_criteria if isinstance(raw_criteria, list) else []:
+            try:
+                criteria.append(SelectionCriterion.model_validate(item).model_dump())
+            except (TypeError, ValueError):
+                continue
+        raw_mode = raw_optimization.get("mode")
+        mode = str(raw_mode).strip()[:80] if isinstance(raw_mode, str) else ""
+        if criteria:
+            interaction_context["optimization"] = {
+                "mode": mode or "preference_refinement",
+                "selection_criteria": criteria,
+            }
+    state_overrides: dict[str, object] = {
+        "memory_session_scope": memory_session_scope,
+    }
+    if interaction_context:
+        state_overrides["interaction_context"] = interaction_context
     try:
         state = await ShoppingOrchestrator(
             tool_registry=registry,
@@ -62,7 +86,7 @@ async def start_chat_orchestration(
             memory_store=get_shopping_memory_store(),
         ).ainvoke(
             user_request,
-            state_overrides={"memory_session_scope": memory_session_scope},
+            state_overrides=state_overrides,
             defer_finish=True,
         )
     except Exception as error:
@@ -223,6 +247,7 @@ async def chat(
             user_request=latest_customer_input.strip(),
             conversation=conversation,
             memory_session_scope=memory_session_scope,
+            input_payload=payload.input_payload,
         )
     except Exception as error:
         log_ai_event(

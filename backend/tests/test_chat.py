@@ -12,11 +12,14 @@ from app.models import AIConversation, AIMessage, MessageRole, OrchestrationRun,
 
 
 class FakeShoppingOrchestrator:
+    last_state_overrides = None
+
     def __init__(self, *, tool_registry, recorder, memory_store=None):
         self.recorder = recorder
 
     async def ainvoke(self, user_request, *, state_overrides=None, defer_finish=False):
         assert defer_finish is True
+        type(self).last_state_overrides = state_overrides
         state = {
             "user_request": user_request,
             "run_id": self.recorder.request_id,
@@ -138,6 +141,59 @@ def test_anonymous_chat_is_persisted_without_a_user(db_session, monkeypatch):
         assert conversation is not None
         assert conversation.user_id is None
         assert len(conversation.messages) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chat_passes_validated_ui_optimization_context(db_session, monkeypatch):
+    chat_route = import_module("app.api.routes.chat")
+    install_fake_orchestrator(monkeypatch, chat_route)
+    monkeypatch.setattr(
+        chat_route,
+        "settings",
+        SimpleNamespace(
+            gemini_api_key="test-key",
+            gemini_model="test-model",
+            auth_session_days=7,
+            auth_cookie_secure=False,
+        ),
+    )
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        response = TestClient(app).post(
+            "/api/chat",
+            json={
+                "messages": [{"role": "user", "content": "Make it cheaper"}],
+                "input_payload": {
+                    "optimization": {
+                        "mode": "lower_price",
+                        "selection_criteria": [{
+                            "field": "price",
+                            "operator": "lower_than_reference",
+                            "value": None,
+                            "weight": 10,
+                        }],
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert FakeShoppingOrchestrator.last_state_overrides["interaction_context"] == {
+            "optimization": {
+                "mode": "lower_price",
+                "selection_criteria": [{
+                    "field": "price",
+                    "operator": "lower_than_reference",
+                    "value": None,
+                    "weight": 10,
+                }],
+            },
+        }
     finally:
         app.dependency_overrides.clear()
 

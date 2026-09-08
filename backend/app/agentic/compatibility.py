@@ -70,7 +70,15 @@ class CompatibilityAgent:
 
     async def run(self, state: ShoppingAgentState) -> dict[str, Any]:
         selected_ids = {str(item.get("id")) for item in state.get("selected_products", []) if isinstance(item, dict)}
-        products = [product for product in state.get("candidate_products", []) if str(product.get("id")) in selected_ids] or list(state.get("candidate_products", []))
+        products = [
+            product for product in state.get("candidate_products", [])
+            if str(product.get("id")) in selected_ids
+        ]
+        if not products:
+            return {
+                "compatibility_results": [],
+                "compatibility_plan": {"fields": []},
+            }
         results: list[dict[str, Any]] = []
         for product in products:
             if int(product.get("inventory_quantity", 0)) < 1:

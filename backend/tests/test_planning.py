@@ -96,6 +96,9 @@ async def test_planner_keeps_explicit_single_mode_for_multiple_retrieval_phrasin
     result = await PlanningAgent(ComparisonPlanningModel(), max_format_attempts=1).run(state)
 
     assert result["recommendation_mode"] == "single"
+    assert result["required_categories"] == ["phone"]
+    assert result["optional_categories"] == []
+    assert result["catalog_queries"] == ["Samsung phone", "Samsung smartphone", "phone"]
 
 
 @pytest.mark.anyio

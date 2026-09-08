@@ -48,3 +48,18 @@ export type BundleWorkspace = {
   fulfillment_gaps?: string[];
   unfulfilled_requirements?: string[];
 };
+
+export type MissionRefinement = {
+  prompt: string;
+  inputPayload: {
+    optimization: {
+      mode: string;
+      selection_criteria: Array<{
+        field: string;
+        operator: "lower_than_reference" | "higher_than_reference" | "prefer_match";
+        value: string | number | null;
+        weight: number;
+      }>;
+    };
+  };
+};

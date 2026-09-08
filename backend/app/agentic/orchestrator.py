@@ -243,6 +243,12 @@ class ShoppingOrchestrator:
         return self.manager.next_stage(state)
 
     def _after_product_selector(self, state: ShoppingAgentState) -> str:
+        # Compatibility is meaningful only for the LLM's accepted choices.
+        # Passing the entire high-recall shortlist after a rejected selection
+        # wastes another provider call and can obscure the actual selector
+        # error with relationships between products that were never chosen.
+        if not state.get("selected_products"):
+            return "response_draft"
         return self.manager.next_stage(state, "product_selector")
 
     def _after_compatibility(self, state: ShoppingAgentState) -> str:
@@ -307,6 +313,10 @@ class ShoppingOrchestrator:
             # previous mission, so prior budgets and preferences must not leak
             # into it. Text follow-ups continue to receive session memory.
             runtime_context["short_term_memory"] = state["memory_context"]
+        if state.get("interaction_context"):
+            # Typed, product-agnostic UI intent helps the LLM interpret a
+            # refinement; it never supplies catalog products or claims.
+            runtime_context["interaction_context"] = state["interaction_context"]
         mission = await self.intent_agent.interpret(request, runtime_context=runtime_context)
         memory_context = state.get("memory_context") or {}
         if has_vision_context:

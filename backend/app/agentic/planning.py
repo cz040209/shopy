@@ -70,6 +70,10 @@ Rules:
   properties in attribute requirements, and richer retrieval wording in
   catalog_queries. Include the bare base role among the queries for that item.
   Apply this separation dynamically; do not use a fixed product taxonomy.
+- In single mode, emit exactly one category requirement for the base product
+  role. Put descriptive, feature, use-case, and variant phrases only in
+  catalog_queries; they are alternate retrieval queries, not extra product
+  roles. In bundle mode, category requirements represent distinct products.
 - Treat an explicitly named manufacturer, brand, model family, or other
   catalog field as a requirement on that field, not as a generic feature
   phrase. For example, use an `attribute` requirement with `field` set to the
@@ -378,7 +382,7 @@ class PlanningAgent:
                 )
                 or category_requirements
             ))
-            optional_roles = list(dict.fromkeys([
+            optional_roles = [] if planned_mode == "single" else list(dict.fromkeys([
                 *inferred_search_roles,
                 *(
                     query for query in catalog_queries

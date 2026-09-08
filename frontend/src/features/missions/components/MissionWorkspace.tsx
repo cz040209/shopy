@@ -14,7 +14,7 @@ import MissionHistory from "./MissionHistory";
 import MissionInputPanel from "./MissionInputPanel";
 import OptimizationActions from "./OptimizationActions";
 import { recommendationPriceSummary } from "./pricing";
-import { Attachment, BundleWorkspace, MissionData, MissionHistoryItem } from "./types";
+import { Attachment, BundleWorkspace, MissionData, MissionHistoryItem, MissionRefinement } from "./types";
 import {
   readStoredWorkspace,
   visionHandoffStorageKey,
@@ -186,7 +186,7 @@ export default function MissionWorkspace() {
     resultsRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
   };
 
-  const runMission = useCallback(async (nextRequest?: string) => {
+  const runMission = useCallback(async (nextRequest?: string, inputPayload: Record<string, unknown> = {}) => {
     const missionRequest = (nextRequest ?? request).trim();
     if (!missionRequest) return;
     const startedAt = performance.now();
@@ -203,7 +203,10 @@ export default function MissionWorkspace() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: missionRequest }] }),
+        body: JSON.stringify({
+          messages: [{ role: "user", content: missionRequest }],
+          input_payload: inputPayload,
+        }),
       });
       if (!response.ok || !response.body) {
         throw new Error(await apiErrorMessage(
@@ -308,13 +311,16 @@ export default function MissionWorkspace() {
     }));
   };
 
-  const refine = (instruction: string) => {
-    const next = instruction.trim();
+  const refine = (refinement: string | MissionRefinement) => {
+    const next = (typeof refinement === "string" ? refinement : refinement.prompt).trim();
     if (!next) return;
     setFeedback("");
     // Send feedback as a new turn. The server keeps the active brief, prior
     // selections, and earlier feedback in expiring shopping-session memory.
-    void runMission(next);
+    void runMission(
+      next,
+      typeof refinement === "string" ? {} : refinement.inputPayload,
+    );
   };
 
   const addBundle = async () => {

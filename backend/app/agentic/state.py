@@ -15,6 +15,7 @@ class ShoppingAgentState(TypedDict):
     continues_context: bool
     optimization_mode: str | None
     memory_session_scope: NotRequired[str]
+    interaction_context: NotRequired[dict[str, Any]]
     memory_context: dict[str, Any] | None
     catalog_query: str | None
     catalog_queries: list[str]

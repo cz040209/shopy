@@ -1,19 +1,26 @@
 import { ArrowRightLeft } from "lucide-react";
 import { Attachment } from "./types";
+import type { MissionRefinement } from "./types";
 import styles from "./mission-studio.module.css";
 
-export default function AlternativeBundles({ items, disabled, onExplore }: { items: Attachment[]; disabled: boolean; onExplore: (prompt: string) => void }) {
+export default function AlternativeBundles({ items, disabled, onExplore }: { items: Attachment[]; disabled: boolean; onExplore: (refinement: MissionRefinement) => void }) {
   if (items.length < 2) return null;
   const options = [
     {
       title: "Best value edit",
       copy: "Keeps the core outcome with more room in the budget.",
       prompt: "Recompose the current bundle for the strongest verified overall value. Reduce its total price where the catalog permits while preserving its shopping outcome and product-role coverage.",
+      inputPayload: { optimization: { mode: "overall_value", selection_criteria: [
+        { field: "price", operator: "lower_than_reference" as const, value: null, weight: 10 },
+      ] } },
     },
     {
       title: "Elevated edit",
       copy: "A stronger finish with a little more emphasis on quality.",
       prompt: "Recompose the current bundle as a more premium alternative, prioritizing verified quality and performance while preserving its shopping outcome and product-role coverage.",
+      inputPayload: { optimization: { mode: "premium_quality", selection_criteria: [
+        { field: "catalog_facts", operator: "prefer_match" as const, value: "quality performance", weight: 10 },
+      ] } },
     },
   ];
   return (
@@ -27,7 +34,7 @@ export default function AlternativeBundles({ items, disabled, onExplore }: { ite
           <article key={option.title}>
             <strong>{option.title}</strong>
             <p>{option.copy}</p>
-            <button type="button" disabled={disabled} onClick={() => onExplore(option.prompt)}>
+            <button type="button" disabled={disabled} onClick={() => onExplore({ prompt: option.prompt, inputPayload: option.inputPayload })}>
               Explore <ArrowRightLeft size={13} />
             </button>
           </article>

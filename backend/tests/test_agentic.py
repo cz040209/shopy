@@ -714,7 +714,7 @@ async def test_non_catalog_intent_cannot_execute_contradictory_catalog_actions()
 
 
 @pytest.mark.anyio
-async def test_invalid_refinement_intent_preserves_active_shopping_mission():
+async def test_invalid_typed_refinement_intent_preserves_active_shopping_mission():
     class SearchArgs(BaseModel):
         query: str | None = None
 
@@ -748,7 +748,20 @@ async def test_invalid_refinement_intent_preserves_active_shopping_mission():
 
     fallback = await agent.interpret(
         "Prioritize quality and performance",
-        runtime_context={"short_term_memory": memory},
+        runtime_context={
+            "short_term_memory": memory,
+            "interaction_context": {
+                "optimization": {
+                    "mode": "quality_performance",
+                    "selection_criteria": [{
+                        "field": "catalog_facts",
+                        "operator": "prefer_match",
+                        "value": "quality performance",
+                        "weight": 8,
+                    }],
+                },
+            },
+        },
     )
     merged = ShoppingOrchestrator._merge_continuation_mission(fallback, memory)
 
@@ -761,7 +774,7 @@ async def test_invalid_refinement_intent_preserves_active_shopping_mission():
 
 
 @pytest.mark.anyio
-async def test_valid_but_roleless_catalog_follow_up_cannot_escape_active_mission():
+async def test_valid_roleless_continuation_preserves_active_mission():
     class SearchArgs(BaseModel):
         query: str | None = None
 
@@ -775,7 +788,7 @@ async def test_valid_but_roleless_catalog_follow_up_cannot_escape_active_mission
         "recommendation_mode": "single",
         "goal": "Prioritize quality and performance",
         "requires_catalog": True,
-        "continues_context": False,
+        "continues_context": True,
         "catalog_query": "quality and performance",
         "catalog_queries": ["quality and performance"],
         "requested_actions": ["search_products"],
@@ -810,6 +823,61 @@ async def test_valid_but_roleless_catalog_follow_up_cannot_escape_active_mission
 
 
 @pytest.mark.anyio
+async def test_fresh_roleless_setup_does_not_inherit_stale_active_mission():
+    class SearchArgs(BaseModel):
+        query: str | None = None
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    response = json.dumps({
+        "mission_type": "product_search",
+        "recommendation_mode": "bundle",
+        "goal": "Set up my new room",
+        "requires_catalog": True,
+        "requires_planning": False,
+        "continues_context": False,
+        "catalog_query": "new room setup",
+        "catalog_queries": ["new room setup"],
+        "requested_actions": ["search_products"],
+    })
+    memory = {
+        "selected_products": [{"id": "prior-product"}],
+        "current_mission": {
+            "mission_type": "product_search",
+            "recommendation_mode": "single",
+            "goal": "Find travel luggage",
+            "requires_catalog": True,
+            "catalog_queries": ["luggage"],
+            "requested_actions": ["search_products"],
+            "search_requirements": [{
+                "original_text": "luggage",
+                "canonical_role": "luggage",
+                "search_queries": ["luggage"],
+            }],
+        },
+    }
+
+    interpreted = await IntentMissionAgent(
+        FakeChatModel(response), tools=[SearchTool()],
+    ).interpret(
+        "Set up my new room",
+        runtime_context={"short_term_memory": memory},
+    )
+    merged = ShoppingOrchestrator._merge_continuation_mission(interpreted, memory)
+
+    assert interpreted.continues_context is False
+    assert interpreted.requires_planning is True
+    assert interpreted.catalog_query is None
+    assert interpreted.catalog_queries == []
+    assert interpreted.search_requirements == []
+    assert merged.goal == "Set up my new room"
+    assert "luggage" not in merged.model_dump_json().casefold()
+
+
+@pytest.mark.anyio
 async def test_intent_agent_retries_a_schema_failure():
     class RetryIntentModel:
         def __init__(self) -> None:
@@ -824,6 +892,40 @@ async def test_intent_agent_retries_a_schema_failure():
 
     assert model.calls == 2
     assert result.goal == "gaming setup"
+
+
+@pytest.mark.anyio
+async def test_intent_agent_accepts_one_provider_envelope_and_six_bounded_queries():
+    payload = {
+        "result": {
+            "mission_type": "product_search",
+            "recommendation_mode": "single",
+            "goal": "compare a keyboard",
+            "requires_planning": False,
+            "requires_catalog": True,
+            "catalog_queries": [
+                "keyboard", "mechanical keyboard", "wireless keyboard",
+                "office keyboard", "compact keyboard", "full size keyboard",
+            ],
+            "requested_actions": [],
+            "bundle_items": [{"query": "keyboard", "quantity": 1}],
+            "search_requirements": [{
+                "original_text": "keyboard",
+                "canonical_role": "keyboard",
+                "search_queries": ["keyboard"],
+            }],
+            "fulfillment_requirements": [
+                {"kind": "category", "value": "keyboard", "field": None, "quantity": 1},
+            ],
+        },
+    }
+
+    result = await IntentMissionAgent(
+        FakeChatModel(json.dumps(payload)),
+    ).interpret("I need to buy a keyboard")
+
+    assert result.goal == "compare a keyboard"
+    assert len(result.catalog_queries) == 6
 
 
 @pytest.mark.anyio
@@ -869,6 +971,78 @@ async def test_intent_agent_retries_an_unverifiable_optimization_continuation():
     assert model.calls == 2
     assert result.selection_criteria[0].field == "price"
     assert result.selection_criteria[0].operator == "lower_than_reference"
+
+
+@pytest.mark.anyio
+async def test_invalid_ui_refinement_recovers_prior_roles_without_a_second_llm_call():
+    class SearchArgs(BaseModel):
+        query: str
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    class TruncatedIntentModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            return AIMessage(content='{"mission_type":"product_search"')
+
+    previous = {
+        "mission_type": "product_search",
+        "recommendation_mode": "single",
+        "goal": "Buy a mouse",
+        "requires_catalog": True,
+        "requested_actions": ["search_products"],
+        "search_requirements": [{
+            "original_text": "mouse",
+            "canonical_role": "mouse",
+            "search_queries": ["mouse", "computer mouse"],
+        }],
+        "fulfillment_requirements": [{
+            "kind": "category", "value": "mouse", "quantity": 1,
+        }],
+    }
+    memory = {
+        "current_mission": previous,
+        "selected_products": [{"id": "current-mouse", "quantity": 1}],
+        "recent_messages": [{"role": "user", "content": "I need to buy a mouse"}],
+    }
+    model = TruncatedIntentModel()
+    instruction = (
+        "Recompose the current recommendation for a lower total price while "
+        "preserving its shopping outcome and product-role coverage."
+    )
+
+    interpreted = await IntentMissionAgent(model, tools=[SearchTool()]).interpret(
+        instruction,
+        runtime_context={
+            "short_term_memory": memory,
+            "interaction_context": {
+                "optimization": {
+                    "mode": "lower_price",
+                    "selection_criteria": [{
+                        "field": "price",
+                        "operator": "lower_than_reference",
+                        "value": None,
+                        "weight": 10,
+                    }],
+                },
+            },
+        },
+    )
+    merged = ShoppingOrchestrator._merge_continuation_mission(interpreted, memory)
+
+    assert model.calls == 1
+    assert interpreted.continues_context is True
+    assert interpreted.catalog_query is None
+    assert interpreted.selection_criteria[0].operator == "lower_than_reference"
+    assert [item.canonical_role for item in merged.search_requirements] == ["mouse"]
+    assert [item.value for item in merged.fulfillment_requirements] == ["mouse"]
+    assert merged.recommendation_mode == "single"
 
 
 @pytest.mark.anyio

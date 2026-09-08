@@ -105,6 +105,24 @@ def test_memory_state_keeps_recent_turns_preferences_and_product_decisions_bound
     assert memory.optimization_mode == "cheaper"
 
 
+def test_no_eligible_refinement_keeps_the_last_audited_selection_as_reference():
+    previous = ShoppingSessionMemory(
+        current_mission={"goal": "Buy a mouse"},
+        selected_products=[{"id": "current-mouse", "quantity": 1}],
+    )
+
+    memory = memory_from_state(previous, {
+        "user_request": "Make it cheaper",
+        "final_response": "No lower-priced verified alternative was found.",
+        "mission": {"goal": "Buy a mouse"},
+        "continues_context": True,
+        "selected_products": [],
+        "selection_context": {"no_eligible_alternative": True},
+    })
+
+    assert memory.selected_products == [{"id": "current-mouse", "quantity": 1}]
+
+
 class FakeMemoryStore:
     def __init__(self, memory=None, *, fail=False):
         self.memory = memory

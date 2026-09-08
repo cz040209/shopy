@@ -119,6 +119,55 @@ def test_selector_role_evidence_rejects_incidental_specification_words():
     )
 
 
+def test_selector_payload_exposes_verified_evidence_for_inferred_roles():
+    state = initial_shopping_state("Complete the look in this image")
+    state.update({
+        "recommendation_mode": "bundle",
+        # Vision-suggested discovery roles are optional, so they are not in
+        # required_categories. They must still be annotated for the selector.
+        "required_categories": [],
+        "search_requirements": [
+            {
+                "original_text": "pocket square",
+                "canonical_role": "pocket square",
+                "customer_required": False,
+                "search_queries": ["pocket square", "formal pocket square"],
+            },
+            {
+                "original_text": "dress shoes",
+                "canonical_role": "dress shoes",
+                "customer_required": False,
+                "search_queries": ["dress shoes", "formal leather shoes"],
+            },
+        ],
+        "retrieval_role_matches": {
+            "pocket square": ["polo"],
+            "dress shoes": ["shoes"],
+        },
+    })
+    polo = {
+        "id": "polo", "name": "Single-Button Polo", "category": "Shirts",
+        "description": "Smart casual shirt", "price": "80",
+        "inventory_quantity": 5, "attributes": {}, "specs": [],
+    }
+    shoes = {
+        "id": "shoes", "name": "Leather Dress Shoes",
+        "category": "Dress Shoes", "description": "Formal leather footwear",
+        "price": "280", "inventory_quantity": 5, "attributes": {}, "specs": [],
+    }
+
+    polo_payload = ProductSelectorAgent._product_payload(
+        polo, {}, state["retrieval_role_matches"], state,
+    )
+    shoes_payload = ProductSelectorAgent._product_payload(
+        shoes, {}, state["retrieval_role_matches"], state,
+    )
+
+    assert polo_payload["retrieval_query_matches"] == ["pocket square"]
+    assert polo_payload["verified_role_matches"] == []
+    assert shoes_payload["verified_role_matches"] == ["dress shoes"]
+
+
 def test_product_ranking_uses_whole_terms_not_substrings():
     state = initial_shopping_state("car cleaner")
     products = [
@@ -183,6 +232,32 @@ def test_search_requirement_separates_dynamic_base_role_from_explicit_feature():
     assert result[0].canonical_role == "headphone"
     assert result[0].required_features == ["noise cancelling"]
     assert result[0].search_queries[0] == "headphone"
+
+
+def test_search_requirement_prefers_the_exact_generated_role_over_a_broad_match():
+    requirements = [
+        SearchRequirement(
+            original_text="keyboard",
+            canonical_role="keyboard",
+            customer_required=True,
+            search_queries=["keyboard", "mechanical keyboard"],
+        ),
+        SearchRequirement(
+            original_text="mechanical keyboard",
+            canonical_role="mechanical keyboard",
+            customer_required=False,
+            search_queries=["mechanical keyboard", "keyboard"],
+        ),
+    ]
+
+    result = IntentMissionAgent._normalized_search_requirements(
+        requirements, ["keyboard", "mechanical keyboard"],
+    )
+
+    assert [item.canonical_role for item in result] == [
+        "keyboard", "mechanical keyboard",
+    ]
+    assert [item.customer_required for item in result] == [True, False]
 
 
 def test_typed_requirement_can_reconcile_a_base_role_without_product_taxonomy():
@@ -536,9 +611,48 @@ async def test_compatibility_reports_conflicting_verified_model_facts():
         {"id": "a", "name": "Case A", "category": "accessory", "inventory_quantity": 2, "attributes": {"compatible_models": ["alpha"]}, "specs": []},
         {"id": "b", "name": "Device B", "category": "device", "inventory_quantity": 2, "attributes": {"compatible_models": ["beta"]}, "specs": []},
     ]
+    state["selected_products"] = [
+        {"id": "a", "quantity": 1}, {"id": "b", "quantity": 1},
+    ]
     result = await CompatibilityAgent(CompatibilityModel()).run(state)
     assert result["compatibility_results"][0]["status"] == "incompatible"
     assert result["compatibility_results"][0]["affected_product_ids"] == ["a", "b"]
+
+
+@pytest.mark.anyio
+async def test_compatibility_never_processes_unselected_retrieval_candidates():
+    class CompatibilityModel:
+        async def ainvoke(self, messages, **kwargs):
+            raise AssertionError("compatibility LLM must not run without accepted selections")
+
+    state = initial_shopping_state("Complete this outfit")
+    state.update({
+        "candidate_products": [
+            {"id": "loose-hit", "name": "Keyword Match", "inventory_quantity": 3},
+        ],
+        "selected_products": [],
+    })
+
+    result = await CompatibilityAgent(CompatibilityModel()).run(state)
+
+    assert result == {
+        "compatibility_results": [],
+        "compatibility_plan": {"fields": []},
+    }
+
+
+def test_rejected_product_selection_skips_compatibility_stage():
+    orchestrator = ShoppingOrchestrator(GraphModel())
+    state = initial_shopping_state("Complete this outfit")
+    state.update({
+        "selected_products": [],
+        "execution_plan": {
+            "stages": ["product_selector", "compatibility"],
+            "requested_actions": ["search_products"],
+        },
+    })
+
+    assert orchestrator._after_product_selector(state) == "response_draft"
 
 
 @pytest.mark.anyio
@@ -1051,6 +1165,54 @@ def test_product_selector_accepts_json_wrapped_by_model_explanation():
     )
 
     assert value["mode"] == "single"
+
+
+def test_product_selector_unwraps_a_single_provider_envelope():
+    value = ProductSelectorAgent._selection_object({
+        "result": {
+            "mode": "single",
+            "related_candidate_count": 2,
+            "choices": [],
+            "unfulfilled_roles": [],
+        },
+    })
+
+    assert value["mode"] == "single"
+
+
+@pytest.mark.anyio
+async def test_product_selector_preserves_llm_choices_inside_provider_envelope():
+    class SelectorModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "selection": {
+                    "mode": "single",
+                    "related_candidate_count": 2,
+                    "choices": [
+                        {"product_id": "one", "role": "keyboard", "reason": "Fit one"},
+                        {"product_id": "two", "role": "keyboard", "reason": "Fit two"},
+                    ],
+                    "unfulfilled_roles": [],
+                }
+            }))
+
+    state = initial_shopping_state("Recommend a keyboard")
+    state.update({
+        "recommendation_mode": "single",
+        "required_categories": ["keyboard"],
+        "candidate_products": [
+            {"id": "one", "name": "Keyboard One", "category": "Keyboards", "price": "100", "inventory_quantity": 5},
+            {"id": "two", "name": "Keyboard Two", "category": "Keyboards", "price": "120", "inventory_quantity": 5},
+        ],
+    })
+
+    result = await ProductSelectorAgent(SelectorModel()).run(state)
+
+    assert result["selected_products"] == [
+        {"id": "one", "quantity": 1},
+        {"id": "two", "quantity": 1},
+    ]
+    assert result["selection_source"] == "llm_product_selector_v1"
 
 
 @pytest.mark.anyio

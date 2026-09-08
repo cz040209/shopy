@@ -14,7 +14,12 @@ from app.ai_logging import log_ai_event
 from app.config import settings
 
 from .budgeting import recommendation_budget_limit
-from .intent import AsyncChatModel, StructuredOutputError, _json_object
+from .intent import (
+    AsyncChatModel,
+    StructuredOutputError,
+    _schema_object,
+    _validation_message,
+)
 from .product_roles import matches_product_role, normalized_terms, product_identity_parts
 from .state import ShoppingAgentState
 
@@ -46,6 +51,9 @@ products retrieved from the database. Return only valid JSON:
 }
 
 Selection rules:
+- The top-level response must be the schema object itself, without a wrapper.
+  Include mode, related_candidate_count, choices, and unfulfilled_roles even
+  when an array is empty. Do not add prose or fields outside that object.
 - Consider every supplied verified_catalog_products entry before deciding.
 - Use the two semantic inputs together: customer_request/original_text contain
   the customer's complete explicit need, while each role_requirements.base_role
@@ -56,9 +64,12 @@ Selection rules:
   candidate relevance. Only demanded roles are mandatory; inferred roles may
   supply useful complementary choices and must not become false missing-item
   claims.
-- For each mandatory role, use only a candidate whose
-  verified_role_matches contains that exact role. `retrieval_query_matches`
-  shows high-recall search provenance and is not identity proof by itself.
+- `verified_role_matches` lists every generated base role for which the
+  product's typed catalog identity provides evidence, including inferred
+  discovery roles. When assigning one of those generated roles, use it only
+  when it appears in that product's verified_role_matches.
+  `retrieval_query_matches` shows high-recall search provenance and is not
+  identity proof by itself.
 - Do not expect a requested feature to appear in a product name. Verify it from
   any supplied description, specifications, or additional attributes. A broad
   base-role match is candidate identity, not proof of a requested capability.
@@ -106,10 +117,15 @@ Selection rules:
   so never discard otherwise valid choices merely because one role has no match.
 - When required_roles is empty in bundle mode, the earlier roles were inferred
   only to broaden retrieval. Derive 3–6 distinct concrete functional roles from
-  the verified product identities and the customer's outcome. Do not copy an
-  abstract retrieval phrase onto a product it does not describe, and do not
-  reject a useful catalog-backed bundle merely because an inferred search
-  direction had no exact match.
+  the verified product identities and the customer's outcome. First use exact
+  verified_role_matches that genuinely complement the already-visible or
+  customer-owned items. If an inferred direction has no exact catalog match,
+  omit it instead of reporting it missing. You may assign another concrete
+  role dynamically when the product's own name/category/specifications support
+  that role and it advances the same customer outcome. Do not copy an abstract
+  retrieval phrase onto a product it does not describe, duplicate an already
+  visible/owned item, or reject a useful catalog-backed bundle merely because
+  an inferred search direction had no exact match.
 - An inferred role must be based on the customer mission and supplied candidate
   facts. Derive it dynamically; never rely on a fixed product checklist.
 - Treat the supplied budget as the customer's primary target. Prefer choices
@@ -155,7 +171,10 @@ class ProductSelectorAgent:
     def _selection_object(content: object) -> dict[str, object]:
         """Recover a complete JSON object from an LLM's harmless wrapper text."""
         try:
-            return _json_object(content)
+            return _schema_object(
+                content,
+                required_keys=frozenset({"mode", "choices"}),
+            )
         except StructuredOutputError as original_error:
             text = str(content).strip()
             decoder = json.JSONDecoder()
@@ -252,7 +271,7 @@ class ProductSelectorAgent:
                 if product_id in {str(value) for value in product_ids}
             ],
             "verified_role_matches": [
-                role for role in ProductSelectorAgent._required_roles(state)
+                role for role in ProductSelectorAgent._candidate_roles(state)
                 if ProductSelectorAgent._choice_has_role_evidence(
                     product, role, state,
                 )
@@ -268,6 +287,23 @@ class ProductSelectorAgent:
         return list(dict.fromkeys(
             str(role).strip() for role in state.get("required_categories", [])
             if str(role).strip()
+        ))[:6]
+
+    @staticmethod
+    def _candidate_roles(state: ShoppingAgentState) -> list[str]:
+        """Return every runtime-generated base role exposed to retrieval.
+
+        Required categories intentionally exclude optional vision/planning
+        ideas.  Those inferred roles still need identity evidence in the LLM
+        payload, otherwise a high-recall keyword hit is indistinguishable from
+        an exact catalog match.  The roles come exclusively from the current
+        LLM-generated search contract; no product taxonomy is embedded here.
+        """
+        return list(dict.fromkeys(
+            str(requirement.get("canonical_role", "")).strip()
+            for requirement in state.get("search_requirements", [])
+            if isinstance(requirement, dict)
+            and str(requirement.get("canonical_role", "")).strip()
         ))[:6]
 
     @staticmethod
@@ -618,17 +654,18 @@ class ProductSelectorAgent:
                     response_mime_type="application/json",
                     max_output_tokens=settings.agent_selector_max_output_tokens,
                 )
-            decision = ProductSelectionDecision.model_validate(
-                self._selection_object(response.content)
-            )
+            selection_data = self._selection_object(response.content)
+            decision = ProductSelectionDecision.model_validate(selection_data)
             validation_errors = self._validation_errors(decision, products, state)
             if validation_errors:
                 raise ProductSelectionError("; ".join(validation_errors))
         except (ValidationError, StructuredOutputError, json.JSONDecodeError) as error:
-            message = (
-                str(error) if isinstance(error, ProductSelectionError)
-                else f"{type(error).__name__}: selector output did not match the required JSON schema."
-            )
+            if isinstance(error, ProductSelectionError):
+                message = str(error)
+            elif isinstance(error, ValidationError):
+                message = "ValidationError: " + _validation_message(error)
+            else:
+                message = f"{type(error).__name__}: {str(error)[:800]}"
             log_ai_event(
                 "agent.product_selector.rejected",
                 request_id=str(state.get("run_id", "")),
