@@ -5,6 +5,7 @@ import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import AIAssistant from "@/features/assistant/components/AIAssistant";
 import { CartProvider } from "@/features/cart/cart-context";
+import PersonalizedProductReminder from "@/features/recommendations/PersonalizedProductReminder";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -41,6 +42,7 @@ export default function RootLayout({
             {children}
           </main>
           <Footer />
+          <PersonalizedProductReminder />
         </CartProvider>
         <AIAssistant />
       </body>

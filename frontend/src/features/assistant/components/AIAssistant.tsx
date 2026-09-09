@@ -6,6 +6,7 @@ import styles from "./AIAssistant.module.css";
 import { API_URL as ASSISTANT_API_URL } from "@/lib/api";
 import voiceStyles from "./VoiceRecording.module.css";
 import AIShoppingCamera from "@/features/vision/components/AIShoppingCamera";
+import { BEHAVIORAL_REMINDER_REFRESH_EVENT } from "@/lib/recommendations";
 
 type Message = {
   id: string;
@@ -142,6 +143,7 @@ export default function AIAssistant() {
               ? { ...message, timestamp: new Date(), attachments: event.attachments ?? [] }
               : message
           ));
+          window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
         }
       };
 

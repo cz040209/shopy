@@ -80,7 +80,7 @@ async def test_memory_store_reports_redis_unavailability_without_returning_stale
 
 def test_memory_state_keeps_recent_turns_preferences_and_product_decisions_bounded():
     memory = memory_from_state(
-        ShoppingSessionMemory(preferences=["wireless"], recent_messages=[]),
+        ShoppingSessionMemory(preferences=["wireless"], recent_messages=[], notified_product_ids=["notified-1"]),
         {
             "user_request": "Make it cheaper.",
             "final_response": "I found a lower-cost option.",
@@ -102,6 +102,7 @@ def test_memory_state_keeps_recent_turns_preferences_and_product_decisions_bound
     assert memory.viewed_product_ids == ["viewed-1"]
     assert memory.selected_products == [{"id": "selected-1", "quantity": 1}]
     assert memory.rejected_product_ids == ["rejected-1"]
+    assert memory.notified_product_ids == ["notified-1"]
     assert memory.optimization_mode == "cheaper"
 
 

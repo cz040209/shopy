@@ -36,6 +36,7 @@ class ShoppingSessionMemory(BaseModel):
     viewed_product_ids: list[str] = Field(default_factory=list, max_length=30)
     selected_products: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
     rejected_product_ids: list[str] = Field(default_factory=list, max_length=30)
+    notified_product_ids: list[str] = Field(default_factory=list, max_length=30)
     current_bundle: dict[str, Any] | None = None
     optimization_mode: str | None = Field(default=None, max_length=80)
 
@@ -52,6 +53,7 @@ class ShoppingSessionMemory(BaseModel):
             "viewed_product_ids": self.viewed_product_ids,
             "selected_products": self.selected_products,
             "rejected_product_ids": self.rejected_product_ids,
+            "notified_product_ids": self.notified_product_ids,
             "current_bundle": self.current_bundle,
             "optimization_mode": self.optimization_mode,
         }
@@ -204,6 +206,7 @@ def memory_from_state(previous: ShoppingSessionMemory | None, state: Mapping[str
         viewed_product_ids=viewed,
         selected_products=selected[:12] if isinstance(selected, list) else [],
         rejected_product_ids=rejected,
+        notified_product_ids=prior.notified_product_ids,
         current_bundle=bundle,
         optimization_mode=str(optimization_mode)[:80] if optimization_mode else None,
     )

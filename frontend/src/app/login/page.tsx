@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowRight, Fingerprint, LockKeyhole, Mail, Shield } from "lucide-react";
 import Button from "@/components/ui/Button";
+import RedirectIfAuthenticated from "@/components/auth/RedirectIfAuthenticated";
 import { getSafeReturnPath, loginAccount, notifyAuthChanged } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -40,6 +41,7 @@ export default function Login() {
   }
 
   return (
+    <RedirectIfAuthenticated>
     <div className={styles.auth}>
       <section>
         <h1 className="max-w-3xl text-white">Welcome back</h1>
@@ -130,5 +132,6 @@ export default function Login() {
         </div>
       </section>
     </div>
+    </RedirectIfAuthenticated>
   );
 }

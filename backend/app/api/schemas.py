@@ -43,6 +43,16 @@ class ChatResponse(BaseModel):
     workspace: dict[str, Any] = Field(default_factory=dict)
 
 
+class BehavioralRecommendationProductResponse(BaseModel):
+    product: "ProductResponse"
+    reason: str = Field(min_length=1, max_length=240)
+
+
+class BehavioralReminderResponse(BaseModel):
+    message: str
+    products: list[BehavioralRecommendationProductResponse] = Field(default_factory=list, max_length=4)
+
+
 class VisionResponse(BaseModel):
     mode: VisionMode
     analysis: str

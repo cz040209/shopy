@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .routes import agentic, auth, catalog, chat, commerce, health, transcription, vision
+from .routes import agentic, auth, catalog, chat, commerce, health, recommendations, transcription, vision
 
 
 api_router = APIRouter()
@@ -10,5 +10,6 @@ api_router.include_router(catalog.router)
 api_router.include_router(commerce.router)
 api_router.include_router(agentic.router)
 api_router.include_router(chat.router)
+api_router.include_router(recommendations.router)
 api_router.include_router(transcription.router)
 api_router.include_router(vision.router)

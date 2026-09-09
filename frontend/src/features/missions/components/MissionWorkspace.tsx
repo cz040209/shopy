@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, apiErrorMessage, apiFetch } from "@/lib/api";
+import { BEHAVIORAL_REMINDER_REFRESH_EVENT } from "@/lib/recommendations";
 import { useCart } from "@/features/cart/cart-context";
 import AIProgressPanel from "./AIProgressPanel";
 import AlternativeBundles from "./AlternativeBundles";
@@ -274,6 +275,7 @@ export default function MissionWorkspace() {
       setItems(nextItems);
       setBundleWorkspace(data.workspace ?? {});
       setMission({ ...emptyMission, ...data.mission });
+      window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
       setShowBundleReady(nextItems.length > 0);
       setHistory((previous) => [{
         id: crypto.randomUUID(),

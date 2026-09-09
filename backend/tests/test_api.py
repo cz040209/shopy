@@ -26,4 +26,5 @@ def test_expected_api_routes_are_registered():
         "/api/v1/auth/login",
         "/api/v1/auth/me",
         "/api/v1/auth/logout",
+        "/api/v1/recommendations/reminder",
     }.issubset(paths)
