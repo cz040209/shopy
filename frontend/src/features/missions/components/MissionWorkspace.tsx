@@ -275,7 +275,9 @@ export default function MissionWorkspace() {
       setItems(nextItems);
       setBundleWorkspace(data.workspace ?? {});
       setMission({ ...emptyMission, ...data.mission });
-      window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
+      if (nextItems.length) {
+        window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
+      }
       setShowBundleReady(nextItems.length > 0);
       setHistory((previous) => [{
         id: crypto.randomUUID(),

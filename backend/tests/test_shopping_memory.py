@@ -106,6 +106,31 @@ def test_memory_state_keeps_recent_turns_preferences_and_product_decisions_bound
     assert memory.optimization_mode == "cheaper"
 
 
+def test_memory_persists_selector_role_as_runtime_generated_basic_role():
+    memory = memory_from_state(None, {
+        "user_request": "Find an ergonomic chair for my home office",
+        "final_response": "Here is a verified chair.",
+        "mission": {"goal": "comfortable home office"},
+        "selected_products": [{"id": "chair-1", "quantity": 1}],
+        "selection_reasoning": [{
+            "product_id": "chair-1", "role": "ergonomic chair",
+            "reason": "Supports the requested comfort preference.", "quantity": 1,
+        }],
+        "search_requirements": [{
+            "original_text": "ergonomic chair",
+            "canonical_role": "office chair",
+            "search_queries": ["office chair", "ergonomic chair", "computer chair", "desk chair"],
+        }],
+    })
+
+    assert memory.selected_products == [{
+        "id": "chair-1",
+        "quantity": 1,
+        "role": "chair",
+        "search_queries": ["chair", "office chair", "ergonomic chair", "computer chair", "desk chair"],
+    }]
+
+
 def test_no_eligible_refinement_keeps_the_last_audited_selection_as_reference():
     previous = ShoppingSessionMemory(
         current_mission={"goal": "Buy a mouse"},

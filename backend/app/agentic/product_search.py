@@ -153,7 +153,9 @@ class ProductSearchAgent:
 
     @classmethod
     def _rank(cls, products: list[dict[str, Any]], state: ShoppingAgentState, *, include_out_of_stock: bool) -> list[dict[str, Any]]:
-        budget_limit = recommendation_budget_limit(state.get("budget"))
+        budget_limit = recommendation_budget_limit(
+            state.get("budget"), state.get("budget_mode", "target")
+        )
         intent_terms = cls._intent_terms(state)
         owned = " ".join(map(str, state.get("owned_items", []))).lower()
         ranked: list[dict[str, Any]] = []

@@ -335,6 +335,7 @@ class ShoppingOrchestrator:
             "catalog_query": mission.catalog_query,
             "catalog_queries": mission.catalog_queries, "requested_actions": mission.requested_actions,
             "budget": mission.budget,
+            "budget_mode": mission.budget_mode,
             "bundle_items": [item.model_dump() for item in mission.bundle_items],
             "search_requirements": [item.model_dump() for item in mission.search_requirements],
             "preferences": mission.preferences,
@@ -465,6 +466,7 @@ class ShoppingOrchestrator:
             remembered_budget = memory_context.get("budget", previous.get("budget"))
             if remembered_budget is not None:
                 data["budget"] = remembered_budget
+                data["budget_mode"] = previous.get("budget_mode", "target")
         for field in ("preferences", "constraints", "owned_items"):
             remembered = memory_context.get(field)
             if isinstance(remembered, list):

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { BellRing, Check, ShoppingBag, Sparkles, Star, X } from "lucide-react";
+import { Check, Megaphone, ShoppingBag, Sparkles, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useCart } from "@/features/cart/cart-context";
 import ProductImage from "@/features/products/components/ProductImage";
 import { toProduct, type ApiProduct, type Product } from "@/features/products/types";
@@ -19,6 +20,7 @@ const sessionKey = "shopy:behavioral-reminder-shown";
 
 export default function PersonalizedProductReminder() {
   const { addToCart } = useCart();
+  const pathname = usePathname();
   const requestInFlight = useRef(false);
   const revealTimer = useRef<number | null>(null);
   const [message, setMessage] = useState("");
@@ -26,10 +28,11 @@ export default function PersonalizedProductReminder() {
   const [visible, setVisible] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<string[]>([]);
+  const isRecommendationSurface = pathname === "/" || pathname === "/build";
 
   useEffect(() => {
     const requestReminder = () => {
-      if (requestInFlight.current || window.sessionStorage.getItem(sessionKey) === "1") return;
+      if (!isRecommendationSurface || requestInFlight.current || window.sessionStorage.getItem(sessionKey) === "1") return;
       requestInFlight.current = true;
       void apiFetch("/api/v1/recommendations/reminder", { method: "POST" })
         .then((payload) => {
@@ -46,20 +49,30 @@ export default function PersonalizedProductReminder() {
         .finally(() => { requestInFlight.current = false; });
     };
 
-    const initialTimer = window.setTimeout(requestReminder, 2400);
+    const initialTimer = pathname === "/"
+      ? window.setTimeout(requestReminder, 2400)
+      : null;
+    const handleRecommendationCompleted = () => {
+      window.sessionStorage.removeItem(sessionKey);
+      setVisible(false);
+      setMessage("");
+      setProducts([]);
+      requestReminder();
+    };
     const handleAuthChange = () => {
       window.sessionStorage.removeItem(sessionKey);
       requestReminder();
     };
-    window.addEventListener(BEHAVIORAL_REMINDER_REFRESH_EVENT, requestReminder);
+    window.addEventListener(BEHAVIORAL_REMINDER_REFRESH_EVENT, handleRecommendationCompleted);
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
     return () => {
-      window.clearTimeout(initialTimer);
-      window.removeEventListener(BEHAVIORAL_REMINDER_REFRESH_EVENT, requestReminder);
+      if (initialTimer !== null) window.clearTimeout(initialTimer);
+      window.removeEventListener(BEHAVIORAL_REMINDER_REFRESH_EVENT, handleRecommendationCompleted);
       window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
       if (revealTimer.current !== null) window.clearTimeout(revealTimer.current);
+      setVisible(false);
     };
-  }, []);
+  }, [isRecommendationSurface, pathname]);
 
   async function handleAdd(product: Product) {
     if (addingId || addedIds.includes(product.id)) return;
@@ -74,16 +87,16 @@ export default function PersonalizedProductReminder() {
     }
   }
 
-  if (!visible || !products.length) return null;
+  if (!isRecommendationSurface || !visible || !products.length) return null;
 
   return (
     <aside className={styles.reminder} role="dialog" aria-modal="false" aria-labelledby="personalized-reminder-title">
       <div className={styles.glow} />
       <header className={styles.header}>
-        <div className={styles.icon}><BellRing size={19} /></div>
+        <div className={styles.icon}><Megaphone size={19} /></div>
         <div>
-          <div className={styles.eyebrow}><Sparkles size={12} /> Picked for you</div>
-          <h2 id="personalized-reminder-title">Something you may like</h2>
+          <div className={styles.eyebrow}><Sparkles size={12} /> Personalised recommendation</div>
+          <h2 id="personalized-reminder-title">We think you may also like…</h2>
         </div>
         <button type="button" className={styles.close} onClick={() => setVisible(false)} aria-label="Dismiss recommendations"><X size={18} /></button>
       </header>
@@ -113,7 +126,7 @@ export default function PersonalizedProductReminder() {
         })}
       </div>
 
-      <div className={styles.footer}><span>Based on this session only</span><Link href="/shop" onClick={() => setVisible(false)}>Explore more</Link></div>
+      <div className={styles.footer}><span>AI-curated from your 30-minute session</span><Link href="/shop" onClick={() => setVisible(false)}>Explore more</Link></div>
     </aside>
   );
 }

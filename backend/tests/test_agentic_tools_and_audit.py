@@ -284,6 +284,92 @@ class CompleteTravelRoleModel:
         }))
 
 
+class WFHStrictBudgetRepairModel:
+    def __init__(self) -> None:
+        self.selector_calls = 0
+        self.repair_payload = None
+
+    async def ainvoke(self, input, **kwargs):
+        prompt = str(input[0].content)
+        if "product-selection reasoning agent" in prompt:
+            self.selector_calls += 1
+            payload = json.loads(str(input[1].content))
+            products = {product["name"]: product for product in payload["verified_catalog_products"]}
+            if self.selector_calls == 1:
+                choices = (
+                    ("Premium Ergonomic Chair", "chair"),
+                    ("Home Office Desk", "desk"),
+                    ("Work Monitor", "monitor"),
+                )
+            else:
+                self.repair_payload = json.loads(str(input[-1].content))
+                plan = self.repair_payload["feasible_bundle_plans"][0]
+                return AIMessage(content=json.dumps({
+                    "selected_plan_id": plan["plan_id"],
+                    "reasons": [
+                        {
+                            "product_id": choice["product_id"],
+                            "reason": f"Verified {choice['role']} for the requested workspace.",
+                        }
+                        for choice in plan["choices"]
+                    ],
+                }))
+            return AIMessage(content=json.dumps({
+                "mode": "bundle",
+                "related_candidate_count": len(products),
+                "choices": [{
+                    "product_id": products[name]["id"],
+                    "role": role,
+                    "reason": f"Verified {role} for the requested workspace.",
+                    "quantity": 1,
+                } for name, role in choices],
+                "unfulfilled_roles": [],
+            }))
+        if "response-writing agent" in prompt:
+            payload = json.loads(str(input[1].content))
+            products = payload["verified_catalog_products"]
+            total = sum(Decimal(str(product["price"])) for product in products)
+            return AIMessage(content=json.dumps({
+                "response": "\n".join([
+                    *(f"{product['name']} — RM {product['price']}" for product in products),
+                    f"Bundle total: RM {total.quantize(Decimal('0.01'))}.",
+                ]),
+                "product_ids": [product["id"] for product in products],
+                "unfulfilled_requirements": [],
+            }))
+        return AIMessage(content=json.dumps({
+            "mission_type": "product_search",
+            "recommendation_mode": "bundle",
+            "goal": "Build a comfortable WFH setup under RM2,000",
+            "requires_planning": False,
+            "requires_catalog": True,
+            "continues_context": False,
+            "optimization_mode": None,
+            "catalog_query": None,
+            "catalog_queries": ["ergonomic chair", "office desk", "work monitor"],
+            "requested_actions": ["search_products"],
+            "budget": 2000,
+            "budget_mode": "strict_ceiling",
+            "bundle_items": [
+                {"query": "ergonomic chair", "quantity": 1},
+                {"query": "office desk", "quantity": 1},
+                {"query": "work monitor", "quantity": 1},
+            ],
+            "search_requirements": [
+                {"original_text": "ergonomic chair", "canonical_role": "chair", "customer_required": False, "required_features": [], "preferred_features": ["ergonomic"], "search_queries": ["chair", "ergonomic chair"]},
+                {"original_text": "office desk", "canonical_role": "desk", "customer_required": False, "required_features": [], "preferred_features": [], "search_queries": ["desk", "office desk"]},
+                {"original_text": "work monitor", "canonical_role": "monitor", "customer_required": False, "required_features": [], "preferred_features": [], "search_queries": ["monitor", "work monitor"]},
+            ],
+            "preferences": ["comfortable", "ergonomic"],
+            "key_requirements": ["Comfortable WFH setup"],
+            "constraints": [],
+            "owned_items": [],
+            "priorities": ["comfort", "price"],
+            "selection_criteria": [],
+            "fulfillment_requirements": [],
+        }))
+
+
 class BroadGamingRecoveryModel:
     def __init__(self) -> None:
         self.intent_calls = 0
@@ -614,6 +700,48 @@ async def test_complete_travel_roles_reach_search_and_selector_without_optional_
     assert model.selector_calls == 1
     assert len(result["selected_products"]) == 3
     assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["audit_result"]["status"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_wfh_strict_budget_recovers_invalid_llm_selection_and_passes_final_audit(db_session):
+    seller = Seller(name="WFH Seller", slug="wfh-repair-seller", status=SellerStatus.ACTIVE)
+    category = Category(name="WFH", slug="wfh-repair")
+    products = [
+        Product(
+            seller=seller, category=category, sku=sku, slug=slug, name=name,
+            brand="Workspace", description=description, price=Decimal(price),
+            status=ProductStatus.ACTIVE, inventory_quantity=10,
+        )
+        for sku, slug, name, description, price in (
+            ("WFH-1", "premium-chair", "Premium Ergonomic Chair", "Premium ergonomic office chair", "1200"),
+            ("WFH-2", "value-chair", "Value Ergonomic Chair", "Comfortable ergonomic office chair", "700"),
+            ("WFH-3", "office-desk", "Home Office Desk", "Desk for a home office", "800"),
+            ("WFH-4", "work-monitor", "Work Monitor", "Monitor for office work", "500"),
+        )
+    ]
+    db_session.add_all(products)
+    db_session.commit()
+    model = WFHStrictBudgetRepairModel()
+    registry = CommerceToolRegistry(db_session, "wfh-strict-budget-repair", max_calls=30)
+
+    result = await ShoppingOrchestrator(model, tool_registry=registry).ainvoke(
+        "Build me a comfortable WFH setup under RM2,000"
+    )
+
+    assert result["budget_mode"] == "strict_ceiling"
+    assert model.selector_calls == 2
+    assert model.repair_payload["task"] == "select_feasible_bundle_plan"
+    assert model.repair_payload["selection_budget_limit"] == "2000.0"
+    assert model.repair_payload["feasible_bundle_plans"]
+    assert all(
+        Decimal(plan["total"]) <= Decimal("2000.0")
+        for plan in model.repair_payload["feasible_bundle_plans"]
+    )
+    assert Decimal(result["bundle"]["total"]) == Decimal("2000.00")
+    assert {item["id"] for item in result["selected_products"]} == {
+        str(products[1].id), str(products[2].id), str(products[3].id),
+    }
     assert result["audit_result"]["status"] == "pass"
 
 

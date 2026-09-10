@@ -39,11 +39,20 @@ def safe_audit_data(value: Any) -> Any:
 
 
 class OrchestrationRecorder:
-    def __init__(self, db: Session, *, request_id: str, user: User | None = None, conversation: Conversation | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        request_id: str,
+        user: User | None = None,
+        conversation: Conversation | None = None,
+        run_type: str = "shopping",
+    ) -> None:
         self.db = db
         self.request_id = request_id
         self.user = user
         self.conversation = conversation
+        self.run_type = run_type
         self.run: OrchestrationRun | None = None
         self._sequence = 0
 
@@ -52,6 +61,7 @@ class OrchestrationRecorder:
             request_id=self.request_id,
             user=self.user,
             conversation=self.conversation,
+            run_type=self.run_type,
             status="running",
             user_request=customer_input_for_log(str(state["user_request"])),
             initial_state=safe_audit_data(state),

@@ -18,6 +18,7 @@ class OrchestrationRun(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_orchestration_runs_user_created", "user_id", "created_at"),
         Index("ix_orchestration_runs_status_created", "status", "created_at"),
+        Index("ix_orchestration_runs_run_type_created", "run_type", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -25,6 +26,7 @@ class OrchestrationRun(TimestampMixin, Base):
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     conversation_id: Mapped[UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
     mission_id: Mapped[UUID | None] = mapped_column(ForeignKey("shopping_missions.id", ondelete="SET NULL"), index=True)
+    run_type: Mapped[str] = mapped_column(String(40), default="shopping", server_default="shopping", index=True)
     status: Mapped[str] = mapped_column(String(24), default="running", index=True)
     user_request: Mapped[str] = mapped_column(Text)
     initial_state: Mapped[dict[str, Any]] = mapped_column(JSON_DATA, default=dict)

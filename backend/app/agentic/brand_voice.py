@@ -160,7 +160,12 @@ class BrandVoiceAgent:
                 })
         return {
             "target": str(target),
-            "tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+            "budget_mode": state.get("budget_mode", "target"),
+            "tolerance_percent": (
+                0
+                if state.get("budget_mode") == "strict_ceiling"
+                else settings.agent_recommendation_budget_tolerance_percent
+            ),
             "over_target_products": over_target_products,
         }
 
@@ -179,13 +184,31 @@ class BrandVoiceAgent:
             "total": str(total),
             "over_target_by": str(total - target) if total > target else None,
             "remaining": str(target - total),
-            "tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+            "budget_mode": state.get("budget_mode", "target"),
+            "tolerance_percent": (
+                0
+                if state.get("budget_mode") == "strict_ceiling"
+                else settings.agent_recommendation_budget_tolerance_percent
+            ),
         }
 
     async def compose(self, state: dict[str, Any]) -> dict[str, Any]:
         stock_results = state.get("stock_results", [])
         if stock_results:
             return await self._compose_stock_response(state, stock_results)
+
+        if state.get("selection_source") == "llm_product_selector_failed":
+            # Do not ask the wording model to interpret a rejected selection:
+            # its totals and products were never verified catalog state.
+            draft = self._safe_fallback_draft(state, {}, [])
+            return {
+                "final_response": draft.response,
+                "selected_products": [],
+                "response_claims": [],
+                "response_source": self.fallback_source,
+                "attachments": [],
+                "unfulfilled_requirements": draft.unfulfilled_requirements,
+            }
 
         products = self._response_products(state)
         payload = {
@@ -194,7 +217,12 @@ class BrandVoiceAgent:
                 "mission_type": state.get("mission_type"),
                 "goal": state.get("goal"),
                 "budget": state.get("budget"),
-                "recommendation_budget_tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+                "budget_mode": state.get("budget_mode", "target"),
+                "recommendation_budget_tolerance_percent": (
+                    0
+                    if state.get("budget_mode") == "strict_ceiling"
+                    else settings.agent_recommendation_budget_tolerance_percent
+                ),
                 "preferences": state.get("preferences", []),
                 "constraints": state.get("constraints", []),
             },
@@ -587,7 +615,9 @@ class BrandVoiceAgent:
                 # customer will buy together. Each option is therefore checked
                 # against the full stated budget. Bundle mode alone consumes a
                 # shared budget as products are added.
-                price_limit = recommendation_budget_limit(budget) if single_recommendation else remaining
+                price_limit = recommendation_budget_limit(
+                    budget, state.get("budget_mode", "target")
+                ) if single_recommendation else remaining
                 if price_limit is not None and price > price_limit:
                     continue
                 coverage_requirements = requirements if single_recommendation else [
@@ -628,7 +658,9 @@ class BrandVoiceAgent:
                 price = Decimal(str(product["price"]))
             except (InvalidOperation, KeyError, TypeError):
                 continue
-            price_limit = recommendation_budget_limit(budget) if single_recommendation else remaining
+            price_limit = recommendation_budget_limit(
+                budget, state.get("budget_mode", "target")
+            ) if single_recommendation else remaining
             if price_limit is not None and price > price_limit:
                 continue
             selected.append({"id": str(product["id"]), "quantity": 1})

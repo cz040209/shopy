@@ -61,6 +61,7 @@ async def test_orchestration_run_and_ordered_events_are_persisted(db_session, mo
     run = db_session.scalar(select(OrchestrationRun).where(OrchestrationRun.request_id == "runlog123"))
 
     assert run is not None
+    assert run.run_type == "shopping"
     assert run.status == "completed"
     assert run.final_response == result["final_response"]
     assert run.events[0].event_type == "run_started"

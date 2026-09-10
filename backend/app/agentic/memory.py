@@ -150,6 +150,128 @@ def _unique_strings(values: object, *, limit: int) -> list[str]:
     return result
 
 
+def _normalized_terms(value: object) -> set[str]:
+    """Compare runtime-generated role text without embedding a taxonomy."""
+    return {
+        term for term in "".join(
+            character if character.isalnum() else " "
+            for character in str(value).casefold()
+        ).split()
+        if term
+    }
+
+
+def _normalized_words(value: object) -> list[str]:
+    return [
+        term for term in "".join(
+            character if character.isalnum() else " "
+            for character in str(value).casefold()
+        ).split()
+        if term
+    ]
+
+
+def _basic_role(requirement: Mapping[str, Any]) -> str:
+    """Find the stable base role shared by the LLM's search variants."""
+    canonical = str(requirement.get("canonical_role", "")).strip()
+    raw_queries = requirement.get("search_queries", [])
+    queries = [
+        str(query).strip() for query in raw_queries
+        if str(query).strip()
+    ] if isinstance(raw_queries, list) else []
+    query_terms = [_normalized_terms(query) for query in queries]
+    query_terms = [terms for terms in query_terms if terms]
+    if len(query_terms) < 2:
+        return canonical
+    shared_terms = set.intersection(*query_terms)
+    shared_canonical_words = [
+        word for word in _normalized_words(canonical) if word in shared_terms
+    ]
+    return " ".join(shared_canonical_words) or canonical
+
+
+def _selected_products_with_roles(
+    selected: list[dict[str, Any]], state: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Persist the accepted selector role as its AI-generated base role.
+
+    Intent already separates a broad canonical role from modifiers and emits
+    dynamic search variants. This function only reconciles the selector's role
+    to that runtime contract; it contains no product or category vocabulary.
+    """
+    reasoning_by_id = {
+        str(item.get("product_id")): item
+        for item in state.get("selection_reasoning", [])
+        if isinstance(item, dict) and item.get("product_id")
+    }
+    requirements = [
+        item for item in state.get("search_requirements", [])
+        if isinstance(item, dict) and str(item.get("canonical_role", "")).strip()
+    ]
+    enriched: list[dict[str, Any]] = []
+    for item in selected[:12]:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        product_id = str(item["id"])
+        reasoning = reasoning_by_id.get(product_id, {})
+        raw_role = str(item.get("role") or reasoning.get("role") or "").strip()
+        role_terms = _normalized_terms(raw_role)
+        matching: list[tuple[int, dict[str, Any]]] = []
+        for requirement in requirements:
+            canonical = str(requirement.get("canonical_role", "")).strip()
+            canonical_terms = _normalized_terms(canonical)
+            evidence_values = [
+                canonical,
+                str(requirement.get("original_text", "")),
+                *(
+                    requirement.get("search_queries", [])
+                    if isinstance(requirement.get("search_queries"), list) else []
+                ),
+            ]
+            evidence_terms = [_normalized_terms(value) for value in evidence_values]
+            if not role_terms or not canonical_terms:
+                continue
+            if role_terms == canonical_terms:
+                score = 3
+            elif any(role_terms == terms for terms in evidence_terms):
+                score = 2
+            elif canonical_terms <= role_terms or role_terms <= canonical_terms:
+                score = 1
+            else:
+                continue
+            matching.append((score, requirement))
+        matching.sort(
+            key=lambda value: (
+                -value[0],
+                len(_normalized_terms(value[1].get("canonical_role", ""))),
+            )
+        )
+        requirement = matching[0][1] if matching else None
+        base_role = _basic_role(requirement) if requirement is not None else raw_role
+        role_queries = _unique_strings(
+            [
+                base_role,
+                *(
+                    requirement.get("search_queries", [])
+                    if requirement is not None
+                    and isinstance(requirement.get("search_queries"), list)
+                    else []
+                ),
+            ],
+            limit=6,
+        )
+        stored = {
+            "id": product_id,
+            "quantity": max(1, int(item.get("quantity", 1))),
+        }
+        if base_role:
+            stored["role"] = base_role
+        if role_queries:
+            stored["search_queries"] = role_queries
+        enriched.append(stored)
+    return enriched
+
+
 def memory_from_state(previous: ShoppingSessionMemory | None, state: Mapping[str, Any]) -> ShoppingSessionMemory:
     """Merge only structured, bounded shopping context after an audited reply."""
     prior = previous or ShoppingSessionMemory()
@@ -191,6 +313,8 @@ def memory_from_state(previous: ShoppingSessionMemory | None, state: Mapping[str
         else current_selected if current_selected is not None
         else prior.selected_products
     )
+    if current_selected is not None and selected is current_selected:
+        selected = _selected_products_with_roles(current_selected, state)
     bundle = state.get("bundle") if isinstance(state.get("bundle"), dict) else prior.current_bundle
     budget = state.get("budget") if state.get("budget") is not None else prior.budget
     optimization_mode = state.get("optimization_mode") or prior.optimization_mode

@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from decimal import Decimal, InvalidOperation
+from itertools import combinations, product as cartesian_product
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -110,6 +111,10 @@ Selection rules:
 - A choice.role is a concrete product type supported by that product's verified
   identity, not an abstract benefit or task. When required_roles is non-empty,
   select only those roles; do not introduce unrelated optional roles.
+- Keep choice.role at the broad base product-type level. Remove preference,
+  feature, material, style, use-case, brand, and model modifiers dynamically;
+  those details belong in the reason. When role_requirements contains the
+  matching product type, copy its base_role exactly instead of rewriting it.
 - When required_roles is non-empty, copy its exact role string into a matching
   choice.role. Put an exact required role in unfulfilled_roles only when none of
   the supplied products can fulfill it. Prefer to account for every required
@@ -135,6 +140,26 @@ Selection rules:
   limit applies independently to each alternative; for a bundle it applies to
   the combined total. Explain an above-target choice accurately so the response
   writer can disclose the trade-off.
+- `selection_budget_limit` is the authoritative maximum accepted by the
+  server. Multiply each selected product's verified price by its quantity and
+  add the complete selection before responding. In bundle mode the combined
+  total must not exceed that limit. When budget_mode is `strict_ceiling`, the
+  limit equals the customer's budget and must never be exceeded; tolerance is
+  unavailable for that request.
+- When the last user payload has task `repair_invalid_selection`, correct every
+  supplied validation error and return a complete replacement schema object.
+  Recalculate from verified catalog prices; do not defend or repeat the
+  rejected output.
+- When the last user payload has task `select_feasible_bundle_plan`, this is the
+  sole exception to the normal response schema. Choose the one supplied plan
+  that best fits the complete mission and return only:
+  {"selected_plan_id": string, "reasons": [
+    {"product_id": string, "reason": string}
+  ]}
+  Use one supplied plan_id exactly. Do not combine plans or add products. Give
+  a concise catalog-grounded reason for each product in that plan. The server
+  has already verified plan IDs, stock, distinct roles, and arithmetic; your
+  semantic responsibility is to choose the best complete plan.
 - When optimization_context contains a prior bundle comparison, recompose the
   complete bundle against that reference. A lower/higher bundle-total criterion
   applies to the sum of all choices, not to each product independently. Other
@@ -165,7 +190,22 @@ class ProductSelectorAgent:
 
     @staticmethod
     def _normalized_role(value: str) -> str:
-        return " ".join(re.findall(r"[\w]+", value.casefold()))
+        return " ".join(re.findall(r"[\w]+", value.casefold().replace("_", " ")))
+
+    @staticmethod
+    def _complete_transport_fields(
+        selection_data: dict[str, object],
+        *,
+        expected_mode: str,
+    ) -> dict[str, object]:
+        """Fill only envelope omissions without changing model choices."""
+        completed = dict(selection_data)
+        choices = completed.get("choices")
+        choice_count = len(choices) if isinstance(choices, list) else 0
+        completed.setdefault("mode", expected_mode)
+        completed.setdefault("related_candidate_count", choice_count)
+        completed.setdefault("unfulfilled_roles", [])
+        return completed
 
     @staticmethod
     def _selection_object(content: object) -> dict[str, object]:
@@ -173,7 +213,7 @@ class ProductSelectorAgent:
         try:
             return _schema_object(
                 content,
-                required_keys=frozenset({"mode", "choices"}),
+                required_keys=frozenset({"choices"}),
             )
         except StructuredOutputError as original_error:
             text = str(content).strip()
@@ -322,6 +362,229 @@ class ProductSelectorAgent:
             and str(requirement.get("canonical_role", "")).strip()
         ][:6]
 
+    @staticmethod
+    def _repair_catalog_products(
+        products: list[dict[str, Any]],
+        role_requirements: list[dict[str, Any]],
+        *,
+        limit: int = 18,
+    ) -> list[dict[str, Any]]:
+        """Bound a repair turn without making the semantic product choice.
+
+        The original selector sees the complete verified shortlist. If its
+        answer fails validation, retain several affordable alternatives for
+        every runtime-generated role so the correction prompt is materially
+        smaller while the LLM still decides the bundle.
+        """
+        bounded_limit = max(1, min(limit, len(products)))
+
+        def order(product: dict[str, Any]) -> tuple[Decimal, int, str]:
+            try:
+                price = Decimal(str(product.get("price")))
+            except (InvalidOperation, TypeError, ValueError):
+                price = Decimal("Infinity")
+            retrieval = product.get("retrieval")
+            score = (
+                int(retrieval.get("score") or 0)
+                if isinstance(retrieval, dict) else 0
+            )
+            return price, -score, str(product.get("name", ""))
+
+        chosen: list[dict[str, Any]] = []
+        chosen_ids: set[str] = set()
+        for requirement in role_requirements:
+            role = str(requirement.get("base_role", "")).strip()
+            if not role:
+                continue
+            matching = sorted(
+                (
+                    product for product in products
+                    if role in product.get("verified_role_matches", [])
+                ),
+                key=order,
+            )
+            for product in matching[:3]:
+                product_id = str(product.get("id", ""))
+                if product_id and product_id not in chosen_ids:
+                    chosen.append(product)
+                    chosen_ids.add(product_id)
+                if len(chosen) >= bounded_limit:
+                    return chosen
+        for product in sorted(products, key=order):
+            product_id = str(product.get("id", ""))
+            if product_id and product_id not in chosen_ids:
+                chosen.append(product)
+                chosen_ids.add(product_id)
+            if len(chosen) >= bounded_limit:
+                break
+        return chosen
+
+    @staticmethod
+    def _feasible_bundle_plans(
+        products: list[dict[str, Any]],
+        roles: list[str],
+        *,
+        budget_limit: Decimal | None,
+        max_plans: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Enumerate safe plan options without deciding which plan is best.
+
+        Roles and catalog identity evidence are produced upstream for the
+        current mission. This boundary only performs authoritative operations:
+        unique IDs/roles, verified prices, quantities, and budget arithmetic.
+        The LLM still makes the semantic choice among the feasible plans.
+        """
+        if budget_limit is None:
+            return []
+        distinct_roles = list(dict.fromkeys(
+            str(role).strip() for role in roles if str(role).strip()
+        ))[:6]
+        if len(distinct_roles) < 3:
+            return []
+
+        def price(product: dict[str, Any]) -> Decimal | None:
+            try:
+                value = Decimal(str(product.get("price")))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            return value if value >= 0 else None
+
+        def quality(product: dict[str, Any]) -> tuple[int, Decimal, Decimal, str]:
+            retrieval = product.get("retrieval")
+            retrieval_score = (
+                int(retrieval.get("score") or 0)
+                if isinstance(retrieval, dict) else 0
+            )
+            try:
+                rating = Decimal(str(product.get("rating") or 0))
+            except (InvalidOperation, TypeError, ValueError):
+                rating = Decimal("0")
+            return (
+                -retrieval_score,
+                -rating,
+                price(product) or Decimal("Infinity"),
+                str(product.get("name", "")),
+            )
+
+        options_by_role: dict[str, list[dict[str, Any]]] = {}
+        for role in distinct_roles:
+            options = [
+                product for product in products
+                if role in product.get("verified_role_matches", [])
+                and price(product) is not None
+                and price(product) <= budget_limit
+            ]
+            if options:
+                options_by_role[role] = sorted(options, key=quality)[:3]
+        available_roles = [role for role in distinct_roles if role in options_by_role]
+        if len(available_roles) < 3:
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for role_count in range(min(6, len(available_roles)), 2, -1):
+            for role_group in combinations(available_roles, role_count):
+                option_groups = [options_by_role[role] for role in role_group]
+                for selected_products in cartesian_product(*option_groups):
+                    product_ids = [str(product.get("id", "")) for product in selected_products]
+                    if not all(product_ids) or len(product_ids) != len(set(product_ids)):
+                        continue
+                    total = sum(
+                        (price(product) or Decimal("0"))
+                        for product in selected_products
+                    )
+                    if total > budget_limit:
+                        continue
+                    key = tuple(sorted(zip(role_group, product_ids)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    retrieval_total = sum(
+                        int(product.get("retrieval", {}).get("score") or 0)
+                        if isinstance(product.get("retrieval"), dict) else 0
+                        for product in selected_products
+                    )
+                    choices = []
+                    for role, product in zip(role_group, selected_products):
+                        choices.append({
+                            "product_id": str(product["id"]),
+                            "role": role,
+                            "quantity": 1,
+                            "name": product.get("name"),
+                            "brand": product.get("brand"),
+                            "category": product.get("category"),
+                            "price": str(price(product)),
+                            "rating": product.get("rating"),
+                            "description": ProductSelectorAgent._compact_value(
+                                product.get("description", ""), text_limit=180,
+                            ),
+                        })
+                    candidates.append({
+                        "total": str(total),
+                        "role_count": role_count,
+                        "retrieval_score": retrieval_total,
+                        "choices": choices,
+                    })
+
+        candidates.sort(key=lambda plan: (
+            -int(plan["role_count"]),
+            -int(plan["retrieval_score"]),
+            abs(budget_limit - Decimal(str(plan["total"]))),
+        ))
+        plans = candidates[:max(1, max_plans)]
+        for index, plan in enumerate(plans, start=1):
+            plan["plan_id"] = f"plan-{index}"
+        return plans
+
+    @staticmethod
+    def _decision_from_plan_selection(
+        content: object,
+        plans: list[dict[str, Any]],
+        *,
+        required_roles: list[str],
+    ) -> ProductSelectionDecision:
+        selection = _schema_object(
+            content, required_keys=frozenset({"selected_plan_id"}),
+        )
+        selected_plan_id = str(selection.get("selected_plan_id", "")).strip()
+        plan = next(
+            (item for item in plans if item.get("plan_id") == selected_plan_id),
+            None,
+        )
+        if plan is None:
+            raise ProductSelectionError(
+                f"Unknown feasible plan ID: {selected_plan_id!r}."
+            )
+        reasons: dict[str, str] = {}
+        raw_reasons = selection.get("reasons")
+        if isinstance(raw_reasons, list):
+            for item in raw_reasons:
+                if not isinstance(item, dict):
+                    continue
+                product_id = str(item.get("product_id", "")).strip()
+                reason = " ".join(str(item.get("reason", "")).split())[:320]
+                if product_id and reason:
+                    reasons[product_id] = reason
+        choices = [
+            ProductSelectionChoice(
+                product_id=str(item["product_id"]),
+                role=str(item["role"]),
+                quantity=int(item.get("quantity", 1)),
+                reason=reasons.get(str(item["product_id"]))
+                or f"Fits the requested {item['role']} role within this verified bundle.",
+            )
+            for item in plan.get("choices", [])
+        ]
+        selected_roles = {choice.role for choice in choices}
+        return ProductSelectionDecision(
+            mode="bundle",
+            related_candidate_count=len(choices),
+            choices=choices,
+            unfulfilled_roles=[
+                role for role in required_roles if role not in selected_roles
+            ],
+        )
+
     @classmethod
     def _role_aliases(cls, role: str, state: ShoppingAgentState) -> list[str]:
         role_terms = frozenset(normalized_terms(role))
@@ -464,7 +727,9 @@ class ProductSelectorAgent:
         state: ShoppingAgentState,
     ) -> str | None:
         budget = state.get("budget")
-        limit = recommendation_budget_limit(budget)
+        limit = recommendation_budget_limit(
+            budget, state.get("budget_mode", "target")
+        )
         if limit is None:
             return None
         try:
@@ -580,20 +845,43 @@ class ProductSelectorAgent:
             errors.extend(cls._optimization_errors(decision, products_by_id, state))
         return errors
 
-    @staticmethod
-    def _failure_output(errors: list[str]) -> dict[str, Any]:
-        return {
+    @classmethod
+    def _failure_output(
+        cls,
+        errors: list[str],
+        state: ShoppingAgentState,
+    ) -> dict[str, Any]:
+        output: dict[str, Any] = {
             "selected_products": [],
             "selection_source": "llm_product_selector_failed",
             "selection_reasoning": [],
             "selection_errors": errors,
             "bundle": None,
         }
+        if state.get("recommendation_mode") == "bundle":
+            output["bundle"] = {
+                "mode": "bundle",
+                "selected_products": [],
+                "product_count": 0,
+                "total": "0",
+                "budget": state.get("budget"),
+                "budget_remaining": str(state["budget"]) if state.get("budget") is not None else None,
+                "categories_covered": [],
+                "required_category_coverage": {
+                    "covered": [], "missing": [], "matches": [],
+                },
+                "rationale": [],
+                "trade_offs": [],
+                "selection_source": "llm_product_selector_failed",
+            }
+        return output
 
     async def run(self, state: ShoppingAgentState) -> dict[str, Any]:
         products = self._catalog_products(state)
         if not products:
-            return self._failure_output(["No in-stock related catalog candidates were retrieved."])
+            return self._failure_output(
+                ["No in-stock related catalog candidates were retrieved."], state
+            )
 
         rankings = {
             str(item.get("product_id")): item
@@ -624,7 +912,15 @@ class ProductSelectorAgent:
                 else None
             ),
             "budget": state.get("budget"),
+            "budget_mode": state.get("budget_mode", "target"),
             "budget_tolerance_percent": settings.agent_recommendation_budget_tolerance_percent,
+            "selection_budget_limit": (
+                str(limit)
+                if (limit := recommendation_budget_limit(
+                    state.get("budget"), state.get("budget_mode", "target")
+                )) is not None
+                else None
+            ),
             "vision_context": state.get("vision_context"),
             "verified_catalog_products": [
                 self._product_payload(product, rankings, role_matches, state)
@@ -640,46 +936,142 @@ class ProductSelectorAgent:
             prompt_candidate_count=len(products),
             payload_characters=len(serialized_payload),
         )
-        try:
-            async with asyncio.timeout(settings.agent_model_timeout_seconds):
-                response = await self.model.ainvoke([
-                    SystemMessage(content=SELECTOR_PROMPT),
-                    HumanMessage(content=serialized_payload),
+        messages = [
+            SystemMessage(content=SELECTOR_PROMPT),
+            HumanMessage(content=serialized_payload),
+        ]
+        rejection_messages: list[str] = []
+        decision: ProductSelectionDecision | None = None
+        feasible_plans: list[dict[str, Any]] = []
+        for attempt in range(2):
+            response: object | None = None
+            try:
+                async with asyncio.timeout(settings.agent_model_timeout_seconds):
+                    response = await self.model.ainvoke(messages,
                 # The selector is an LLM decision, while server-enforced JSON
                 # mode keeps its transport reliable. Qwen's optional separate
                 # reasoning stream is incompatible with JSON mode here; roles
                 # and reasons are still model-generated semantic judgments.
-                ],
-                    enable_thinking=False,
-                    response_mime_type="application/json",
-                    max_output_tokens=settings.agent_selector_max_output_tokens,
+                        enable_thinking=False,
+                        response_mime_type="application/json",
+                        max_output_tokens=settings.agent_selector_max_output_tokens,
+                    )
+                if attempt == 1 and feasible_plans:
+                    candidate_decision = self._decision_from_plan_selection(
+                        response.content,
+                        feasible_plans,
+                        required_roles=self._required_roles(state),
+                    )
+                else:
+                    selection_data = self._complete_transport_fields(
+                        self._selection_object(response.content),
+                        expected_mode=mode,
+                    )
+                    candidate_decision = ProductSelectionDecision.model_validate(selection_data)
+                validation_errors = self._validation_errors(candidate_decision, products, state)
+                if validation_errors:
+                    raise ProductSelectionError("; ".join(validation_errors))
+                decision = candidate_decision
+                break
+            except (ValidationError, StructuredOutputError, json.JSONDecodeError) as error:
+                if isinstance(error, ProductSelectionError):
+                    message = str(error)
+                elif isinstance(error, ValidationError):
+                    message = "ValidationError: " + _validation_message(error)
+                else:
+                    message = f"{type(error).__name__}: {str(error)[:800]}"
+                rejection_messages.append(message)
+                log_ai_event(
+                    "agent.product_selector.rejected",
+                    request_id=str(state.get("run_id", "")),
+                    attempt=attempt + 1,
+                    validation_errors=[message],
                 )
-            selection_data = self._selection_object(response.content)
-            decision = ProductSelectionDecision.model_validate(selection_data)
-            validation_errors = self._validation_errors(decision, products, state)
-            if validation_errors:
-                raise ProductSelectionError("; ".join(validation_errors))
-        except (ValidationError, StructuredOutputError, json.JSONDecodeError) as error:
-            if isinstance(error, ProductSelectionError):
-                message = str(error)
-            elif isinstance(error, ValidationError):
-                message = "ValidationError: " + _validation_message(error)
-            else:
-                message = f"{type(error).__name__}: {str(error)[:800]}"
-            log_ai_event(
-                "agent.product_selector.rejected",
-                request_id=str(state.get("run_id", "")),
-                validation_errors=[message],
-            )
-            return self._failure_output([message])
-        except Exception as error:
-            message = f"{type(error).__name__}: product selection failed."
-            log_ai_event(
-                "agent.product_selector.rejected",
-                request_id=str(state.get("run_id", "")),
-                validation_errors=[message],
-            )
-            return self._failure_output([message])
+                if attempt == 1:
+                    return self._failure_output(rejection_messages, state)
+                repair_products = self._repair_catalog_products(
+                    payload["verified_catalog_products"],
+                    payload["role_requirements"],
+                )
+                repair_roles = [
+                    str(requirement.get("base_role", "")).strip()
+                    for requirement in payload["role_requirements"]
+                    if str(requirement.get("base_role", "")).strip()
+                ]
+                if mode == "bundle":
+                    feasible_plans = self._feasible_bundle_plans(
+                        repair_products,
+                        repair_roles,
+                        budget_limit=recommendation_budget_limit(
+                            state.get("budget"), state.get("budget_mode", "target")
+                        ),
+                    )
+                if feasible_plans:
+                    plan_product_ids = {
+                        str(choice["product_id"])
+                        for plan in feasible_plans
+                        for choice in plan.get("choices", [])
+                    }
+                    repair_payload = {
+                        "task": "select_feasible_bundle_plan",
+                        "customer_request": payload["customer_request"],
+                        "goal": payload["goal"],
+                        "preferences": payload["preferences"],
+                        "constraints": payload["constraints"],
+                        "priorities": payload["priorities"],
+                        "role_requirements": payload["role_requirements"],
+                        "budget": payload["budget"],
+                        "budget_mode": payload["budget_mode"],
+                        "selection_budget_limit": payload["selection_budget_limit"],
+                        "validation_errors": [message],
+                        "feasible_bundle_plans": feasible_plans,
+                        "verified_catalog_products": [
+                            product for product in repair_products
+                            if str(product.get("id", "")) in plan_product_ids
+                        ],
+                        "instruction": (
+                            "Semantically compare all feasible plans against the complete "
+                            "customer mission. Return one supplied selected_plan_id and "
+                            "catalog-grounded reasons using the repair response schema."
+                        ),
+                    }
+                else:
+                    repair_payload = {
+                        **payload,
+                        "task": "repair_invalid_selection",
+                        "validation_errors": [message],
+                        "rejected_output": str(getattr(response, "content", ""))[:6000],
+                        "verified_catalog_products": repair_products,
+                        "instruction": (
+                            "Return a complete corrected selection JSON object using only "
+                            "the supplied verified catalog products."
+                        ),
+                    }
+                messages = [
+                    SystemMessage(content=SELECTOR_PROMPT),
+                    HumanMessage(content=json.dumps(
+                        repair_payload, ensure_ascii=False, default=str,
+                    )),
+                ]
+                log_ai_event(
+                    "agent.product_selector.repair_started",
+                    request_id=str(state.get("run_id", "")),
+                    validation_errors=[message],
+                    prompt_candidate_count=len(repair_products),
+                    feasible_plan_count=len(feasible_plans),
+                    payload_characters=len(str(messages[1].content)),
+                )
+            except Exception as error:
+                message = f"{type(error).__name__}: product selection failed."
+                log_ai_event(
+                    "agent.product_selector.rejected",
+                    request_id=str(state.get("run_id", "")),
+                    attempt=attempt + 1,
+                    validation_errors=[message],
+                )
+                return self._failure_output([message], state)
+        if decision is None:
+            return self._failure_output(rejection_messages, state)
         output = self._output(decision, products, state)
         log_ai_event(
             "agent.product_selector.completed",

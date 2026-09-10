@@ -198,6 +198,19 @@ def test_product_retrieval_keeps_options_up_to_the_configured_budget_tolerance()
     )["reasons"] == ["in stock", "within recommendation tolerance", "matches mission terms: camera"]
 
 
+def test_strict_budget_ceiling_excludes_tolerance_only_candidates():
+    state = initial_shopping_state("Recommend a camera under RM100")
+    state.update({"budget": 100, "budget_mode": "strict_ceiling"})
+    products = [
+        {"id": "target", "name": "Target Camera", "brand": "Test", "category": "Cameras", "price": "100", "inventory_quantity": 1},
+        {"id": "over", "name": "Over Camera", "brand": "Test", "category": "Cameras", "price": "100.01", "inventory_quantity": 1},
+    ]
+
+    ranked = ProductSearchAgent._rank(products, state, include_out_of_stock=False)
+
+    assert [item["product"]["id"] for item in ranked] == ["target"]
+
+
 def test_search_requirement_keeps_dynamic_aliases_for_lexical_role_variant():
     requirement = SearchRequirement(
         original_text="light",
@@ -1104,13 +1117,81 @@ async def test_product_selector_failure_never_chooses_products_deterministically
     model = InvalidModel()
     result = await ProductSelectorAgent(model).run(state)
 
-    assert model.calls == 1
+    assert model.calls == 2
     assert result["selected_products"] == []
     assert result["selection_source"] == "llm_product_selector_failed"
     assert result["selection_errors"]
     assert BrandVoiceAgent._response_products({
         **state, **result,
     }) == []
+
+
+@pytest.mark.anyio
+async def test_product_selector_repairs_an_over_budget_wfh_bundle_with_the_llm():
+    class RepairingSelectorModel:
+        def __init__(self):
+            self.calls = 0
+            self.repair_payload = None
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(content=json.dumps({
+                    "mode": "bundle",
+                    "related_candidate_count": 4,
+                    "choices": [
+                        {"product_id": "premium-chair", "role": "chair", "reason": "Ergonomic support", "quantity": 1},
+                        {"product_id": "desk", "role": "desk", "reason": "Work surface", "quantity": 1},
+                        {"product_id": "monitor", "role": "monitor", "reason": "External display", "quantity": 1},
+                    ],
+                    "unfulfilled_roles": [],
+                }))
+            self.repair_payload = json.loads(str(messages[-1].content))
+            plan = self.repair_payload["feasible_bundle_plans"][0]
+            return AIMessage(content=json.dumps({
+                "selected_plan_id": plan["plan_id"],
+                "reasons": [
+                    {"product_id": choice["product_id"], "reason": f"Fits the {choice['role']} need."}
+                    for choice in plan["choices"]
+                ],
+            }))
+
+    products = [
+        {"id": "premium-chair", "name": "Premium Ergonomic Chair", "category": "Office Chair", "price": "1200", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "value-chair", "name": "Value Ergonomic Chair", "category": "Office Chair", "price": "700", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "desk", "name": "Home Office Desk", "category": "Office Desk", "price": "800", "currency": "MYR", "inventory_quantity": 5},
+        {"id": "monitor", "name": "Work Monitor", "category": "Computer Monitor", "price": "500", "currency": "MYR", "inventory_quantity": 5},
+    ]
+    state = initial_shopping_state("Build me a comfortable WFH setup under RM2,000")
+    state.update({
+        "recommendation_mode": "bundle",
+        "budget": 2000,
+        "budget_mode": "strict_ceiling",
+        "candidate_products": products,
+        "search_requirements": [
+            {"original_text": role, "canonical_role": role, "customer_required": False, "required_features": [], "preferred_features": [], "search_queries": [role]}
+            for role in ("chair", "desk", "monitor")
+        ],
+    })
+    model = RepairingSelectorModel()
+
+    result = await ProductSelectorAgent(model).run(state)
+
+    assert model.calls == 2
+    assert model.repair_payload["task"] == "select_feasible_bundle_plan"
+    assert model.repair_payload["budget_mode"] == "strict_ceiling"
+    assert model.repair_payload["selection_budget_limit"] == "2000"
+    assert "at or below the verified limit of 2000" in model.repair_payload["validation_errors"][0]
+    assert model.repair_payload["feasible_bundle_plans"]
+    assert all(
+        Decimal(plan["total"]) <= Decimal("2000")
+        for plan in model.repair_payload["feasible_bundle_plans"]
+    )
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["bundle"]["total"] == "2000"
+    assert [item["id"] for item in result["selected_products"]] == [
+        "value-chair", "desk", "monitor",
+    ]
 
 
 @pytest.mark.anyio
@@ -1165,6 +1246,21 @@ def test_product_selector_accepts_json_wrapped_by_model_explanation():
     )
 
     assert value["mode"] == "single"
+
+
+def test_product_selector_completes_only_missing_transport_fields():
+    completed = ProductSelectorAgent._complete_transport_fields({
+        "choices": [{
+            "product_id": "chair", "role": "desk_chair",
+            "reason": "Fits the mission", "quantity": 1,
+        }],
+    }, expected_mode="bundle")
+
+    assert completed["mode"] == "bundle"
+    assert completed["related_candidate_count"] == 1
+    assert completed["unfulfilled_roles"] == []
+    assert completed["choices"][0]["product_id"] == "chair"
+    assert ProductSelectorAgent._normalized_role("desk_mat") == "desk mat"
 
 
 def test_product_selector_unwraps_a_single_provider_envelope():

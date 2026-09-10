@@ -7,7 +7,10 @@ from typing import Any
 from app.config import settings
 
 
-def recommendation_budget_limit(budget: Any) -> Decimal | None:
+def recommendation_budget_limit(
+    budget: Any,
+    budget_mode: object = "target",
+) -> Decimal | None:
     """Return the highest price/total eligible for a recommendation.
 
     The customer's stated budget remains the target. A configurable allowance
@@ -16,5 +19,7 @@ def recommendation_budget_limit(budget: Any) -> Decimal | None:
     if budget is None:
         return None
     amount = Decimal(str(budget))
+    if str(budget_mode).casefold().strip() == "strict_ceiling":
+        return amount
     tolerance = Decimal(str(settings.agent_recommendation_budget_tolerance_percent)) / Decimal("100")
     return amount * (Decimal("1") + tolerance)

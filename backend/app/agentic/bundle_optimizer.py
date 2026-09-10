@@ -287,7 +287,9 @@ class BundleOptimizerAgent:
         plan = await self._plan(products, state)
         planned_matches = {match.need: set(match.product_ids) for match in plan.need_matches}
         budget = Decimal(str(state["budget"])) if state.get("budget") is not None else None
-        budget_limit = recommendation_budget_limit(budget)
+        budget_limit = recommendation_budget_limit(
+            budget, state.get("budget_mode", "target")
+        )
         bundle_comparisons = [
             item for item in state.get("selection_context", {}).get("applied_comparisons", [])
             if isinstance(item, dict) and item.get("scope") == "bundle_total"

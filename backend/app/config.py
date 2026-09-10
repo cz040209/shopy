@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.7-flash"
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen-vl-plus"
+    qwen_model: str = "qwen3-vl-30b-a3b-thinking"
     # Available in the Model Studio free quota and accepts image input through
     # the OpenAI-compatible chat-completions endpoint.
     qwen_vision_model: str = "qwen3.5-omni-plus"

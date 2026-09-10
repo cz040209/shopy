@@ -143,7 +143,9 @@ export default function AIAssistant() {
               ? { ...message, timestamp: new Date(), attachments: event.attachments ?? [] }
               : message
           ));
-          window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
+          if (event.attachments?.length) {
+            window.dispatchEvent(new Event(BEHAVIORAL_REMINDER_REFRESH_EVENT));
+          }
         }
       };
 

@@ -87,11 +87,27 @@ class ShoppingAuditor:
         budget = state.get("budget")
         if budget is not None:
             recommendation_mode = state.get("recommendation_mode", "single")
-            budget_amount = recommendation_budget_limit(budget)
+            budget_amount = recommendation_budget_limit(
+                budget, state.get("budget_mode", "target")
+            )
             if recommendation_mode == "bundle" and total > budget_amount:
-                errors.append({"code": "budget_exceeded", "message": "The deterministic bundle total exceeds the permitted budget tolerance."})
+                errors.append({
+                    "code": "budget_exceeded",
+                    "message": (
+                        "The deterministic bundle total exceeds the customer's strict budget ceiling."
+                        if state.get("budget_mode") == "strict_ceiling"
+                        else "The deterministic bundle total exceeds the permitted budget tolerance."
+                    ),
+                })
             elif recommendation_mode == "single" and any(item_total > budget_amount for item_total in item_totals):
-                errors.append({"code": "budget_exceeded", "message": "A recommended option exceeds the permitted budget tolerance."})
+                errors.append({
+                    "code": "budget_exceeded",
+                    "message": (
+                        "A recommended option exceeds the customer's strict budget ceiling."
+                        if state.get("budget_mode") == "strict_ceiling"
+                        else "A recommended option exceeds the permitted budget tolerance."
+                    ),
+                })
         self._validate_bundle_consistency(state, selected_ids, total, errors)
         self._validate_budget_disclosure(state, total, errors)
         self._validate_response_coverage(state, selected_ids, errors)
@@ -262,7 +278,9 @@ class ShoppingAuditor:
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    budget_limit = recommendation_budget_limit(budget)
+                    budget_limit = recommendation_budget_limit(
+                        budget, state.get("budget_mode", "target")
+                    )
                     within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False
@@ -311,7 +329,9 @@ class ShoppingAuditor:
                 if not isinstance(candidate, dict) or int(candidate.get("inventory_quantity", 0)) < 1:
                     continue
                 try:
-                    budget_limit = recommendation_budget_limit(budget)
+                    budget_limit = recommendation_budget_limit(
+                        budget, state.get("budget_mode", "target")
+                    )
                     within_budget = budget_limit is None or Decimal(str(candidate["price"])) <= budget_limit
                 except Exception:
                     within_budget = False

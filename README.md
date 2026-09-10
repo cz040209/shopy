@@ -91,7 +91,7 @@ Never commit the root `.env`; use `.env.example` as the safe template.
 | `GEMINI_MODEL` | Gemini model | `gemini-3.7-flash` |
 | `QWEN_API_KEY` | Alibaba Cloud Model Studio credential | required for the primary provider |
 | `QWEN_BASE_URL` | Qwen OpenAI-compatible endpoint | Singapore DashScope endpoint |
-| `QWEN_MODEL` | Primary Qwen thinking model | `qwen-vl-plus` |
+| `QWEN_MODEL` | Primary Qwen thinking model | `qwen3-vl-30b-a3b-thinking` |
 | `QWEN_AUDIO_MODEL` | Qwen audio caption/transcription model | `qwen3-omni-30b-a3b-captioner` |
 | `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:8002` |
 | `DATABASE_URL` | PostgreSQL connection URL | Postgres on `5433` |

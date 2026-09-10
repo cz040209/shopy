@@ -44,6 +44,7 @@ Return only valid JSON, without Markdown.
   "catalog_queries": [string],
   "requested_actions": [string],
   "budget": number|null,
+  "budget_mode": "target"|"strict_ceiling",
   "bundle_items": [{"query": string, "quantity": integer}],
   "search_requirements": [
     {
@@ -123,6 +124,12 @@ Return only valid JSON, without Markdown.
   language. When the customer states a spending target or ceiling, place its
   normalized numeric amount in `budget`; otherwise return null. Do not mistake
   model numbers, quantities, dates, or product specifications for a budget.
+* Always return `budget_mode`. Use `strict_ceiling` when the customer's meaning
+  forbids exceeding the amount (for example a maximum, cap, or an under/up-to
+  constraint, expressed in any language). Use `target` only when the amount is
+  approximate, aspirational, or explicitly allows nearby alternatives. When
+  budget is null, return `target`. Infer this from meaning, not from a fixed
+  phrase or language list.
 * Be bundle-minded for commerce missions: when complementary product types would materially improve the customer’s stated outcome, return `"bundle"` and plan a practical kit. Consider the goal, use case, budget, owned items, and constraints; do not rely on a fixed list of add-ons or product categories.
 * Return `"single"` when a complete kit would add no meaningful value, the customer explicitly wants only one item, or the request is genuinely for one product type. A single-mode result must surface 2–6 comparable choices when the verified catalog has them, rather than silently narrowing to one option.
 * A bundle must contain only complementary items that help achieve the requested outcome. Do not pad a basket with unrelated products, duplicate alternatives, or items the customer already owns.
@@ -419,6 +426,14 @@ class IntentMissionAgent:
                     required_keys=frozenset({"mission_type", "goal"}),
                 )
                 mission = MissionInterpretation.model_validate(last_data)
+                if (
+                    mission.budget is not None
+                    and "budget_mode" not in last_data
+                    and attempt + 1 < max(1, settings.agent_response_format_attempts)
+                ):
+                    raise StructuredOutputError(
+                        "A monetary limit requires budget_mode target or strict_ceiling."
+                    )
                 # `requires_catalog` is the workflow authorization boundary.
                 # Older model outputs sometimes omitted the flag while still
                 # supplying a catalog action, so retain that compatibility. An
@@ -1585,6 +1600,12 @@ class IntentMissionAgent:
             if isinstance(budget_value, (int, float)) and budget_value >= 0
             else None
         )
+        raw_budget_mode = partial.get("budget_mode")
+        budget_mode = (
+            str(raw_budget_mode)
+            if raw_budget_mode in {"target", "strict_ceiling"}
+            else "target"
+        )
         def strings(name: str, limit: int) -> list[str]:
             values = partial.get(name, [])
             if not isinstance(values, list):
@@ -1701,6 +1722,7 @@ class IntentMissionAgent:
                 optimization_mode=optimization_mode,
                 requested_actions=["search_products"] if can_search else [],
                 budget=budget,
+                budget_mode=budget_mode,
                 preferences=list(dict.fromkeys([
                     *strings("preferences", 20), user_request.strip(),
                 ]))[:20],
@@ -1740,6 +1762,7 @@ class IntentMissionAgent:
             catalog_queries=strings("catalog_queries", 12) or ([catalog_query] if catalog_query else []),
             requested_actions=planned_actions,
             budget=budget,
+            budget_mode=budget_mode,
             bundle_items=bundle_items[:20],
             preferences=strings("preferences", 20),
             key_requirements=strings("key_requirements", 6),

@@ -341,6 +341,7 @@ class OrchestrationRunResponse(BaseModel):
 
     id: UUID
     request_id: str
+    run_type: str
     status: str
     user_request: str
     final_response: str | None
