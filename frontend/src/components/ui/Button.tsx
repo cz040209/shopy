@@ -33,8 +33,7 @@ export default function Button({
   };
 
   const variants: Record<string, string> = {
-    primary:
-      "bg-white text-black hover:bg-indigo-500 hover:shadow-[0_0_24px_rgba(99,102,241,0.35)]",
+    primary: "shine-button text-white",
     outline:
       "bg-transparent text-white hover:text-indigo-400 hover:shadow-[0_0_16px_rgba(99,102,241,0.15)]",
     ghost:

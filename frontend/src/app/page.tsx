@@ -10,6 +10,7 @@ import AIShoppingCamera, { type VisionAnalysisResult } from "@/features/vision/c
 import { visionHandoffStorageKey, writeStoredWorkspace } from "@/features/missions/components/workspace-storage";
 import type { BundleWorkspace, MissionData } from "@/features/missions/components/types";
 import { API_URL } from "@/lib/api";
+import InteractiveDotGrid from "@/components/ui/InteractiveDotGrid";
 
 const missions = [
   { title: "Build my setup", description: "Complete gaming or desk setups within a budget.", prompt: "Build me a gaming setup under RM4,000.", icon: Gamepad2, tone: "violet" },
@@ -130,7 +131,8 @@ export default function Home() {
     if (voiceState === "idle") void startVoiceInput();
   };
 
-  return <main className={styles.home}>
+  return <main className={styles.home} style={{ position: "relative", isolation: "isolate" }}>
+    <InteractiveDotGrid />
     <section className={`${styles.hero} ${heroTheme.hero}`}>
       <div className={`${styles.orbOne} ${heroTheme.orbOne}`} /><div className={`${styles.orbTwo} ${heroTheme.orbTwo}`} />
       <span className={styles.kicker}>AI commerce, built around your goal</span>
@@ -143,7 +145,7 @@ export default function Home() {
           {voiceState === "transcribing" ? <LoaderCircle className="home-voice-spinner" size={19} /> : voiceState === "recording" ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}
         </button>
         <AIShoppingCamera compact showResult={false} onAnalysisComplete={openVisionRecommendation} />
-        <button className={styles.buildButton} type="submit" disabled={launchingMission}>
+        <button className={`${styles.buildButton} shine-button`} type="submit" disabled={launchingMission}>
           {launchingMission ? "Opening workspace…" : "Build for me"} <ArrowRight size={17} />
         </button>
       </form>

@@ -60,7 +60,7 @@ export default function MissionInputPanel({ request, mission, busy, onRequestCha
         />
         <motion.button
           type="submit"
-          className={styles.launchButton}
+          className={`${styles.launchButton} shine-button`}
           disabled={busy || !request.trim()}
           aria-label={busy ? "Shopy is building your mission" : "Submit mission"}
           title={busy ? "Shopy is building your mission" : "Submit mission"}

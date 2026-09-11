@@ -962,6 +962,92 @@ async def test_product_selector_sees_complete_bundle_shortlist_once():
 
 
 @pytest.mark.anyio
+async def test_product_selector_allows_catalog_evidenced_complements_for_one_required_role():
+    """A broad customer outcome may require one hard role and useful inferred ones."""
+    class SelectorModel:
+        async def ainvoke(self, messages, **kwargs):
+            payload = json.loads(str(messages[1].content))
+            assert payload["required_roles"] == ["car wash soap"]
+            assert payload["selectable_roles"] == [
+                "car wash soap", "wash mitt", "drying towel",
+            ]
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "soap", "role": "car wash soap", "reason": "Cleans the paint safely", "quantity": 1},
+                    {"product_id": "mitt", "role": "wash mitt", "reason": "Lifts dirt without harsh rubbing", "quantity": 1},
+                    {"product_id": "towel", "role": "drying towel", "reason": "Dries the washed panels", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("I want to wash my car")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": ["car wash soap"],
+        "search_requirements": [
+            {
+                "original_text": "wash my car", "canonical_role": "car wash soap",
+                "customer_required": True,
+                "required_features": [], "preferred_features": ["safe for clear coat"],
+                "search_queries": ["car wash soap", "car shampoo"],
+            },
+            {
+                "original_text": "wash my car", "canonical_role": "wash mitt",
+                "customer_required": False,
+                "required_features": [], "preferred_features": ["scratch-free"],
+                "search_queries": ["wash mitt", "car wash glove"],
+            },
+            {
+                "original_text": "wash my car", "canonical_role": "drying towel",
+                "customer_required": False,
+                "required_features": [], "preferred_features": ["high absorbency"],
+                "search_queries": ["drying towel", "microfiber drying towel"],
+            },
+        ],
+        "candidate_products": [
+            {"id": "soap", "name": "Gold Class Car Wash Shampoo", "category": "Car Shampoo", "price": "49", "currency": "MYR", "inventory_quantity": 8, "attributes": {"car_care_category": "Car Shampoo"}},
+            {"id": "mitt", "name": "Chenille Premium Car Wash Mitt", "category": "Wash Mitt", "price": "29", "currency": "MYR", "inventory_quantity": 8, "attributes": {"car_care_category": "Wash Mitt"}},
+            {"id": "towel", "name": "Microfibre Drying Towel", "category": "Drying Towels", "price": "45", "currency": "MYR", "inventory_quantity": 8, "attributes": {"car_care_category": "Drying Towels"}},
+        ],
+        "retrieval_role_matches": {
+            "car wash soap": ["soap"], "wash mitt": ["mitt"], "drying towel": ["towel"],
+        },
+    })
+
+    result = await ProductSelectorAgent(SelectorModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == ["soap", "mitt", "towel"]
+    assert result["bundle"]["required_category_coverage"] == {
+        "covered": ["car wash soap"], "missing": [],
+        "matches": [
+            {"requirement": "car wash soap", "product_id": "soap", "purchase_quantity": 1},
+            {"requirement": "wash mitt", "product_id": "mitt", "purchase_quantity": 1},
+            {"requirement": "drying towel", "product_id": "towel", "purchase_quantity": 1},
+        ],
+    }
+
+
+def test_feasible_bundle_plans_can_repair_an_unbudgeted_catalog_bundle():
+    products = [
+        {"id": "soap", "name": "Car Shampoo", "price": "49", "verified_role_matches": ["car wash soap"]},
+        {"id": "mitt", "name": "Wash Mitt", "price": "29", "verified_role_matches": ["wash mitt"]},
+        {"id": "towel", "name": "Drying Towel", "price": "45", "verified_role_matches": ["drying towel"]},
+    ]
+
+    plans = ProductSelectorAgent._feasible_bundle_plans(
+        products, ["car wash soap", "wash mitt", "drying towel"], budget_limit=None,
+    )
+
+    assert plans
+    assert plans[0]["total"] == "123"
+    assert {choice["role"] for choice in plans[0]["choices"]} == {
+        "car wash soap", "wash mitt", "drying towel",
+    }
+
+
+@pytest.mark.anyio
 async def test_product_selector_uses_llm_for_single_comparable_choices():
     class SelectorModel:
         async def ainvoke(self, messages, **kwargs):

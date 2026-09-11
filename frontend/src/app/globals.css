@@ -2,6 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Shared treatment for warm-purple primary actions. */
+.shine-button,
+[class*="buildButton"], [class*="featureLink"], [class*="launchButton"],
+[class*="addBundle"], [class*="confirmButton"],
+[class*="primaryAction"], [class*="completeAction"], [class*="exploreShop"],
+[class*="checkoutAction"], [class*="createOrderButton"], [class*="sendButton"],
+[class*="searchButton"], [class*="playButton"], [class*="sendVoiceButton"], [class*="submit"] {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: linear-gradient(115deg, #6f3fc8 0%, #8d55d9 52%, #bd70c5 100%) !important;
+  box-shadow: 0 8px 20px rgba(111, 63, 200, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+.shine-button::after,
+[class*="buildButton"]::after, [class*="featureLink"]::after, [class*="launchButton"]::after,
+[class*="addBundle"]::after, [class*="confirmButton"]::after,
+[class*="primaryAction"]::after, [class*="completeAction"]::after, [class*="exploreShop"]::after,
+[class*="checkoutAction"]::after, [class*="createOrderButton"]::after, [class*="sendButton"]::after,
+[class*="searchButton"]::after, [class*="playButton"]::after, [class*="sendVoiceButton"]::after, [class*="submit"]::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 18%, rgba(255, 255, 255, 0.34) 45%, transparent 68%);
+  content: "";
+  pointer-events: none;
+  transform: translateX(-125%);
+}
+.shine-button:hover:not(:disabled),
+[class*="buildButton"]:hover:not(:disabled), [class*="featureLink"]:hover:not(:disabled), [class*="launchButton"]:hover:not(:disabled),
+[class*="addBundle"]:hover:not(:disabled), [class*="confirmButton"]:hover:not(:disabled),
+[class*="primaryAction"]:hover:not(:disabled), [class*="completeAction"]:hover:not(:disabled), [class*="exploreShop"]:hover:not(:disabled),
+[class*="checkoutAction"]:hover:not(:disabled), [class*="createOrderButton"]:hover:not(:disabled), [class*="sendButton"]:hover:not(:disabled),
+[class*="searchButton"]:hover:not(:disabled), [class*="playButton"]:hover:not(:disabled), [class*="sendVoiceButton"]:hover:not(:disabled), [class*="submit"]:hover:not(:disabled) {
+  background: linear-gradient(115deg, #7d4bd5 0%, #9e60e5 52%, #ca7bd0 100%) !important;
+  box-shadow: 0 12px 28px rgba(111, 63, 200, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  filter: saturate(1.08);
+  transform: translateY(-1px);
+}
+.shine-button:hover:not(:disabled)::after,
+[class*="buildButton"]:hover:not(:disabled)::after, [class*="featureLink"]:hover:not(:disabled)::after,
+[class*="launchButton"]:hover:not(:disabled)::after, [class*="addBundle"]:hover:not(:disabled)::after,
+[class*="confirmButton"]:hover:not(:disabled)::after,
+[class*="primaryAction"]:hover:not(:disabled)::after, [class*="completeAction"]:hover:not(:disabled)::after,
+[class*="exploreShop"]:hover:not(:disabled)::after, [class*="checkoutAction"]:hover:not(:disabled)::after,
+[class*="createOrderButton"]:hover:not(:disabled)::after, [class*="sendButton"]:hover:not(:disabled)::after,
+[class*="searchButton"]:hover:not(:disabled)::after, [class*="playButton"]:hover:not(:disabled)::after,
+[class*="sendVoiceButton"]:hover:not(:disabled)::after, [class*="submit"]:hover:not(:disabled)::after { animation: shine-button-sweep 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes shine-button-sweep { to { transform: translateX(125%); } }
+@media (prefers-reduced-motion: reduce) {
+  .shine-button, [class*="buildButton"], [class*="featureLink"], [class*="launchButton"],
+  [class*="addBundle"], [class*="confirmButton"], [class*="primaryAction"],
+  [class*="completeAction"], [class*="exploreShop"], [class*="checkoutAction"], [class*="createOrderButton"],
+  [class*="sendButton"], [class*="searchButton"], [class*="playButton"], [class*="sendVoiceButton"], [class*="submit"] { transition: none; }
+  .shine-button:hover:not(:disabled)::after, [class*="buildButton"]:hover:not(:disabled)::after,
+  [class*="featureLink"]:hover:not(:disabled)::after, [class*="launchButton"]:hover:not(:disabled)::after,
+  [class*="addBundle"]:hover:not(:disabled)::after, [class*="confirmButton"]:hover:not(:disabled)::after,
+  [class*="primaryAction"]:hover:not(:disabled)::after,
+  [class*="completeAction"]:hover:not(:disabled)::after, [class*="exploreShop"]:hover:not(:disabled)::after,
+  [class*="checkoutAction"]:hover:not(:disabled)::after, [class*="createOrderButton"]:hover:not(:disabled)::after,
+  [class*="sendButton"]:hover:not(:disabled)::after, [class*="searchButton"]:hover:not(:disabled)::after,
+  [class*="playButton"]:hover:not(:disabled)::after, [class*="sendVoiceButton"]:hover:not(:disabled)::after,
+  [class*="submit"]:hover:not(:disabled)::after { animation: none; }
+}
+
 /* ─── DESIGN TOKENS ──────────────────────────────────────── */
 :root {
   --font-sans: "Inter", system-ui, sans-serif;

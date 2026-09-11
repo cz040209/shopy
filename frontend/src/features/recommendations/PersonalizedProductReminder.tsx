@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Check, Megaphone, ShoppingBag, Sparkles, Star, X } from "lucide-react";
+import { Check, Megaphone, ShoppingBag, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useCart } from "@/features/cart/cart-context";
@@ -95,7 +95,7 @@ export default function PersonalizedProductReminder() {
       <header className={styles.header}>
         <div className={styles.icon}><Megaphone size={19} /></div>
         <div>
-          <div className={styles.eyebrow}><Sparkles size={12} /> Personalised recommendation</div>
+          <div className={styles.eyebrow}>Personalised recommendation</div>
           <h2 id="personalized-reminder-title">We think you may also like…</h2>
         </div>
         <button type="button" className={styles.close} onClick={() => setVisible(false)} aria-label="Dismiss recommendations"><X size={18} /></button>

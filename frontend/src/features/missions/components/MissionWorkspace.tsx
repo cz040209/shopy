@@ -24,6 +24,7 @@ import {
 } from "./workspace-storage";
 import type { StoredMissionWorkspace } from "./workspace-storage";
 import styles from "./mission-studio.module.css";
+import InteractiveDotGrid from "@/components/ui/InteractiveDotGrid";
 
 const emptyMission: MissionData = { preferences: [], owned_items: [], priorities: [] };
 const progressStepCount = 6;
@@ -99,7 +100,6 @@ export default function MissionWorkspace() {
   const [adding, setAdding] = useState(false);
   const [addingProductId, setAddingProductId] = useState<string | null>(null);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
-  const [feedback, setFeedback] = useState("");
   const [showBundleReady, setShowBundleReady] = useState(false);
   const resultsRef = useRef<HTMLElement>(null);
   const autoRunStartedRef = useRef(false);
@@ -315,16 +315,10 @@ export default function MissionWorkspace() {
     }));
   };
 
-  const refine = (refinement: string | MissionRefinement) => {
-    const next = (typeof refinement === "string" ? refinement : refinement.prompt).trim();
+  const refine = (refinement: MissionRefinement) => {
+    const next = refinement.prompt.trim();
     if (!next) return;
-    setFeedback("");
-    // Send feedback as a new turn. The server keeps the active brief, prior
-    // selections, and earlier feedback in expiring shopping-session memory.
-    void runMission(
-      next,
-      typeof refinement === "string" ? {} : refinement.inputPayload,
-    );
+    void runMission(next, refinement.inputPayload);
   };
 
   const addBundle = async () => {
@@ -365,6 +359,7 @@ export default function MissionWorkspace() {
 
   return (
     <main className={styles.page}>
+      <InteractiveDotGrid />
       <motion.nav className={styles.topbar} initial={enter} animate={{ opacity: 1, y: 0 }}>
         <Link className={styles.back} href="/">
           <ArrowLeft size={18} /> All missions
@@ -502,24 +497,10 @@ export default function MissionWorkspace() {
           >
             <div className={styles.resultHeading}>
               <span>VERIFIED OUTPUT</span>
-              <h2>Your recommendation, ready for review.</h2>
+              <h2>Your picks are ready.</h2>
               {priceSummary && <strong>{priceSummary.label}</strong>}
             </div>
             <OptimizationActions disabled={busy} onPick={refine} />
-            <form className={styles.feedbackForm} onSubmit={(event) => { event.preventDefault(); refine(feedback); }}>
-              <label htmlFor="bundle-feedback">Not quite right?</label>
-              <div>
-                <input
-                  id="bundle-feedback"
-                  value={feedback}
-                  disabled={busy}
-                  onChange={(event) => setFeedback(event.target.value)}
-                  placeholder="Tell AI what to change — for example, fewer items, warmer style, or a lower total."
-                />
-                <button type="submit" disabled={busy || !feedback.trim()}>Improve bundle</button>
-              </div>
-              <p>Shopy keeps this mission in short-term memory so each revision starts from your last brief.</p>
-            </form>
             {items.length ? (
               <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} addingProductId={addingProductId} onAdd={() => void addBundle()} onAddItem={(productId) => void addRecommendation(productId)} onRemove={removeBundleItem} />
             ) : (

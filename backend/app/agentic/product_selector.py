@@ -104,22 +104,27 @@ Selection rules:
   choice must have a distinct functional role. Do not choose duplicate
   alternatives for one role merely to reach the minimum. Confirm that each
   product's verified intended use actually fulfills the assigned role.
-- In a bundle refinement, assign each choice exactly one distinct product role
-  and check the complete choice list before responding. Never use the same role
-  string twice. When required_roles is non-empty, choose no more than one
-  product for each exact role and do not collapse two different roles into one.
+- In a bundle, assign each choice exactly one distinct product role and check
+  the complete choice list before responding. Never use the same role string
+  twice. `required_roles` are customer-required roles: include each one when a
+  verified match exists. `selectable_roles` contains the complete runtime-
+  generated role vocabulary, including non-required complementary roles that
+  can make a bundle genuinely useful. You may use an exact non-required
+  selectable role only when the selected product lists it in
+  verified_role_matches. Do not report a non-required role as unfulfilled.
 - A choice.role is a concrete product type supported by that product's verified
-  identity, not an abstract benefit or task. When required_roles is non-empty,
-  select only those roles; do not introduce unrelated optional roles.
+  identity, not an abstract benefit or task. Every choice role must be an exact
+  required_roles or selectable_roles value; do not introduce a new role string.
 - Keep choice.role at the broad base product-type level. Remove preference,
   feature, material, style, use-case, brand, and model modifiers dynamically;
   those details belong in the reason. When role_requirements contains the
   matching product type, copy its base_role exactly instead of rewriting it.
-- When required_roles is non-empty, copy its exact role string into a matching
-  choice.role. Put an exact required role in unfulfilled_roles only when none of
-  the supplied products can fulfill it. Prefer to account for every required
-  role explicitly. The server derives any omitted required role as unfulfilled,
-  so never discard otherwise valid choices merely because one role has no match.
+- When a selected product fulfills a required role, copy that exact required
+  role string into choice.role. Put an exact required role in unfulfilled_roles
+  only when none of the supplied products can fulfill it. Prefer to account for
+  every required role explicitly. The server derives any omitted required role
+  as unfulfilled, so never discard otherwise valid choices merely because one
+  role has no match.
 - When required_roles is empty in bundle mode, the earlier roles were inferred
   only to broaden retrieval. Derive 3–6 distinct concrete functional roles from
   the verified product identities and the customer's outcome. First use exact
@@ -346,6 +351,23 @@ class ProductSelectorAgent:
             and str(requirement.get("canonical_role", "")).strip()
         ))[:6]
 
+    @classmethod
+    def _selectable_roles(cls, state: ShoppingAgentState) -> list[str]:
+        """Bound selection to runtime-generated roles, not a fixed taxonomy.
+
+        A bundle can have one explicitly demanded item plus model-inferred
+        complementary roles. The explicit roles drive fulfillment reporting;
+        this wider set only authorizes catalog-evidenced bundle composition.
+        """
+        return list(dict.fromkeys([
+            *cls._required_roles(state),
+            *cls._candidate_roles(state),
+            *(
+                str(role).strip() for role in state.get("optional_categories", [])
+                if str(role).strip()
+            ),
+        ]))[:6]
+
     @staticmethod
     def _role_requirements(state: ShoppingAgentState) -> list[dict[str, Any]]:
         """Expose the LLM-generated identity/constraint split to selection."""
@@ -434,8 +456,6 @@ class ProductSelectorAgent:
         unique IDs/roles, verified prices, quantities, and budget arithmetic.
         The LLM still makes the semantic choice among the feasible plans.
         """
-        if budget_limit is None:
-            return []
         distinct_roles = list(dict.fromkeys(
             str(role).strip() for role in roles if str(role).strip()
         ))[:6]
@@ -472,7 +492,7 @@ class ProductSelectorAgent:
                 product for product in products
                 if role in product.get("verified_role_matches", [])
                 and price(product) is not None
-                and price(product) <= budget_limit
+                and (budget_limit is None or price(product) <= budget_limit)
             ]
             if options:
                 options_by_role[role] = sorted(options, key=quality)[:3]
@@ -493,7 +513,7 @@ class ProductSelectorAgent:
                         (price(product) or Decimal("0"))
                         for product in selected_products
                     )
-                    if total > budget_limit:
+                    if budget_limit is not None and total > budget_limit:
                         continue
                     key = tuple(sorted(zip(role_group, product_ids)))
                     if key in seen:
@@ -529,7 +549,11 @@ class ProductSelectorAgent:
         candidates.sort(key=lambda plan: (
             -int(plan["role_count"]),
             -int(plan["retrieval_score"]),
-            abs(budget_limit - Decimal(str(plan["total"]))),
+            (
+                abs(budget_limit - Decimal(str(plan["total"])))
+                if budget_limit is not None
+                else Decimal(str(plan["total"]))
+            ),
         ))
         plans = candidates[:max(1, max_plans)]
         for index, plan in enumerate(plans, start=1):
@@ -784,12 +808,13 @@ class ProductSelectorAgent:
                 errors.append("Every bundle choice must have a distinct functional role.")
 
         required_roles = cls._required_roles(state)
-        if required_roles:
+        selectable_roles = cls._selectable_roles(state)
+        if selectable_roles:
             selected_roles = {choice.role.strip() for choice in decision.choices}
-            unexpected_selected = selected_roles - set(required_roles)
+            unexpected_selected = selected_roles - set(selectable_roles)
             if unexpected_selected:
                 errors.append(
-                    f"Selected roles must use exact required_roles values: {sorted(unexpected_selected)}."
+                    f"Selected roles must use exact selectable_roles values: {sorted(unexpected_selected)}."
                 )
             missing_roles = set(decision.unfulfilled_roles)
             unknown_missing = missing_roles - set(required_roles)
@@ -899,6 +924,7 @@ class ProductSelectorAgent:
             "mode": mode,
             "goal": state.get("goal"),
             "required_roles": self._required_roles(state),
+            "selectable_roles": self._selectable_roles(state),
             "role_requirements": self._role_requirements(state),
             "explicit_fulfillment_requirements": state.get("fulfillment_requirements", []),
             "preferences": state.get("preferences", []),
@@ -993,11 +1019,7 @@ class ProductSelectorAgent:
                     payload["verified_catalog_products"],
                     payload["role_requirements"],
                 )
-                repair_roles = [
-                    str(requirement.get("base_role", "")).strip()
-                    for requirement in payload["role_requirements"]
-                    if str(requirement.get("base_role", "")).strip()
-                ]
+                repair_roles = self._selectable_roles(state)
                 if mode == "bundle":
                     feasible_plans = self._feasible_bundle_plans(
                         repair_products,

@@ -377,9 +377,9 @@ export default function AIAssistant() {
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         aria-label={isOpen ? "Close AI Assistant" : "Open AI Assistant"}
-        style={{ right: "1.5rem", bottom: "1.5rem" }}
+        style={{ position: "fixed", inset: "auto 1.5rem 1.5rem auto" }}
         aria-pressed={isOpen}
-        className={`fixed z-[99999] flex h-[60px] w-[60px] items-center justify-center rounded-full border-0 bg-[linear-gradient(145deg,#7955e8,#6541d4)] text-white shadow-[0_14px_38px_rgba(45,26,117,0.42)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-violet-300 focus:ring-offset-2 focus:ring-offset-slate-950 ${
+        className={`shine-button fixed z-[99999] flex h-[60px] w-[60px] items-center justify-center rounded-full border-0 text-white shadow-[0_14px_38px_rgba(45,26,117,0.42)] transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-violet-300 focus:ring-offset-2 focus:ring-offset-slate-950 ${
           isOpen ? "scale-95" : isHovered ? "-translate-y-1 scale-105" : "scale-100"
         }`}
       >
@@ -393,9 +393,9 @@ export default function AIAssistant() {
         role="dialog"
         aria-hidden={!isOpen}
         aria-label="AI Assistant chat"
-        style={{ right: "1.5rem", bottom: "6.75rem", backgroundColor: "#ffffff" }}
+        style={{ position: "fixed", inset: "auto 1.5rem 6.75rem auto", backgroundColor: "#ffffff" }}
         className={`${styles.chat} fixed z-[99998] flex max-w-[calc(100vw-2rem)] overflow-hidden rounded-[1.35rem] border border-slate-200 bg-white shadow-[0_28px_80px_rgba(2,6,23,0.45)] transition-all duration-300 ease-out ${
-          isExpanded ? "h-[calc(100dvh-8.5rem)] w-[min(660px,calc(100vw-2rem))]" : "h-[min(760px,calc(100dvh-8.5rem))] w-[470px]"
+          isExpanded ? "h-[calc(100dvh-8.5rem)] w-[min(660px,calc(100vw-2rem))]" : "h-[min(760px,calc(100dvh-8.5rem))] w-[min(470px,calc(100vw-2rem))]"
         } ${
           isOpen ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-8 pointer-events-none"
         }`}
@@ -584,7 +584,7 @@ export default function AIAssistant() {
                     <button
                       type="submit"
                       disabled={isLoading || !input.trim()}
-                      className={styles.sendButton}
+                      className={`${styles.sendButton} shine-button`}
                       aria-label="Send message"
                     >
                       <Send size={19} strokeWidth={2.2} />

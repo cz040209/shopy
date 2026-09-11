@@ -81,7 +81,7 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
 
           <div className={styles.purchaseRow}>
             {selectedProduct.stock && <div className={styles.quantity} aria-label="Quantity"><button onClick={() => setQty(Math.max(1, qty - 1))} aria-label="Decrease quantity"><Minus size={16} /></button><span>{qty}</span><button onClick={() => setQty(qty + 1)} aria-label="Increase quantity"><Plus size={16} /></button></div>}
-            <button className={styles.addButton} onClick={handleAdd} disabled={!selectedProduct.stock}><ShoppingBag size={19} />{selectedProduct.stock ? "Add to cart" : "Out of stock"}</button>
+            <button className={`${styles.addButton} shine-button`} onClick={handleAdd} disabled={!selectedProduct.stock}><ShoppingBag size={19} />{selectedProduct.stock ? "Add to cart" : "Out of stock"}</button>
             <button className={styles.wishlistButton} aria-label="Add to wishlist"><Heart size={20} /></button>
           </div>
           <div className={styles.protection}><ShieldCheck size={18} /><span>Secure checkout with protected payment processing.</span></div>

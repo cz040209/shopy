@@ -1,5 +1,6 @@
 .page {
   position: relative;
+  isolation: isolate;
   width: min(1480px, calc(100% - 48px));
   margin: 0 auto;
   padding: 28px 0 88px;
@@ -727,66 +728,6 @@ button.chip {
   opacity: 0.5;
 }
 
-.feedbackForm {
-  margin-top: 14px;
-  border: 1px solid rgba(132, 145, 213, 0.2);
-  border-radius: 10px;
-  padding: 16px;
-  background: rgba(11, 17, 33, 0.72);
-}
-
-.feedbackForm label {
-  display: block;
-  color: #eef7ff;
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.feedbackForm > div {
-  display: flex;
-  gap: 9px;
-  margin-top: 10px;
-}
-
-.feedbackForm input {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid rgba(143, 177, 225, 0.2);
-  border-radius: 10px;
-  padding: 11px 12px;
-  outline: 0;
-  background: rgba(4, 13, 30, 0.78);
-  color: #f4f8ff;
-  font: 600 13px var(--font-sans);
-}
-
-.feedbackForm input:focus {
-  border-color: rgba(125, 139, 244, 0.72);
-}
-
-.feedbackForm button {
-  border: 0;
-  border-radius: 10px;
-  padding: 10px 13px;
-  background: #5969d9;
-  color: #fff;
-  cursor: pointer;
-  font: 800 12px var(--font-sans);
-  white-space: nowrap;
-}
-
-.feedbackForm button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.feedbackForm p {
-  margin: 9px 0 0;
-  color: #91a5c0;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .insight {
   border: 1px solid rgba(132, 184, 225, 0.17);
   border-radius: 18px;
@@ -1037,9 +978,6 @@ button.chip {
 .optimizations button { border-color: rgba(117, 177, 210, 0.28); background: rgba(26, 48, 69, 0.7); }
 .optimizations button:hover { border-color: rgba(99, 220, 201, 0.68); background: rgba(24, 73, 82, 0.72); }
 .actionTone0 svg { color: #6fe0cf; }.actionTone1 svg { color: #7fb9ff; }.actionTone2 svg { color: #f2bd70; }.actionTone3 svg { color: #f197a7; }.actionTone4 svg { color: #9ddc90; }
-.feedbackForm input:focus { border-color: rgba(82, 215, 196, 0.75); box-shadow: 0 0 0 3px rgba(74, 204, 190, 0.1); }
-.feedbackForm button { background: linear-gradient(135deg, #22bba9, #438de0); }
-
 .briefPreview { border-color: rgba(90, 190, 193, 0.28); background: linear-gradient(145deg, rgba(11, 31, 43, 0.98), rgba(18, 25, 42, 0.98)); }
 .briefPreview::after { background: radial-gradient(circle, rgba(243, 173, 85, 0.14), rgba(74, 180, 205, 0.1) 47%, transparent 70%); }
 .previewTopline b { background: rgba(61, 195, 174, 0.13); color: #79dccb; }
@@ -1126,14 +1064,6 @@ button.chip {
   .alternatives > div:last-child,
   .history > div {
     grid-template-columns: 1fr;
-  }
-
-  .feedbackForm > div {
-    flex-direction: column;
-  }
-
-  .feedbackForm button {
-    width: 100%;
   }
 
   .workspaceFocusBackdrop { padding: 14px; }
