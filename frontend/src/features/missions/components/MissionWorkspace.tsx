@@ -13,10 +13,10 @@ import AlternativeBundles from "./AlternativeBundles";
 import BundleBoard from "./BundleBoard";
 import MissionHistory from "./MissionHistory";
 import MissionInputPanel from "./MissionInputPanel";
-import OptimizationActions from "./OptimizationActions";
 import { recommendationPriceSummary } from "./pricing";
 import { Attachment, BundleWorkspace, MissionData, MissionHistoryItem, MissionRefinement } from "./types";
 import {
+  clearStoredWorkspace,
   readStoredWorkspace,
   visionHandoffStorageKey,
   workspaceStorageKey,
@@ -99,6 +99,7 @@ export default function MissionWorkspace() {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [addingProductId, setAddingProductId] = useState<string | null>(null);
+  const [addedBundleCount, setAddedBundleCount] = useState<number | null>(null);
   const [history, setHistory] = useState<MissionHistoryItem[]>([]);
   const [showBundleReady, setShowBundleReady] = useState(false);
   const resultsRef = useRef<HTMLElement>(null);
@@ -181,6 +182,12 @@ export default function MissionWorkspace() {
     const timer = window.setTimeout(() => setShowBundleReady(false), 6000);
     return () => window.clearTimeout(timer);
   }, [showBundleReady]);
+
+  useEffect(() => {
+    if (addedBundleCount === null) return;
+    const timer = window.setTimeout(() => setAddedBundleCount(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [addedBundleCount]);
 
   const revealBundle = () => {
     setShowBundleReady(false);
@@ -323,13 +330,23 @@ export default function MissionWorkspace() {
 
   const addBundle = async () => {
     if (!items.length) return;
+    const addedCount = items.length;
     setAdding(true);
+    setError("");
     try {
       await Promise.all(items.map((item) => apiFetch("/api/v1/cart/items", {
         method: "POST",
         body: JSON.stringify({ product_id: item.product_id, quantity: 1 }),
       })));
       await refreshCart();
+      setAddedBundleCount(addedCount);
+      setAnalysis("");
+      setItems([]);
+      setBundleWorkspace({});
+      setShowBundleReady(false);
+      clearStoredWorkspace();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not add this bundle to your cart.");
     } finally {
       setAdding(false);
     }
@@ -478,6 +495,34 @@ export default function MissionWorkspace() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {addedBundleCount !== null && (
+          <motion.div
+            className={styles.cartSuccessBackdrop}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            role="status"
+            aria-live="polite"
+            aria-label={`${addedBundleCount} recommendation ${addedBundleCount === 1 ? "item" : "items"} added to cart`}
+          >
+            <motion.div
+              className={styles.cartSuccessCard}
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 18, scale: 0.94 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10, scale: 0.98 }}
+              transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <span><CircleCheck size={31} /></span>
+              <small>ADDED TO CART</small>
+              <h2>Added successfully.</h2>
+              <p>{addedBundleCount} recommendation {addedBundleCount === 1 ? "item is" : "items are"} now in your cart.</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="wait">
         {error && (
           <motion.section className={styles.error} key="error" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
@@ -500,7 +545,6 @@ export default function MissionWorkspace() {
               <h2>Your picks are ready.</h2>
               {priceSummary && <strong>{priceSummary.label}</strong>}
             </div>
-            <OptimizationActions disabled={busy} onPick={refine} />
             {items.length ? (
               <BundleBoard items={items} mission={mission} workspace={bundleWorkspace} adding={adding} addingProductId={addingProductId} onAdd={() => void addBundle()} onAddItem={(productId) => void addRecommendation(productId)} onRemove={removeBundleItem} />
             ) : (

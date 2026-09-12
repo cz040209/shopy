@@ -26,7 +26,7 @@ FastAPI API (internal Docker network)
   ├── Redis              — expiring short-term shopping memory and job queue
   ├── Celery worker      — durable receipt email delivery
   ├── Qwen             — primary intent, planning, vision, and response writing
-  ├── Qwen Omni Captioner — primary speech-to-text
+  ├── Qwen ASR Flash      — primary speech-to-text
   └── Gemini           — fallback provider
 ```
 
@@ -91,8 +91,8 @@ Never commit the root `.env`; use `.env.example` as the safe template.
 | `GEMINI_MODEL` | Gemini model | `gemini-3.7-flash` |
 | `QWEN_API_KEY` | Alibaba Cloud Model Studio credential | required for the primary provider |
 | `QWEN_BASE_URL` | Qwen OpenAI-compatible endpoint | Singapore DashScope endpoint |
-| `QWEN_MODEL` | Primary Qwen thinking model | `qwen3-vl-30b-a3b-thinking` |
-| `QWEN_AUDIO_MODEL` | Qwen audio caption/transcription model | `qwen3-omni-30b-a3b-captioner` |
+| `QWEN_MODEL` | Primary Qwen thinking model | `qwen3.7-max-2026-06-08` |
+| `QWEN_AUDIO_MODEL` | Qwen speech-to-text model | `qwen3-asr-flash-2025-09-08` |
 | `FRONTEND_ORIGIN` | Allowed browser origin | `http://localhost:8002` |
 | `DATABASE_URL` | PostgreSQL connection URL | Postgres on `5433` |
 | `POSTGRES_PORT` | Host PostgreSQL port | `5433` |
@@ -143,7 +143,7 @@ The browser frontend manages cookies automatically. Preserve login cookies when 
 
 ## Voice and vision
 
-`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG up to 14 MB. The recording is sent inline to Qwen Omni Captioner and is not stored by this application. Gemini is used only if Qwen fails and a Gemini API key is configured.
+`POST /api/v1/transcribe` accepts WebM, WAV, MP3, M4A/MP4, and OGG up to 14 MB. The recording is sent inline to Qwen ASR Flash and is not stored by this application. Gemini is used only if Qwen fails and a Gemini API key is configured.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/transcribe \

@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowRight, CarFront, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, BriefcaseBusiness, House, Plane } from "lucide-react";
+import { ArrowRight, CarFront, Check, ChefHat, Gamepad2, HeartPulse, LoaderCircle, Mic, Paintbrush, Shirt, Square, BriefcaseBusiness, House, Plane } from "lucide-react";
 import styles from "./home.module.css";
 import heroTheme from "./home-hero-theme.module.css";
+import voiceStyles from "./home-voice.module.css";
 import AIShoppingCamera, { type VisionAnalysisResult } from "@/features/vision/components/AIShoppingCamera";
 import { visionHandoffStorageKey, writeStoredWorkspace } from "@/features/missions/components/workspace-storage";
 import type { BundleWorkspace, MissionData } from "@/features/missions/components/types";
@@ -32,6 +33,7 @@ export default function Home() {
   const missionInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const transcriptReady = voiceMessage === "Transcript added - you can edit it before building.";
   const beginMission = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const brief = mission.trim();
@@ -46,7 +48,7 @@ export default function Home() {
       ? result.mission.goal.trim()
       : result.mode === "complete_look" ? "Complete my look from this photo" : result.mode === "shop_room" ? "Shop this room from this photo" : "Find products from this photo";
     const handoffId = crypto.randomUUID();
-    const stored = writeStoredWorkspace({
+    const snapshot = {
       version: 2,
       routeMission: goal,
       request: goal,
@@ -55,9 +57,15 @@ export default function Home() {
       items: attachments,
       workspace: result.workspace as BundleWorkspace,
       history: [],
-    }, visionHandoffStorageKey(handoffId));
-    if (!stored) throw new Error("The photo was analyzed, but this browser could not open its mission result. Please try again.");
-    router.push(`/build?mission=${encodeURIComponent(goal)}&vision=${encodeURIComponent(handoffId)}`);
+    } satisfies Parameters<typeof writeStoredWorkspace>[0];
+    // Keep a canonical copy as a fallback for browsers that cannot allocate a
+    // second one-time handoff entry. The route already knows how to restore it.
+    const canonicalStored = writeStoredWorkspace(snapshot);
+    const handoffStored = writeStoredWorkspace(snapshot, visionHandoffStorageKey(handoffId));
+    if (!canonicalStored && !handoffStored) return false;
+    const handoffQuery = handoffStored ? `&vision=${encodeURIComponent(handoffId)}` : "";
+    router.push(`/build?mission=${encodeURIComponent(goal)}${handoffQuery}`);
+    return true;
   };
 
   const stopStream = () => {
@@ -82,7 +90,7 @@ export default function Home() {
       const data = await response.json() as { transcript?: string; detail?: string };
       if (!response.ok || !data.transcript) throw new Error(data.detail ?? "No speech was detected.");
       setMission(data.transcript.trim());
-      setVoiceMessage("Transcript added — you can edit it before building.");
+      setVoiceMessage("Transcript added - you can edit it before building.");
       window.requestAnimationFrame(() => missionInputRef.current?.focus());
     } catch (error) {
       setVoiceMessage(error instanceof Error ? error.message : "We couldn’t transcribe that recording. Please try again.");
@@ -140,16 +148,20 @@ export default function Home() {
       <p className={styles.intro}>Skip the product hunt. Tell Shopy what you are trying to achieve, then let the right products come together.</p>
       <form className={styles.missionBar} onSubmit={beginMission}>
         <label className="sr-only" htmlFor="mission">What do you want to achieve today?</label>
-        <input ref={missionInputRef} id="mission" value={mission} onChange={(event) => setMission(event.target.value)} placeholder="What do you want to achieve today?" />
-        <button type="button" className={`${styles.inputAction} ${voiceState === "recording" ? "home-voice-recording" : ""}`} onClick={toggleVoiceInput} disabled={voiceState === "transcribing"} aria-label={voiceState === "recording" ? "Stop recording and transcribe" : "Record a mission by voice"} aria-pressed={voiceState === "recording"}>
-          {voiceState === "transcribing" ? <LoaderCircle className="home-voice-spinner" size={19} /> : voiceState === "recording" ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}
+        <input ref={missionInputRef} id="mission" className={transcriptReady ? voiceStyles.transcribedInput : undefined} value={mission} onChange={(event) => { setMission(event.target.value); if (voiceMessage) setVoiceMessage(""); }} placeholder="What do you want to achieve today?" />
+        <button type="button" className={`${styles.inputAction} ${voiceState === "recording" ? voiceStyles.recordingAction : ""} ${voiceState === "transcribing" ? voiceStyles.transcribingAction : ""}`} onClick={toggleVoiceInput} disabled={voiceState === "transcribing"} aria-label={voiceState === "recording" ? "Stop recording and transcribe" : "Record a mission by voice"} aria-pressed={voiceState === "recording"}>
+          {voiceState === "transcribing" ? <LoaderCircle className={voiceStyles.spinner} size={19} /> : voiceState === "recording" ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}
         </button>
         <AIShoppingCamera compact showResult={false} onAnalysisComplete={openVisionRecommendation} />
         <button className={`${styles.buildButton} shine-button`} type="submit" disabled={launchingMission}>
           {launchingMission ? "Opening workspace…" : "Build for me"} <ArrowRight size={17} />
         </button>
       </form>
-      {voiceMessage && <p className="home-voice-hint" role="status">{voiceMessage}</p>}
+      {voiceMessage && <div className={`${voiceStyles.status} ${voiceState === "recording" ? voiceStyles.recordingStatus : ""} ${voiceState === "transcribing" ? voiceStyles.transcribingStatus : ""} ${transcriptReady ? voiceStyles.readyStatus : ""}`} role="status" aria-live="polite">
+        <span className={voiceStyles.statusIcon}>{voiceState === "recording" ? <Mic size={16} /> : voiceState === "transcribing" ? <LoaderCircle className={voiceStyles.spinner} size={16} /> : transcriptReady ? <Check size={16} /> : <Mic size={16} />}</span>
+        <div className={voiceStyles.statusCopy}><strong>{voiceState === "recording" ? "Listening now" : voiceState === "transcribing" ? "Shopy is transcribing" : transcriptReady ? "Voice transcript added" : "Voice input"}</strong><p>{voiceMessage}</p></div>
+        {voiceState === "recording" && <span className={voiceStyles.wave} aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} />)}</span>}
+      </div>}
       <div className={styles.quickActions}><span>Try a mission</span>{popular.slice(0, 4).map(([Icon, label, prompt]) => <Link key={label} href={`/build?mission=${encodeURIComponent(prompt)}`}><Icon size={15} />{label}</Link>)}</div>
     </section>
     <section className={styles.missions} aria-labelledby="mission-heading">

@@ -48,7 +48,7 @@ type Props = {
   maxFileSizeMb?: number;
   maxDimension?: number;
   quality?: number;
-  onAnalysisComplete?: (analysis: string, attachments: VisionProductAttachment[], result: VisionAnalysisResult) => void;
+  onAnalysisComplete?: (analysis: string, attachments: VisionProductAttachment[], result: VisionAnalysisResult) => boolean | void;
   /** Send the completed recommendation to a parent workspace instead of keeping it in this modal. */
   showResult?: boolean;
 };
@@ -267,15 +267,32 @@ export default function AIShoppingCamera({ mode, compact = false, disabled = fal
       setAttachments(result.attachments ?? []);
       setVisionContext(result.vision_context ?? {});
       if (styleDirection) setLookStyle(styleDirection);
-      onAnalysisComplete?.(result.analysis, result.attachments ?? [], {
+      const completedResult: VisionAnalysisResult = {
         mode: result.mode ?? activeMode,
         analysis: result.analysis,
         attachments: result.attachments ?? [],
         visionContext: result.vision_context ?? {},
         mission: result.mission ?? {},
         workspace: result.workspace ?? {},
-      });
+      };
+      let completionHandled: boolean | void;
+      try {
+        completionHandled = onAnalysisComplete?.(
+          result.analysis,
+          result.attachments ?? [],
+          completedResult,
+        );
+      } catch {
+        completionHandled = false;
+      }
       if (!showResult) {
+        if (completionHandled === false) {
+          // The API recommendation is already valid. If browser storage or
+          // navigation cannot hand it off, retain the result in this modal
+          // instead of misreporting the completed analysis as an AI failure.
+          setStage("result");
+          return;
+        }
         close();
         return;
       }

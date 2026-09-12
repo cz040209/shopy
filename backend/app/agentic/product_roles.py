@@ -19,7 +19,10 @@ _NUMBER_WORDS = {
 def normalized_terms(value: str) -> list[str]:
     """Return stable, singularized meaningful terms from user or catalog text."""
     terms: list[str] = []
-    for token in re.findall(r"[\w]+", value.casefold()):
+    # JSON-producing models commonly transport a multi-word role with
+    # underscores. Treat that spelling as whitespace so role identity remains
+    # stable across prompt/response serialization without a taxonomy mapping.
+    for token in re.findall(r"[\w]+", value.casefold().replace("_", " ")):
         if len(token) < 2:
             continue
         if len(token) > 4 and token.endswith("ies"):
@@ -98,6 +101,21 @@ def _matches_simple_product_role(product: dict[str, Any], role: str) -> bool:
         if (terms := normalized_terms(part))
     }
     if set(requested).issubset(available) and requested[-1] in heads:
+        return True
+
+    # A catalog name can append packaging or grouping words after the actual
+    # product type (for example, "Six-Piece Packing Cubes Set").  Preserve the
+    # strict head check for one-word roles, but accept an exact multi-word role
+    # phrase anywhere in a typed identity field.  This remains taxonomy-free
+    # and cannot be satisfied by incidental description/specification text.
+    if len(requested) >= 2 and any(
+        any(
+            terms[index:index + len(requested)] == requested
+            for index in range(len(terms) - len(requested) + 1)
+        )
+        for part in identity_parts
+        if (terms := normalized_terms(part))
+    ):
         return True
 
     qualifiers, requested_head = requested[:-1], requested[-1]

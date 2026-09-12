@@ -112,16 +112,17 @@ do not use `/tmp` for user uploads.
 
 ## Qwen speech-to-text
 
-`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. Recordings up to 14 MB are sent inline to `qwen3-omni-30b-a3b-captioner` and are not persisted by this application. Gemini is used only as a fallback when configured.
+`POST /api/v1/transcribe` accepts a multipart `audio` field in WebM, WAV, MP3, M4A/MP4, or OGG format. Recordings up to 14 MB are sent inline to `qwen3-asr-flash-2025-09-08` and are not persisted by this application. Gemini is used only as a fallback when configured.
 
 Configure transcription in `.env`:
 
 ```env
+QWEN_AUDIO_MODEL=qwen3-asr-flash-2025-09-08
 TRANSCRIPTION_DEFAULT_LANGUAGE=en
 TRANSCRIPTION_TIMEOUT_SECONDS=60
 ```
 
-Qwen uses the OpenAI-compatible Model Studio endpoint configured by `QWEN_BASE_URL`. The primary thinking model defaults to `qwen3.6-flash`; `GEMINI_MODEL` (`gemini-3.7-flash` by default) is the fallback model.
+Qwen uses the OpenAI-compatible Model Studio endpoint configured by `QWEN_BASE_URL`. `QWEN_AUDIO_MODEL` is the dedicated speech-to-text model; `QWEN_MODEL` remains the separate primary model for shopping reasoning. `GEMINI_MODEL` (`gemini-3.7-flash` by default) is the fallback model.
 
 To test once the server is running:
 

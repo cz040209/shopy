@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -5,7 +6,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.main import app
-from app.models import Category, Product, ProductImage, ProductStatus, Seller, SellerStatus
+from app.models import Category, Product, ProductImage, ProductStatus, Seller, SellerStatus, WalletTransaction
 
 
 def test_catalog_cart_and_checkout_lifecycle(db_session):
@@ -57,6 +58,24 @@ def test_catalog_cart_and_checkout_lifecycle(db_session):
         assert top_up.status_code == 201
         assert top_up.json()["balance"] == "1000.00"
         assert top_up.json()["transactions"][0]["type"] == "top_up"
+        assert top_up.json()["minimum_top_up"] == "10.00"
+        assert top_up.json()["daily_top_up_remaining"] == "2000.00"
+        assert top_up.json()["monthly_top_up_remaining"] == "11000.00"
+
+        below_minimum = client.post("/api/v1/wallet/top-ups", json={"amount": "9.99", "payment_source": "FPX Online Banking"})
+        assert below_minimum.status_code == 400
+        assert "minimum top-up" in below_minimum.json()["detail"]
+
+        # An older ledger credit remains part of the balance and the monthly
+        # total, but must not lock today's top-up form.
+        historical_top_up = db_session.scalar(select(WalletTransaction).where(WalletTransaction.reference == top_up.json()["transactions"][0]["reference"]))
+        assert historical_top_up is not None
+        historical_top_up.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+        db_session.commit()
+        refreshed_wallet = client.get("/api/v1/wallet")
+        assert refreshed_wallet.status_code == 200
+        assert refreshed_wallet.json()["daily_top_up_remaining"] == "3000.00"
+        assert refreshed_wallet.json()["monthly_top_up_remaining"] == "11000.00"
 
         added_again = client.post("/api/v1/cart/items", json={"product_id": product_id, "quantity": 1})
         assert added_again.status_code == 201

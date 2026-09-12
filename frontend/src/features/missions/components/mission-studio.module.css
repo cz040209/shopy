@@ -87,7 +87,6 @@
 .progressHeading > span,
 .resultHeading > span,
 .chipLabel,
-.optimizations > span,
 .history > span {
   display: inline-flex;
   align-items: center;
@@ -463,6 +462,45 @@ button.chip {
 .bundleReadyCard button { width: 100%; margin-top: 24px; border: 1px solid #7381e7; border-radius: 8px; padding: 14px 18px; background: #5868d8; color: #fff; cursor: pointer; font: 850 13px var(--font-sans); transition: background 180ms ease, transform 180ms ease; }
 .bundleReadyCard button:hover { background: #6676e6; transform: translateY(-1px); }
 
+.cartSuccessBackdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 8, 18, 0.62);
+  backdrop-filter: blur(10px) saturate(0.75);
+  pointer-events: none;
+}
+
+.cartSuccessCard {
+  width: min(430px, 100%);
+  border: 1px solid rgba(89, 218, 190, 0.42);
+  border-radius: 18px;
+  padding: clamp(28px, 5vw, 42px);
+  background: radial-gradient(circle at 50% 0, rgba(65, 209, 183, 0.18), transparent 46%), linear-gradient(145deg, rgba(8, 29, 38, 0.99), rgba(14, 24, 45, 0.99));
+  box-shadow: 0 30px 76px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  text-align: center;
+}
+
+.cartSuccessCard > span {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 17px;
+  place-items: center;
+  border: 1px solid rgba(91, 229, 194, 0.45);
+  border-radius: 18px;
+  background: rgba(65, 209, 183, 0.15);
+  color: #75ead4;
+  box-shadow: 0 12px 28px rgba(32, 185, 158, 0.16);
+}
+
+.cartSuccessCard small { color: #78dfcf; font-size: 10px; font-weight: 850; letter-spacing: 0.16em; }
+.cartSuccessCard h2 { margin: 10px 0 8px; color: #fff; font-family: var(--font-display); font-size: clamp(29px, 5vw, 39px); letter-spacing: -0.05em; }
+.cartSuccessCard p { margin: 0; color: #b8cbd6; font-size: 14px; line-height: 1.55; }
+
 .progressPanelFocus {
   min-height: min(530px, calc(100dvh - 56px));
   border: 0;
@@ -685,21 +723,6 @@ button.chip {
   font-size: clamp(23px, 3vw, 36px);
 }
 
-.optimizations {
-  border: 1px solid rgba(139, 165, 221, 0.15);
-  border-radius: 10px;
-  padding: 18px;
-  background: rgba(7, 15, 34, 0.58);
-}
-
-.optimizations > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-  margin-top: 13px;
-}
-
-.optimizations button,
 .alternatives button,
 .error button {
   display: inline-flex;
@@ -715,17 +738,11 @@ button.chip {
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
 
-.optimizations button:hover,
 .alternatives button:hover,
 .error button:hover {
   border-color: rgba(132, 145, 255, 0.54);
   background: rgba(50, 59, 114, 0.72);
   transform: translateY(-1px);
-}
-
-.optimizations button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .insight {
@@ -890,8 +907,7 @@ button.chip {
    to scan without binding the UI to a single purple brand colour. */
 .heroCopy > span,
 .sectionIntro > span,
-.resultHeading > span,
-.optimizations > span {
+.resultHeading > span {
   color: #54d7cb;
 }
 
@@ -974,10 +990,6 @@ button.chip {
 
 .results { border-color: rgba(83, 180, 196, 0.22); background: linear-gradient(145deg, rgba(9, 20, 32, 0.98), rgba(15, 22, 39, 0.97)); }
 .resultHeading > strong { color: #ffc96d; }
-.optimizations { border-color: rgba(83, 180, 196, 0.2); background: rgba(7, 23, 34, 0.58); }
-.optimizations button { border-color: rgba(117, 177, 210, 0.28); background: rgba(26, 48, 69, 0.7); }
-.optimizations button:hover { border-color: rgba(99, 220, 201, 0.68); background: rgba(24, 73, 82, 0.72); }
-.actionTone0 svg { color: #6fe0cf; }.actionTone1 svg { color: #7fb9ff; }.actionTone2 svg { color: #f2bd70; }.actionTone3 svg { color: #f197a7; }.actionTone4 svg { color: #9ddc90; }
 .briefPreview { border-color: rgba(90, 190, 193, 0.28); background: linear-gradient(145deg, rgba(11, 31, 43, 0.98), rgba(18, 25, 42, 0.98)); }
 .briefPreview::after { background: radial-gradient(circle, rgba(243, 173, 85, 0.14), rgba(74, 180, 205, 0.1) 47%, transparent 70%); }
 .previewTopline b { background: rgba(61, 195, 174, 0.13); color: #79dccb; }

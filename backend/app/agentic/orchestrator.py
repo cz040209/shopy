@@ -252,6 +252,16 @@ class ShoppingOrchestrator:
         return self.manager.next_stage(state, "product_selector")
 
     def _after_compatibility(self, state: ShoppingAgentState) -> str:
+        if any(
+            result.get("status") == "incompatible"
+            for result in state.get("compatibility_results", [])
+            if isinstance(result, dict)
+        ):
+            # Re-run the LLM selector with the exact verified product-pair
+            # constraints. Pair conflicts do not make either product invalid
+            # independently, so the selector chooses a feasible alternative
+            # from the same bounded shortlist.
+            return "product_selector"
         return self.manager.next_stage(state, "compatibility")
 
     @staticmethod
@@ -276,6 +286,17 @@ class ShoppingOrchestrator:
     async def _memory_load_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         if self.memory_store is None or not state.get("memory_session_scope"):
             return {}
+        if state.get("vision_input"):
+            # Every camera submission starts a fresh image-grounded mission.
+            # Do not load stale selected/rejected products or mission-specific
+            # preferences merely to discard them later in the intent prompt.
+            output = {
+                **self._event(state, "memory_load"),
+                "memory_context": None,
+                "excluded_product_ids": [],
+            }
+            self._record_node(state, "memory_load", output)
+            return output
         try:
             memory = await self.memory_store.load(str(state["memory_session_scope"]))
         except MemoryUnavailableError as error:
@@ -345,6 +366,19 @@ class ShoppingOrchestrator:
             "selection_criteria": [item.model_dump() for item in mission.selection_criteria],
             "fulfillment_requirements": [item.model_dump() for item in mission.fulfillment_requirements],
             "mission": mission.model_dump(),
+            # Downstream retrieval and selection also consume memory_context.
+            # Keep it only for a validated continuation; a fresh text or image
+            # mission must not prioritize old products, budgets, or exclusions.
+            "memory_context": (
+                memory_context
+                if mission.continues_context and not has_vision_context
+                else None
+            ),
+            "excluded_product_ids": (
+                state.get("excluded_product_ids", [])
+                if mission.continues_context and not has_vision_context
+                else []
+            ),
         }
         self._record_node(state, "intent_agent", output)
         return output
@@ -836,6 +870,26 @@ class ShoppingOrchestrator:
 
     async def _compatibility_node(self, state: ShoppingAgentState) -> dict[str, Any]:
         output = {**self._event(state, "compatibility"), **(await self.compatibility_agent.run(state))}
+        constraints = [
+            *state.get("compatibility_constraints", []),
+            *(
+                result for result in output.get("compatibility_results", [])
+                if isinstance(result, dict) and result.get("status") == "incompatible"
+            ),
+        ]
+        unique_constraints: list[dict[str, Any]] = []
+        seen: set[tuple[str, ...]] = set()
+        for result in constraints:
+            product_ids = tuple(sorted({
+                str(product_id)
+                for product_id in result.get("affected_product_ids", [])
+                if str(product_id)
+            }))
+            if not product_ids or product_ids in seen:
+                continue
+            seen.add(product_ids)
+            unique_constraints.append(result)
+        output["compatibility_constraints"] = unique_constraints
         self._record_node(state, "compatibility", output)
         return output
 

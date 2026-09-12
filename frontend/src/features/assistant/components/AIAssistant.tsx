@@ -549,7 +549,7 @@ export default function AIAssistant() {
               ) : voiceState === "transcribing" ? (
                 <div className={voiceStyles.transcribing} aria-live="polite">
                   <span className={voiceStyles.transcribingSpinner} aria-hidden="true" />
-                  <div><strong>Transcribing your voice</strong><span>Whisper is processing this recording and sending it to Shopy Assistant.</span></div>
+                  <div><strong>Transcribing your voice</strong><span>Qwen ASR is processing this recording and sending it to Shopy Assistant.</span></div>
                 </div>
               ) : (
                 <>

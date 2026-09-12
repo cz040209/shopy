@@ -1,0 +1,66 @@
+.recordingAction {
+  background: rgba(248, 113, 113, 0.16) !important;
+  color: #fda4af !important;
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.11);
+  animation: buttonPulse 1.2s ease-in-out infinite;
+}
+
+.transcribingAction { color: #8ddbf2 !important; }
+.spinner { animation: spin 0.8s linear infinite; }
+
+.transcribedInput {
+  color: #d9fff6 !important;
+  text-shadow: 0 0 18px rgba(91, 229, 194, 0.28);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  max-width: 720px;
+  gap: 11px;
+  margin: 11px auto -4px;
+  padding: 10px 13px;
+  border: 1px solid rgba(142, 164, 207, 0.2);
+  border-radius: 12px;
+  background: rgba(7, 14, 31, 0.55);
+  color: #b7c5dc;
+  text-align: left;
+}
+
+.recordingStatus { border-color: rgba(248, 113, 113, 0.38); background: linear-gradient(90deg, rgba(104, 35, 52, 0.34), rgba(15, 23, 44, 0.56)); }
+.transcribingStatus { border-color: rgba(102, 202, 234, 0.32); background: linear-gradient(90deg, rgba(18, 64, 86, 0.35), rgba(15, 23, 44, 0.56)); }
+.readyStatus { border-color: rgba(91, 229, 194, 0.38); background: linear-gradient(90deg, rgba(22, 81, 73, 0.34), rgba(15, 23, 44, 0.56)); }
+
+.statusIcon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(135, 152, 205, 0.13);
+  color: #b7c5ff;
+}
+
+.recordingStatus .statusIcon { background: rgba(248, 113, 113, 0.16); color: #fda4af; }
+.transcribingStatus .statusIcon { background: rgba(82, 201, 233, 0.13); color: #82d9f1; }
+.readyStatus .statusIcon { background: rgba(91, 229, 194, 0.14); color: #7ce6d0; }
+
+.statusCopy { min-width: 0; flex: 1; }
+.statusCopy strong { display: block; color: #e7efff; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; }
+.statusCopy p { overflow: hidden; margin: 2px 0 0; color: #9eafc8; font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+
+.wave { display: flex; align-items: center; justify-content: center; gap: 3px; width: 92px; height: 30px; }
+.wave i { width: 3px; height: 7px; border-radius: 999px; background: linear-gradient(#fda4af, #d8617a); animation: wave 0.65s ease-in-out infinite alternate; }
+.wave i:nth-child(2n) { height: 16px; animation-delay: -0.25s; }
+.wave i:nth-child(3n) { height: 23px; animation-delay: -0.4s; }
+.wave i:nth-child(5n) { height: 11px; animation-delay: -0.1s; }
+
+@keyframes buttonPulse { 50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0); transform: scale(0.96); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes wave { from { transform: scaleY(0.42); opacity: 0.45; } to { transform: scaleY(1); opacity: 1; } }
+
+@media (max-width: 520px) {
+  .wave { width: 58px; gap: 2px; }
+  .wave i:nth-child(n + 11) { display: none; }
+}

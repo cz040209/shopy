@@ -16,7 +16,7 @@ from app.models import Order, OrderItem, PaymentMethod, Review, User, Wallet, Wa
 from app.services.cart import add_cart_item, cart_subtotal, get_active_cart, remove_cart_item, update_cart_item
 from app.services.orders import create_order_from_cart
 from app.worker import send_paid_receipt
-from app.services.wallets import get_wallet, pay_order_with_wallet, top_up_wallet
+from app.services.wallets import get_wallet, pay_order_with_wallet, top_up_wallet, wallet_top_up_capacity
 
 from ..schemas import (
     AddCartItemRequest, CartItemResponse, CartResponse, CheckoutRequest, OrderItemResponse,
@@ -48,6 +48,19 @@ def order_response(order: Order, *, receipt_email_queued: bool = False) -> Order
         total_amount=order.total_amount, shipping_address_snapshot=order.shipping_address_snapshot,
         placed_at=order.placed_at, created_at=order.created_at,
         items=[OrderItemResponse(id=item.id, product_id=item.product_id, sku=item.sku, product_name=item.product_name, quantity=item.quantity, unit_price=item.unit_price, line_total=item.line_total, product_snapshot=item.product_snapshot) for item in order.items], receipt_email_queued=receipt_email_queued,
+    )
+
+
+def wallet_response(db: Session, record: Wallet) -> WalletResponse:
+    """Serialize wallet state and the top-up rules from one authoritative source."""
+    daily_remaining, monthly_remaining = wallet_top_up_capacity(db, record)
+    transactions = sorted(record.transactions, key=lambda item: item.created_at, reverse=True)
+    return WalletResponse(
+        id=record.id, currency=record.currency, balance=record.balance, daily_limit=record.daily_limit,
+        monthly_limit=record.monthly_limit, daily_top_up_remaining=daily_remaining,
+        monthly_top_up_remaining=monthly_remaining, minimum_top_up=settings.wallet_minimum_top_up,
+        is_verified=record.is_verified,
+        transactions=[WalletTransactionResponse(id=item.id, reference=item.reference, type=item.type.value, status=item.status.value, amount=item.amount, currency=item.currency, description=item.description, created_at=item.created_at) for item in transactions],
     )
 
 
@@ -113,25 +126,17 @@ def wallet(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     record = get_wallet(db, user)
     db.commit()
     db.refresh(record, attribute_names=["transactions"])
-    transactions = sorted(record.transactions, key=lambda item: item.created_at, reverse=True)
-    return WalletResponse(
-        id=record.id, currency=record.currency, balance=record.balance, daily_limit=record.daily_limit,
-        monthly_limit=record.monthly_limit, is_verified=record.is_verified,
-        transactions=[WalletTransactionResponse(id=item.id, reference=item.reference, type=item.type.value, status=item.status.value, amount=item.amount, currency=item.currency, description=item.description, created_at=item.created_at) for item in transactions],
-    )
+    return wallet_response(db, record)
 
 
 @router.post("/wallet/top-ups", response_model=WalletResponse, status_code=status.HTTP_201_CREATED)
 def wallet_top_up(payload: WalletTopUpRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> WalletResponse:
+    if payload.amount < settings.wallet_minimum_top_up:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"The minimum top-up amount is {settings.wallet_minimum_top_up}.")
     record = top_up_wallet(db, user, amount=payload.amount, payment_source=payload.payment_source)
     db.commit()
     db.refresh(record, attribute_names=["transactions"])
-    transactions = sorted(record.transactions, key=lambda item: item.created_at, reverse=True)
-    return WalletResponse(
-        id=record.id, currency=record.currency, balance=record.balance, daily_limit=record.daily_limit,
-        monthly_limit=record.monthly_limit, is_verified=record.is_verified,
-        transactions=[WalletTransactionResponse(id=item.id, reference=item.reference, type=item.type.value, status=item.status.value, amount=item.amount, currency=item.currency, description=item.description, created_at=item.created_at) for item in transactions],
-    )
+    return wallet_response(db, record)
 
 
 @router.post("/products/{product_id}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)

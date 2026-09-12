@@ -18,7 +18,15 @@ const paymentSources = [
 ] as const;
 type WalletTransaction = { id: string; title: string; description: string; amount: number; type: "credit" | "debit"; status: "Completed" | "Pending"; date: string };
 type WalletApiTransaction = { id: string; reference: string; type: "top_up" | "purchase" | "refund" | "cashback" | "adjustment"; status: "completed" | "pending" | "failed" | "reversed"; amount: string; description: string | null; created_at: string };
-type WalletApiResponse = { balance: string; daily_limit: string; monthly_limit: string; transactions: WalletApiTransaction[] };
+type WalletApiResponse = {
+  balance: string;
+  daily_limit: string;
+  monthly_limit: string;
+  daily_top_up_remaining: string;
+  monthly_top_up_remaining: string;
+  minimum_top_up: string;
+  transactions: WalletApiTransaction[];
+};
 const currency = new Intl.NumberFormat("en-MY", { currency: "MYR", style: "currency", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const SST_RATE = 0.06;
 
@@ -44,9 +52,12 @@ function ShopyPayContent() {
   const [topUpAmount, setTopUpAmount] = useState("100");
   const [source, setSource] = useState<string>(paymentSources[0].label);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
-  const [dailyLimit, setDailyLimit] = useState(3000);
+  const [dailyTopUpRemaining, setDailyTopUpRemaining] = useState<number | null>(null);
+  const [monthlyTopUpRemaining, setMonthlyTopUpRemaining] = useState<number | null>(null);
   const [monthlyLimit, setMonthlyLimit] = useState(12000);
+  const [minimumTopUp, setMinimumTopUp] = useState<number | null>(null);
   const [topUpStage, setTopUpStage] = useState<"idle" | "processing" | "success">("idle");
+  const [completedTopUpAmount, setCompletedTopUpAmount] = useState<number | null>(null);
   const successTimer = useRef<number | null>(null);
   useEffect(() => {
     let isCurrent = true;
@@ -55,15 +66,17 @@ function ShopyPayContent() {
       if (!isCurrent) return;
       const record = wallet as WalletApiResponse;
       setBalance(Number(record.balance));
-      setDailyLimit(Number(record.daily_limit));
       setMonthlyLimit(Number(record.monthly_limit));
+      setDailyTopUpRemaining(Number(record.daily_top_up_remaining));
+      setMonthlyTopUpRemaining(Number(record.monthly_top_up_remaining));
+      setMinimumTopUp(Number(record.minimum_top_up));
       setTransactions(walletTransactions(record.transactions));
     }).catch((error) => console.error("Wallet load failed", error));
     return () => { isCurrent = false; };
   }, []);
   useEffect(() => {
     const requestedTopUp = Number(new URLSearchParams(window.location.search).get("top_up"));
-    if (Number.isFinite(requestedTopUp) && requestedTopUp >= 10) {
+    if (Number.isFinite(requestedTopUp) && requestedTopUp > 0) {
       const id = window.setTimeout(() => setTopUpAmount(String(Math.ceil(requestedTopUp))), 0);
       return () => window.clearTimeout(id);
     }
@@ -77,10 +90,20 @@ function ShopyPayContent() {
   const shippingSst = roundUpToFiveSen(shippingFee * SST_RATE);
   const checkoutTotal = subtotal + shippingFee + shippingSst;
   const availableAfterCart = balance - checkoutTotal;
-  const dailyUsed = transactions.filter((item) => item.type === "credit").reduce((sum, item) => sum + item.amount, 0);
-  const dailyRemaining = Math.max(dailyLimit - dailyUsed, 0);
-  const topUpIsValid = Number.isFinite(amount) && amount >= 10 && amount <= dailyRemaining;
-  const walletHealth = useMemo(() => [["Verification", "Verified"], ["Daily limit left", currency.format(dailyRemaining)], ["Monthly limit", currency.format(monthlyLimit)]], [dailyRemaining, monthlyLimit]);
+  const dailyCapacity = dailyTopUpRemaining ?? 0;
+  const monthlyCapacity = monthlyTopUpRemaining ?? 0;
+  const topUpCapacity = dailyTopUpRemaining === null || monthlyTopUpRemaining === null ? null : Math.min(dailyTopUpRemaining, monthlyTopUpRemaining);
+  const topUpIsValid = minimumTopUp !== null && topUpCapacity !== null && Number.isFinite(amount) && amount >= minimumTopUp && amount <= topUpCapacity;
+  const topUpError = topUpCapacity === null || minimumTopUp === null
+    ? "Loading your current top-up limits…"
+    : !Number.isFinite(amount) || amount < minimumTopUp
+      ? `Enter ${currency.format(minimumTopUp)} or more.`
+      : amount > dailyCapacity
+        ? `This exceeds your remaining daily top-up limit of ${currency.format(dailyCapacity)}.`
+        : amount > monthlyCapacity
+          ? `This exceeds your remaining monthly top-up limit of ${currency.format(monthlyCapacity)}.`
+          : null;
+  const walletHealth = useMemo(() => [["Verification", "Verified"], ["Daily top-up left", dailyTopUpRemaining === null ? "--" : currency.format(dailyTopUpRemaining)], ["Monthly limit", currency.format(monthlyLimit)]], [dailyTopUpRemaining, monthlyLimit]);
   async function handleTopUp(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!topUpIsValid) return;
     setTopUpStage("processing");
@@ -88,12 +111,15 @@ function ShopyPayContent() {
       await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
       const wallet = await apiFetch("/api/v1/wallet/top-ups", { method: "POST", body: JSON.stringify({ amount: amount.toFixed(2), payment_source: source }) }) as WalletApiResponse;
       setBalance(Number(wallet.balance));
-      setDailyLimit(Number(wallet.daily_limit));
       setMonthlyLimit(Number(wallet.monthly_limit));
+      setDailyTopUpRemaining(Number(wallet.daily_top_up_remaining));
+      setMonthlyTopUpRemaining(Number(wallet.monthly_top_up_remaining));
+      setMinimumTopUp(Number(wallet.minimum_top_up));
       setTransactions(walletTransactions(wallet.transactions));
+      setCompletedTopUpAmount(amount);
       setTopUpAmount("100");
       setTopUpStage("success");
-      successTimer.current = window.setTimeout(() => setTopUpStage("idle"), 2200);
+      successTimer.current = window.setTimeout(() => { setCompletedTopUpAmount(null); setTopUpStage("idle"); }, 2200);
     } catch (error) {
       console.error("Wallet top-up failed", error);
       setTopUpStage("idle");
@@ -101,14 +127,24 @@ function ShopyPayContent() {
   }
   return (
     <main className={styles.page}>
-      {topUpStage !== "idle" && <div className={styles.topUpOverlay} role="status" aria-live="assertive"><div className={styles.topUpDialog}>{topUpStage === "processing" ? <><span className={styles.topUpStateIcon}><LoaderCircle size={28} /></span><p>Secure wallet transfer</p><h2>Confirming your top up</h2><span>We’re adding {currency.format(amount)} to your ShopyPay wallet.</span></> : <><span className={`${styles.topUpStateIcon} ${styles.topUpSuccessIcon}`}><CheckCircle2 size={30} /></span><p>Top up successful</p><h2>Your wallet is ready.</h2><span>{currency.format(amount)} has been added to your available balance.</span></>}</div></div>}
+      {topUpStage !== "idle" && <div className={styles.topUpOverlay} role="status" aria-live="assertive"><div className={styles.topUpDialog}>{topUpStage === "processing" ? <><span className={styles.topUpStateIcon}><LoaderCircle size={28} /></span><p>Secure wallet transfer</p><h2>Confirming your top up</h2><span>We’re adding {currency.format(amount)} to your ShopyPay wallet.</span></> : <><span className={`${styles.topUpStateIcon} ${styles.topUpSuccessIcon}`}><CheckCircle2 size={30} /></span><p>Top up successful</p><h2>Your wallet is ready.</h2><span>{currency.format(completedTopUpAmount ?? amount)} has been added to your available balance.</span></>}</div></div>}
       <div className={styles.intro}><div><div className={styles.kicker}>Shopy wallet</div><div className={styles.title}>ShopyPay</div><div className={styles.subtitle}>A simpler way to pay, earn rewards, and keep track of every purchase.</div></div><div className={styles.secure}><ShieldCheck size={17} /> Secure wallet</div></div>
       <section className={styles.dashboard}>
         <div className={styles.balanceCard}><div className={styles.cardTop}><div className={styles.cardBrand}><WalletCards size={20} /> ShopyPay</div><div className={styles.cardChip} /></div><div className={styles.balanceLabel}>Available balance</div><div className={styles.balance}>{currency.format(balance)}</div><div className={styles.cardBottom}><div><div className={styles.cardSmall}>Wallet account</div><div className={styles.cardNumber}>•••• 8942</div></div><div className={styles.cardSmall}>MYR</div></div></div>
         <div className={styles.overview}><div className={styles.sectionHead}><div><div className={styles.sectionTitle}>Wallet overview</div><div className={styles.sectionCopy}>Your account is ready for checkout.</div></div><CheckCircle2 className={styles.verifiedIcon} size={27} /></div><div className={styles.healthList}>{walletHealth.map(([label, value]) => <div className={styles.healthRow} key={label}><div>{label}</div><strong>{value}</strong></div>)}</div><div className={styles.cartSummary}><div><div>Checkout total</div><strong>{currency.format(checkoutTotal)}</strong></div><div><div>After this checkout</div><strong className={availableAfterCart >= 0 ? styles.positive : styles.negative}>{currency.format(availableAfterCart)}</strong></div></div><Link href="/checkout" className={styles.payLink}>Pay with ShopyPay <ArrowUpRight size={17} /></Link></div>
       </section>
       <section className={styles.contentGrid}>
-        <form onSubmit={handleTopUp} className={styles.topUp}><div className={styles.sectionHead}><div><div className={styles.sectionTitle}>Top up your wallet</div><div className={styles.sectionCopy}>Funds are available immediately after payment.</div></div><div className={styles.iconTile}><Plus size={20} /></div></div><label className={styles.formLabel} htmlFor="top-up-amount">Top-up amount</label><div className={styles.amountField}><span>RM</span><input id="top-up-amount" inputMode="numeric" min="10" type="number" value={topUpAmount} onChange={(event) => setTopUpAmount(event.target.value)} /></div><div className={styles.quickAmounts}>{quickAmounts.map((quickAmount) => <button key={quickAmount} type="button" onClick={() => setTopUpAmount(String(quickAmount))} className={topUpAmount === String(quickAmount) ? styles.amountActive : styles.amountOption}>{currency.format(quickAmount)}</button>)}</div><label className={styles.formLabel} htmlFor="payment-source">Pay with</label><div className={styles.paymentOptions} role="radiogroup" aria-label="Payment method">{paymentSources.map((item) => <button key={item.label} type="button" role="radio" aria-checked={source === item.label} className={`${styles.paymentOption} ${source === item.label ? styles.paymentOptionActive : ""}`} onClick={() => setSource(item.label)}><span className={`${styles.paymentMark} ${styles[item.className]}`}>{item.mark}</span><span className={styles.paymentLabel}>{item.label}</span>{source === item.label && <Check className={styles.paymentCheck} size={16} />}</button>)}</div><div className={styles.topUpTotal}><div><span>Processing fee</span><strong>RM0</strong></div><div><span>New wallet balance</span><strong>{topUpIsValid ? currency.format(balance + amount) : "--"}</strong></div></div>{!topUpIsValid && <div className={styles.error}>Enter RM10 or more, within your remaining daily limit.</div>}<button className={styles.confirmButton} type="submit" disabled={!topUpIsValid || topUpStage !== "idle"}>{topUpStage === "processing" ? <>Confirming top up <LoaderCircle className={styles.topUpSpinner} size={17} /></> : <>Confirm top up <ArrowUpRight size={17} /></>}</button></form>
+        <form onSubmit={handleTopUp} className={styles.topUp}>
+          <div className={styles.sectionHead}><div><div className={styles.sectionTitle}>Top up your wallet</div><div className={styles.sectionCopy}>Funds are available immediately after payment.</div></div><div className={styles.iconTile}><Plus size={20} /></div></div>
+          <label className={styles.formLabel} htmlFor="top-up-amount">Top-up amount</label>
+          <div className={styles.amountField}><span>RM</span><input id="top-up-amount" inputMode="decimal" min={minimumTopUp ?? undefined} type="number" value={topUpAmount} onChange={(event) => setTopUpAmount(event.target.value)} /></div>
+          <div className={styles.quickAmounts}>{quickAmounts.map((quickAmount) => <button key={quickAmount} type="button" onClick={() => setTopUpAmount(String(quickAmount))} className={topUpAmount === String(quickAmount) ? styles.amountActive : styles.amountOption}>{currency.format(quickAmount)}</button>)}</div>
+          <label className={styles.formLabel} htmlFor="payment-source">Pay with</label>
+          <div className={styles.paymentOptions} role="radiogroup" aria-label="Payment method">{paymentSources.map((item) => <button key={item.label} type="button" role="radio" aria-checked={source === item.label} className={`${styles.paymentOption} ${source === item.label ? styles.paymentOptionActive : ""}`} onClick={() => setSource(item.label)}><span className={`${styles.paymentMark} ${styles[item.className]}`}>{item.mark}</span><span className={styles.paymentLabel}>{item.label}</span>{source === item.label && <Check className={styles.paymentCheck} size={16} />}</button>)}</div>
+          <div className={styles.topUpTotal}><div><span>Processing fee</span><strong>RM0</strong></div><div><span>New wallet balance</span><strong>{topUpIsValid ? currency.format(balance + amount) : "--"}</strong></div></div>
+          {topUpError && <div className={styles.error} role="alert">{topUpError}</div>}
+          <button className={styles.confirmButton} type="submit" disabled={!topUpIsValid || topUpStage !== "idle"}>{topUpStage === "processing" ? <>Confirming top up <LoaderCircle className={styles.topUpSpinner} size={17} /></> : <>Confirm top up <ArrowUpRight size={17} /></>}</button>
+        </form>
         <div className={styles.activity}><div className={styles.sectionHead}><div><div className={styles.sectionTitle}>Recent activity</div><div className={styles.sectionCopy}>Your latest wallet payments and rewards.</div></div><div className={styles.ledger}><ReceiptText size={15} /> Live</div></div><div className={styles.transactionList}>{transactions.map((transaction) => { const isCredit = transaction.type === "credit"; return <article className={styles.transaction} key={transaction.id}><div className={styles.transactionIcon + " " + (isCredit ? styles.credit : styles.debit)}>{isCredit ? <Banknote size={19} /> : <CreditCard size={19} />}</div><div className={styles.transactionInfo}><div className={styles.transactionTitle}>{transaction.title} <span className={transaction.status === "Completed" ? styles.completed : styles.pending}>{transaction.status}</span></div><div className={styles.transactionDesc}>{transaction.description}</div><div className={styles.transactionDate}><Clock3 size={12} /> {transaction.date}</div></div><div className={styles.transactionAmount}><strong className={isCredit ? styles.positive : styles.negative}>{isCredit ? "+" : "-"}{currency.format(transaction.amount)}</strong><div>{transaction.id}</div></div></article>; })}</div></div>
       </section>
       <section className={styles.controls}><div className={styles.controlsIntro}><div className={styles.iconTile}><ShieldCheck size={20} /></div><div><div className={styles.sectionTitle}>Wallet protection</div><div className={styles.sectionCopy}>Your balance is monitored around the clock.</div></div></div><div className={styles.controlList}>{[["Two-factor approval", "Required for payments above RM500"], ["Instant refund routing", "Eligible refunds return directly to ShopyPay"], ["Spending alerts", "Notifications are turned on for every payment"]].map(([title, copy]) => <div className={styles.controlItem} key={title}><div><strong>{title}</strong><span>{copy}</span></div><Check size={18} /></div>)}</div><div className={styles.securityNote}><LockKeyhole size={17} /> Card information is not stored in your ShopyPay wallet.</div></section>

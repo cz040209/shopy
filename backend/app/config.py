@@ -1,6 +1,7 @@
+from decimal import Decimal
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,11 +26,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.7-flash"
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3-vl-30b-a3b-thinking"
+    qwen_model: str = "qwen3.7-max-2026-06-08"
     # Available in the Model Studio free quota and accepts image input through
     # the OpenAI-compatible chat-completions endpoint.
     qwen_vision_model: str = "qwen3.5-omni-plus"
-    qwen_audio_model: str = "qwen3-omni-30b-a3b-captioner"
+    # Dedicated ASR model for short recorded voice requests. It returns the
+    # spoken text directly instead of an audio description.
+    qwen_audio_model: str = "qwen3-asr-flash-2025-09-08"
     qwen_enable_thinking: bool = True
     frontend_origin: str = "http://localhost:8002"
     transcription_default_language: str = "en"
@@ -38,6 +41,9 @@ class Settings(BaseSettings):
     ai_log_agent_node_payloads: bool = True
     auth_cookie_secure: bool = False
     auth_session_days: int = 7
+    # Wallet rules are delivered by the API so clients do not invent their own
+    # thresholds or infer usage from a partial transaction history.
+    wallet_minimum_top_up: Decimal = Field(default=Decimal("10.00"), gt=0, max_digits=12, decimal_places=2)
     # Covers the longest vision + planning + compatibility + final-audit path.
     # This is a node safety bound, not a retry count.
     agent_max_graph_iterations: int = 24

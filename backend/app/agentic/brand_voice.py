@@ -69,6 +69,14 @@ Rules:
   possible_shopping_needs as contextual leads. Recommend only verified catalog
   products selected for the reconciled required_categories; do not recommend a
   photographed item merely because it is visible.
+- vision_context contains observations about the submitted image, not facts
+  about any recommended catalog product. Keep those sources separate. You may
+  compare a product's documented catalog fact with an observed visual trait,
+  but never transfer the image's finish, color, shape, material, capability,
+  brand, model, or connection type onto a product whose own supplied catalog
+  fields do not state it. selection_reasoning is the selector's explanation,
+  not an additional source of catalog facts; repeat a product claim from it
+  only when verified_catalog_products independently supports that claim.
 - Ask a concise follow-up only when the verified data is insufficient.
 - When fulfillment_gaps is supplied, clearly explain the listed issue
   and clearly explain any verified requirement that cannot be fulfilled. Never
@@ -78,6 +86,13 @@ Rules:
   and unfulfilled_requirements; otherwise return an empty list. Do not broaden
   a catalog-match gap into a claim that the product type does not exist, is
   unavailable, or is out of stock.
+- unfulfilled_requirements is an exact mirror of server-verified fulfillment
+  gaps, never an assessment of how closely a selection matches preferences.
+  When fulfillment_gaps is empty, unfulfilled_requirements must be empty. A
+  preferred feature, visual trait, style, color, or generated search modifier
+  is a soft ranking signal unless it also appears in the supplied
+  fulfillment_requirements and fulfillment_gaps; discuss any mismatch only as
+  a selection trade-off, without saying no catalog match was verified.
 - When selection_context says no_eligible_alternative is true, explain that no
   verified alternative met the supplied optimisation criteria. State only the
   reference values and criteria that selection_context supplies, ask for a
@@ -271,16 +286,20 @@ class BrandVoiceAgent:
                 draft, payload, state, products_by_id, drafted_ids
             )
             required_missing = self._verified_missing_requirements(state)
+            required_missing_normalized = {
+                value.casefold().strip() for value in required_missing
+            }
             declared_missing = {
                 value.casefold().strip() for value in draft.unfulfilled_requirements
             }
-            if any(
+            if declared_missing != required_missing_normalized or any(
                 missing.casefold() not in declared_missing
                 or self._gap_disclosure(missing).casefold() not in draft.response.casefold()
                 for missing in required_missing
             ):
                 raise ResponseDraftError(
-                    "Response model did not visibly disclose every verified fulfillment gap."
+                    "Response model's missing requirements did not exactly match "
+                    "the verified fulfillment gaps."
                 )
             if self._contains_unverified_availability_language(draft.response):
                 raise ResponseDraftError(
@@ -295,6 +314,7 @@ class BrandVoiceAgent:
                 "agent.brand_voice.safe_fallback",
                 request_id=str(state.get("run_id", "")),
                 reason=type(error).__name__,
+                error_message=str(error)[:500],
             )
             drafted_ids = self._fallback_product_ids(
                 state,
@@ -334,6 +354,26 @@ class BrandVoiceAgent:
         """Render a useful response without adding any unverified prose facts."""
         missing = BrandVoiceAgent._verified_missing_requirements(state)
 
+        role_by_product_id: dict[str, str] = {}
+        bundle = state.get("bundle")
+        if isinstance(bundle, dict):
+            coverage = bundle.get("required_category_coverage")
+            if isinstance(coverage, dict):
+                for match in coverage.get("matches", []):
+                    if not isinstance(match, dict):
+                        continue
+                    product_id = str(match.get("product_id", "")).strip()
+                    role = str(match.get("requirement", "")).strip()
+                    if product_id in products_by_id and role:
+                        role_by_product_id.setdefault(product_id, role)
+        for reasoning in state.get("selection_reasoning", []):
+            if not isinstance(reasoning, dict):
+                continue
+            product_id = str(reasoning.get("product_id", "")).strip()
+            role = str(reasoning.get("role", "")).strip()
+            if product_id in products_by_id and role:
+                role_by_product_id.setdefault(product_id, role)
+
         lines: list[str] = []
         if product_ids:
             lines.append(
@@ -346,6 +386,19 @@ class BrandVoiceAgent:
                 price = Decimal(str(product["price"]))
                 total += price
                 lines.append(f"- {product['name']} — RM {price.quantize(Decimal('0.01'))}")
+                verified_context = [
+                    value for value in (
+                        f"Mission role: {role_by_product_id[product_id]}"
+                        if product_id in role_by_product_id else "",
+                        f"Brand: {str(product.get('brand', '')).strip()}"
+                        if str(product.get("brand", "")).strip() else "",
+                        f"Catalog category: {str(product.get('category', '')).strip()}"
+                        if str(product.get("category", "")).strip() else "",
+                    )
+                    if value
+                ]
+                if verified_context:
+                    lines.append(f"  {'; '.join(verified_context)}.")
             if state.get("recommendation_mode") == "bundle":
                 lines.append(f"Bundle total: RM {total.quantize(Decimal('0.01'))}.")
                 if state.get("budget") is not None:
@@ -411,6 +464,11 @@ class BrandVoiceAgent:
         original = state.get("final_response")
         if not isinstance(original, str) or not original.strip():
             raise ResponseDraftError("A verified response is required before brand-voice polishing.")
+        if state.get("response_source") == self.fallback_source:
+            # This response exists because the optional writer was unavailable
+            # or violated its contract. Keep the deterministic result instead
+            # of adding another provider dependency that can delay or dilute it.
+            return {"final_response": original.strip()}
         payload = {
             "draft_response": original,
             "verified_product_claims": state.get("response_claims", []),

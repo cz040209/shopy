@@ -102,9 +102,13 @@ Return only valid JSON, without Markdown.
   duplicates, and keep distinct product roles independently fulfillable. Derive
   roles dynamically from the evidence; do not apply a fixed domain checklist.
 * In shop_room, complete practical or visual gaps without rebuying visible room
-  contents. In complete_look, extend visible garments into a coordinated outfit,
-  including useful off-frame roles when appropriate; human anatomy and grooming
-  are not implicit shopping requests.
+  contents. When possible_shopping_needs supplies multiple distinct, relevant,
+  non-visible product roles, preserve multiple roles as separate bundle items
+  and search requirements instead of collapsing the scene to the easiest single
+  match. You may replace a bad inferred role, but keep the bundle useful and
+  complementary. In complete_look, extend visible garments into a coordinated
+  outfit, including useful off-frame roles when appropriate; human anatomy and
+  grooming are not implicit shopping requests.
 * Exception: when vision_context.mode is "shop_object", shopping_targets are
   the object the customer wants to shop, not items they own. Make that target
   the primary shopping role, usually with recommendation_mode="single". Do not
@@ -112,10 +116,21 @@ Return only valid JSON, without Markdown.
   Treat image-derived colours, style, and apparent capabilities as soft
   preferences only; create a hard feature or attribute requirement only when
   the customer explicitly writes it.
+* For each distinct shop_object target, return exactly one category fulfillment
+  requirement whose value equals that target's base canonical_role. A generic
+  role and a qualified version of the same photographed object are one need,
+  not two requirements. Keep inferred form, style, colour, and capability words
+  in original_text, search_queries, or preferred_features instead.
 * A visual uncertainty or negative observation describes what the image did not
   establish. Preserve it as context only. Never turn alternatives mentioned in
   phrases such as "cannot determine X or Y" into preferences, selection criteria,
   required features, or fulfillment requirements.
+* Never fill a visual uncertainty with an assumed product fact. If the image
+  does not establish a connector, material, measurement, compatibility detail,
+  brand, model, or other property, do not guess a likely/default value and do
+  not place an assumption in goal, preferences, key_requirements, constraints,
+  priorities, search requirements, or fulfillment requirements. Search may use
+  the visible base product role without resolving the unknown property.
 
 ### Recommendation Mode (required)
 * Always return `recommendation_mode`.
@@ -249,6 +264,12 @@ Available runtime tools (the source of truth for requested_actions):
   Inferred roles must remain search directions: their absence must not be
   reported as failure to satisfy the customer's request.
 * Treat `canonical_role` as a retrieval key, not as a summary of everything the customer wants. It must be the shortest catalog-neutral, independently stocked product class that still identifies the requested item. Remove brand/model names and capability, performance, material, style, compatibility, price, and use-case modifiers. Put those details in `required_features`, `preferred_features`, preferences, constraints, or typed fulfillment requirements instead. Do not map an accessory to the product it supports: keep the accessory as its own role.
+* A canonical role must identify the purchasable object itself. Its final noun
+  cannot be an audience, shopper attribute, style, occasion, room, or other
+  context term, even when that term occurs in several generated queries. For
+  scene images, choose a concrete product type for each observed gap rather
+  than an umbrella department. Keep demographic and styling language in
+  preferences or query modifiers.
 * The first search_queries entry must be the bare canonical_role. Later queries may combine that base role with customer wording or explicit features to improve recall, but those variants never replace the broad base query.
 * Structural example (apply this separation dynamically to every domain): for customer wording "noise-cancelling headphones", preserve that phrase in original_text, use "headphones" as canonical_role, put "noise cancelling" in required_features when explicitly mandatory, and search both "headphones" and more specific variants. The example illustrates field responsibilities; it is not a product taxonomy.
 * Return exactly one search_requirements entry per bundle_items entry, in the same order, with no duplicate canonical role for different requested product types.
@@ -385,6 +406,59 @@ class IntentMissionAgent:
         self.tool_names = {str(getattr(tool, "name", "")) for tool in self.available_tools}
         self.system_prompt = build_intent_system_prompt(self.available_tools)
 
+    @classmethod
+    def _scene_role_contract_errors(
+        cls,
+        mission: MissionInterpretation,
+        runtime_context: dict[str, Any] | None,
+    ) -> list[str]:
+        """Detect malformed scene-role structure without a product taxonomy."""
+        vision = (
+            runtime_context.get("vision_context")
+            if isinstance(runtime_context, dict) else None
+        )
+        if not isinstance(vision, dict) or vision.get("mode") != "complete_look":
+            return []
+        requirements = list(mission.search_requirements)
+        if len(requirements) < 2:
+            return []
+
+        canonical_terms = [cls._ordered_terms(item.canonical_role) for item in requirements]
+        errors: list[str] = []
+        for index, (item, terms) in enumerate(zip(requirements, canonical_terms, strict=True)):
+            if not terms:
+                continue
+            head = terms[-1]
+            query_heads = [
+                query_terms[-1]
+                for query in item.search_queries
+                if (query_terms := cls._ordered_terms(query))
+            ]
+            feature_terms = {
+                term
+                for value in [*item.required_features, *item.preferred_features]
+                for term in cls._ordered_terms(value)
+            }
+            appears_across_roles = sum(
+                head in other_terms for other_terms in canonical_terms
+            )
+            if len(query_heads) >= 3 and query_heads.count(head) < 2:
+                errors.append(
+                    f"canonical_role {item.canonical_role!r} does not end in the "
+                    "stable product noun shared by its query variants"
+                )
+            if head in feature_terms:
+                errors.append(
+                    f"canonical_role {item.canonical_role!r} ends in a feature or "
+                    "style term instead of the purchasable product type"
+                )
+            if len(requirements) >= 3 and appears_across_roles >= 3:
+                errors.append(
+                    f"canonical_role {item.canonical_role!r} ends in shared scene "
+                    "context instead of a distinct purchasable product type"
+                )
+        return list(dict.fromkeys(errors))
+
     async def interpret(self, user_request: str, runtime_context: dict[str, Any] | None = None) -> MissionInterpretation:
         request_payload = user_request if not runtime_context else json.dumps(
             {"customer_request": user_request, "runtime_context": runtime_context}, ensure_ascii=False
@@ -426,6 +500,13 @@ class IntentMissionAgent:
                     required_keys=frozenset({"mission_type", "goal"}),
                 )
                 mission = MissionInterpretation.model_validate(last_data)
+                role_errors = self._scene_role_contract_errors(
+                    mission, runtime_context,
+                )
+                if role_errors and attempt + 1 < max(
+                    1, settings.agent_response_format_attempts,
+                ):
+                    raise StructuredOutputError("; ".join(role_errors))
                 if (
                     mission.budget is not None
                     and "budget_mode" not in last_data
@@ -679,8 +760,16 @@ class IntentMissionAgent:
         counts = {head: heads.count(head) for head in dict.fromkeys(heads)}
         current_head = role_terms[-1]
         consensus = max(counts, key=lambda head: (counts[head], -heads.index(head)))
+        shared_terms = set(query_terms[0]).intersection(*(set(terms) for terms in query_terms[1:]))
         if counts.get(current_head, 0) >= 2:
-            if not features_removed:
+            # Preserve an ordinary singular/compound catalog role when the
+            # model supplied only a small number of equivalent phrasings.
+            # Three or more independently qualified variants provide stronger
+            # evidence that only their shared head is the stable identity.
+            if not features_removed and (
+                len(role_terms) == 1
+                or len(query_terms) < 3
+            ):
                 return role.strip()
             chosen_head = current_head
         elif counts[consensus] < 2:
@@ -693,7 +782,13 @@ class IntentMissionAgent:
         else:
             chosen_head = consensus
 
-        shared_terms = set(query_terms[0]).intersection(*(set(terms) for terms in query_terms[1:]))
+        # A modifier is part of the stable product role only when every
+        # independently generated query preserves it.  The head appearing in
+        # several queries proves the product form, but does not prove that all
+        # qualifiers from the original phrase are identity terms.  For
+        # example, variants such as ``computer mouse``, ``wired mouse`` and
+        # ``office mouse`` establish ``mouse`` as the role while leaving the
+        # other words available as preference/capability signals.
         qualifiers = [
             term for term in role_terms[:-1]
             if term in shared_terms and term != chosen_head
@@ -1044,10 +1139,17 @@ class IntentMissionAgent:
                 cls._matches_visual_target(item.query, visual_targets)
                 for item in bundle_items
             ) else visual_targets
-        elif scene_photo and bundle_items:
+        elif scene_photo and bundle_items and not (
+            vision_mode == "shop_room"
+            and len(bundle_items) == 1
+            and len(vision_needs) > 1
+        ):
             # Prefer the intent agent's outcome-aware correction for every
             # scene mode. Retain a raw need only when it describes the same
             # product role, so salience cannot create an extra requirement.
+            # A room response accidentally collapsed to one role is recovered
+            # from the vision model's already-filtered, non-visible needs below;
+            # this remains runtime-derived rather than a product checklist.
             interpreted_roles = [item.query for item in bundle_items]
             vision_needs = [
                 need for need in vision_needs
@@ -1153,11 +1255,22 @@ class IntentMissionAgent:
                 if value_terms
                 and (
                     value_terms == cls._terms(item.original_text)
-                    or value_terms == cls._terms(item.canonical_role)
+                    or (
+                        cls._terms(item.canonical_role)
+                        and cls._terms(item.canonical_role) <= value_terms
+                    )
                 )
             ), None)
             if matching_search is None:
                 return value
+            if object_photo:
+                # A photographed object's generated qualifiers are ranking and
+                # retrieval vocabulary, not independent mandatory identities.
+                # Reconcile every overlapping category variant to the same
+                # runtime-derived base role so one object can never become two
+                # contradictory requirements (for example, a generic object
+                # plus a styled/form-qualified version of that object).
+                return matching_search.canonical_role
             source_search = next((
                 item for item in mission.search_requirements
                 if cls._terms(item.original_text) == cls._terms(matching_search.original_text)

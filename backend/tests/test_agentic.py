@@ -307,6 +307,38 @@ def test_room_intent_can_correct_an_outcome_irrelevant_vision_need():
     assert normalized.owned_items == ["sofa", "coffee table"]
 
 
+def test_room_intent_recovers_multiple_runtime_needs_after_single_role_collapse():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="bundle",
+        goal="complete the photographed room", requires_catalog=True,
+        requested_actions=["search_products"],
+        bundle_items=[{"query": "cushions"}],
+        catalog_queries=["cushions"],
+        search_requirements=[{
+            "original_text": "cushions", "canonical_role": "cushions",
+            "search_queries": ["cushions", "throw cushions"],
+        }],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "shop_room",
+            "detected_objects": ["armchair", "plant", "rug"],
+            "existing_items": ["armchair", "plant", "rug"],
+            "possible_shopping_needs": ["floor lamp", "wall art", "cushions"],
+        }},
+        user_request="Shop this room from the photo.",
+    )
+
+    assert [item.query for item in normalized.bundle_items] == [
+        "cushions", "floor lamp", "wall art",
+    ]
+    assert [item.canonical_role for item in normalized.search_requirements] == [
+        "cushions", "floor lamp", "wall art",
+    ]
+
+
 def test_intent_normalization_removes_feature_duplicates_embedded_in_bundle_roles():
     mission = MissionInterpretation(
         mission_type="product_search", recommendation_mode="bundle", goal="WFH setup",
@@ -895,6 +927,75 @@ async def test_intent_agent_retries_a_schema_failure():
 
 
 @pytest.mark.anyio
+async def test_scene_intent_retries_context_words_used_as_product_role_heads():
+    class SearchArgs(BaseModel):
+        query: str
+
+    class SearchTool:
+        name = "search_products"
+        description = "Search verified catalog products."
+        args_schema = SearchArgs
+
+    class RepairingSceneIntentModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, input, **kwargs):
+            self.calls += 1
+            roles = (
+                [
+                    ("casual bottoms men", "men", ["men", "pants men", "chinos men"]),
+                    ("men outer layer casual", "men outer layer casual", ["men outer layer casual", "outer layer", "jacket men"]),
+                    ("men casual footwear", "men casual footwear", ["men casual footwear", "footwear", "shoes men"]),
+                ]
+                if self.calls == 1 else
+                [
+                    ("casual pants", "pants", ["pants", "casual pants", "mens pants"]),
+                    ("casual jacket", "jacket", ["jacket", "casual jacket", "mens jacket"]),
+                    ("casual shoes", "shoes", ["shoes", "casual shoes", "mens shoes"]),
+                ]
+            )
+            return AIMessage(content=json.dumps({
+                "mission_type": "product_search",
+                "recommendation_mode": "bundle",
+                "goal": "complete the outfit",
+                "requires_catalog": True,
+                "requested_actions": ["search_products"],
+                "bundle_items": [
+                    {"query": original, "quantity": 1}
+                    for original, _, _ in roles
+                ],
+                "search_requirements": [
+                    {
+                        "original_text": original,
+                        "canonical_role": canonical,
+                        "customer_required": False,
+                        "preferred_features": ["casual"],
+                        "search_queries": queries,
+                    }
+                    for original, canonical, queries in roles
+                ],
+                "catalog_queries": [original for original, _, _ in roles],
+            }))
+
+    model = RepairingSceneIntentModel()
+    result = await IntentMissionAgent(model, tools=[SearchTool()]).interpret(
+        "Shop this complete look image.",
+        runtime_context={"vision_context": {
+            "mode": "complete_look",
+            "category": ["apparel"],
+            "existing_items": ["shirt"],
+            "possible_shopping_needs": ["pants", "jacket", "shoes"],
+        }},
+    )
+
+    assert model.calls == 2
+    assert [item.canonical_role for item in result.search_requirements] == [
+        "pants", "jacket", "shoes",
+    ]
+
+
+@pytest.mark.anyio
 async def test_intent_agent_accepts_one_provider_envelope_and_six_bounded_queries():
     payload = {
         "result": {
@@ -1143,6 +1244,53 @@ async def test_optional_brand_polish_preserves_audited_response_during_model_out
 
 
 @pytest.mark.anyio
+async def test_optional_brand_polish_skips_provider_for_deterministic_fallback():
+    class ModelMustNotRun:
+        async def ainvoke(self, input, **kwargs):
+            raise AssertionError("a deterministic fallback must remain final")
+
+    state = initial_shopping_state("Recommend an item")
+    state.update({
+        "final_response": "Exact deterministic response.",
+        "response_source": "deterministic_catalog_renderer_v1",
+    })
+
+    result = await BrandVoiceAgent(ModelMustNotRun()).polish(state)
+
+    assert result == {"final_response": "Exact deterministic response."}
+
+
+def test_safe_fallback_preserves_dynamic_bundle_roles_and_verified_catalog_context():
+    product_id = "22222222-2222-2222-2222-222222222222"
+    product = {
+        "id": product_id, "name": "Elm Lounge Chair", "brand": "Oak & Loom",
+        "category": "Living Room Seating", "price": "849.00",
+    }
+    state = initial_shopping_state("Shop this room image")
+    state.update({
+        "recommendation_mode": "bundle",
+        "selected_products": [{"id": product_id, "quantity": 1}],
+        "bundle": {
+            "required_category_coverage": {
+                "covered": [], "missing": [],
+                "matches": [{
+                    "requirement": "chair", "product_id": product_id,
+                    "purchase_quantity": 1,
+                }],
+            },
+        },
+    })
+
+    draft = BrandVoiceAgent._safe_fallback_draft(
+        state, {product_id: product}, [product_id],
+    )
+
+    assert "Mission role: chair" in draft.response
+    assert "Brand: Oak & Loom" in draft.response
+    assert "Catalog category: Living Room Seating" in draft.response
+
+
+@pytest.mark.anyio
 async def test_brand_voice_replaces_hidden_gap_response_with_visible_verified_disclosure():
     missing_role = "portable charger"
 
@@ -1171,6 +1319,79 @@ async def test_brand_voice_replaces_hidden_gap_response_with_visible_verified_di
 
     assert BrandVoiceAgent._gap_disclosure(missing_role) in result["final_response"]
     assert result["response_source"] == "deterministic_catalog_renderer_v1"
+
+
+@pytest.mark.anyio
+async def test_brand_voice_cannot_promote_a_soft_vision_preference_to_a_gap():
+    product_ids = [
+        "33333333-3333-3333-3333-333333333333",
+        "44444444-4444-4444-4444-444444444444",
+    ]
+
+    class InventedGapModel:
+        async def ainvoke(self, input, **kwargs):
+            return AIMessage(content=json.dumps({
+                "response": (
+                    "Glide Wireless Mouse and Precision Wireless Mouse are the closest matches. "
+                    "I could not verify a catalog match for vertical design."
+                ),
+                "product_ids": product_ids,
+                "unfulfilled_requirements": ["vertical design"],
+            }))
+
+    products = [
+        {
+            "id": product_id, "slug": f"mouse-{index}", "name": name,
+            "brand": "Test", "category": "Mice", "price": price,
+            "currency": "MYR", "inventory_quantity": 5, "specs": [],
+            "attributes": {}, "image_url": None,
+        }
+        for index, (product_id, name, price) in enumerate(zip(
+            product_ids,
+            ["Glide Wireless Mouse", "Precision Wireless Mouse"],
+            ["189.00", "129.00"],
+            strict=True,
+        ))
+    ]
+    state = initial_shopping_state("Shop this object image.")
+    state.update({
+        "recommendation_mode": "single",
+        "candidate_products": products,
+        "selected_products": [
+            {"id": product_id, "quantity": 1} for product_id in product_ids
+        ],
+        "search_requirements": [{
+            "original_text": "vertical ergonomic computer mouse",
+            "canonical_role": "mouse",
+            "customer_required": True,
+            "required_features": [],
+            "preferred_features": ["vertical design", "ergonomic"],
+            "search_queries": ["mouse", "vertical ergonomic mouse"],
+        }],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+        ],
+        "fulfillment_gaps": [],
+    })
+
+    result = await BrandVoiceAgent(InventedGapModel(), max_format_attempts=1).compose(state)
+
+    assert result["response_source"] == "deterministic_catalog_renderer_v1"
+    assert result["unfulfilled_requirements"] == []
+    assert "vertical design" not in result["final_response"].casefold()
+
+    class CatalogTools:
+        async def execute(self, name, arguments):
+            assert name == "get_product"
+            return next(
+                product for product in products
+                if product["id"] == arguments["product_id"]
+            )
+
+    audited = await ShoppingAuditor().audit(
+        {**state, **result}, tools=CatalogTools(),
+    )
+    assert audited["status"] == "pass"
 
 
 def test_non_product_planning_requirement_does_not_select_a_false_catalog_match():
@@ -1451,6 +1672,108 @@ def test_object_photo_features_remain_soft_and_do_not_hide_valid_products():
     assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
         {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
     ]
+
+
+def test_object_photo_collapses_overlapping_generated_category_variants_to_one_base_role():
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="single",
+        goal="Find a wired computer mouse matching the photographed style.",
+        requires_catalog=True, requested_actions=["search_products"],
+        catalog_query="wired computer mouse",
+        catalog_queries=[
+            "wired computer mouse", "ergonomic wired mouse",
+            "retro style mouse", "classic office mouse",
+        ],
+        bundle_items=[{"query": "wired computer mouse"}],
+        search_requirements=[{
+            "original_text": "wired computer mouse",
+            "canonical_role": "computer mouse",
+            "customer_required": True,
+            "required_features": [],
+            "preferred_features": ["ergonomic", "retro style", "wired"],
+            "search_queries": [
+                "computer mouse", "wired computer mouse", "wired mouse",
+                "ergonomic mouse", "retro mouse", "office mouse",
+            ],
+        }],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "computer mouse"},
+            {"kind": "category", "value": "wired computer mouse"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "shop_object",
+            "detected_objects": ["computer mouse"],
+            "shopping_targets": ["computer mouse"],
+            "visual_constraints": ["Connectivity cannot be verified visually."],
+        }},
+        user_request="Shop this object image.",
+    )
+
+    assert [item.canonical_role for item in normalized.search_requirements] == ["mouse"]
+    assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
+        {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+    ]
+
+
+def test_object_photo_collapses_generic_and_qualified_categories_when_canonical_role_is_already_base():
+    """Regression for the live mouse image that produced a contradictory 503."""
+    mission = MissionInterpretation(
+        mission_type="product_search", recommendation_mode="single",
+        goal="Find an ergonomic vertical mouse matching the visual style",
+        requires_catalog=True, requested_actions=["search_products"],
+        catalog_query="ergonomic vertical mouse",
+        catalog_queries=["ergonomic vertical mouse"],
+        bundle_items=[{"query": "ergonomic vertical mouse"}],
+        search_requirements=[{
+            "original_text": "ergonomic vertical mouse",
+            "canonical_role": "mouse",
+            "customer_required": True,
+            "preferred_features": ["matte finish", "vertical design", "ergonomic"],
+            "search_queries": [
+                "mouse", "ergonomic vertical mouse", "vertical mouse",
+                "ergonomic mouse", "computer mouse",
+            ],
+        }],
+        fulfillment_requirements=[
+            {"kind": "category", "value": "mouse"},
+            {"kind": "category", "value": "ergonomic vertical mouse"},
+        ],
+    )
+
+    normalized = IntentMissionAgent._normalize_mission(
+        mission,
+        {"vision_context": {
+            "mode": "shop_object",
+            "detected_objects": ["computer mouse", "hand", "curtain"],
+            "shopping_targets": ["ergonomic vertical mouse"],
+            "style": ["ergonomic", "vertical design", "matte finish"],
+        }},
+        user_request="Shop this shop object image.",
+    )
+
+    assert [item.canonical_role for item in normalized.search_requirements] == ["mouse"]
+    assert [item.model_dump() for item in normalized.fulfillment_requirements] == [
+        {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+    ]
+    assert NeedPlannerAgent().plan(normalized).required_categories == ["mouse"]
+    candidate = {
+        "id": "mouse-1", "name": "Glide S2 Wireless Mouse", "brand": "Glide",
+        "category": "Mice", "description": "Quiet ergonomic wireless mouse.",
+        "price": "189.00", "inventory_quantity": 83, "specs": [], "attributes": {},
+    }
+    state = initial_shopping_state("Shop this shop object image.")
+    state.update({
+        "recommendation_mode": "single",
+        "fulfillment_requirements": [
+            item.model_dump() for item in normalized.fulfillment_requirements
+        ],
+        "candidate_products": [candidate],
+    })
+    assert BrandVoiceAgent.fulfillment_gaps([candidate], state) == []
 
 
 def test_single_recommendation_returns_up_to_six_comparable_choices():

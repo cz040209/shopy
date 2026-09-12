@@ -72,32 +72,19 @@ async def transcribe_with_gemini(
 async def transcribe_with_qwen(
     *, audio_bytes: bytes, mime_type: str, requested_language: str
 ) -> TranscriptionResponse:
-    """Transcribe with the configured Qwen Omni Captioner model."""
-    language_instruction = (
-        f"The caller requested {requested_language}."
-        if requested_language != "auto"
-        else "Identify the spoken language."
-    )
-    prompt = (
-        "Transcribe this audio exactly. Do not summarize, translate, add speaker labels, "
-        "or include commentary. Return valid JSON only with this shape: "
-        '{"transcript":"...","language":"ISO 639-1 code or null"}. '
-        f"{language_instruction}"
-    )
-    response = await QwenClient(timeout_seconds=settings.transcription_timeout_seconds).caption_audio(
+    """Transcribe with the configured dedicated Qwen ASR model."""
+    transcript = await QwenClient(timeout_seconds=settings.transcription_timeout_seconds).transcribe_audio(
         audio_bytes=audio_bytes,
         mime_type=mime_type,
-        prompt=prompt,
-        max_output_tokens=2048,
+        language=None if requested_language == "auto" else requested_language,
     )
-    try:
-        data = json.loads(response)
-        transcript = str(data.get("transcript", "")).strip()
-        language = data.get("language")
-        language = str(language).strip().lower() if language else None
-    except (TypeError, ValueError) as error:
-        raise QwenResponseError("Qwen returned an invalid transcription response.") from error
-    return TranscriptionResponse(transcript=transcript, language=language, duration_seconds=None)
+    return TranscriptionResponse(
+        transcript=transcript.strip(),
+        # The ASR chat-compatible response contains the transcript, but not a
+        # language code. Avoid labelling it as detected when it was not.
+        language=None,
+        duration_seconds=None,
+    )
 
 
 @router.post("/api/v1/transcribe", response_model=TranscriptionResponse)

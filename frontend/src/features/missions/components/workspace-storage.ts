@@ -88,6 +88,14 @@ export function writeStoredWorkspace(snapshot: StoredMissionWorkspace, key = wor
   }
 }
 
+export function clearStoredWorkspace(key = workspaceStorageKey): void {
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Clearing a stale recommendation is best-effort when session storage is unavailable.
+  }
+}
+
 export function visionHandoffStorageKey(id: string): string {
   return `shopy:vision-mission:${id}`;
 }

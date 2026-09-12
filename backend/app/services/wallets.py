@@ -37,19 +37,38 @@ def get_wallet(db: Session, user: User, *, lock: bool = False) -> Wallet:
     return wallet
 
 
-def top_up_wallet(db: Session, user: User, *, amount: Decimal, payment_source: str) -> Wallet:
-    wallet = get_wallet(db, user, lock=True)
-    now = datetime.now(timezone.utc)
-    daily_total = db.scalar(
-        select(func.coalesce(func.sum(WalletTransaction.amount), Decimal("0"))).where(
+def wallet_top_up_capacity(db: Session, wallet: Wallet, *, now: datetime | None = None) -> tuple[Decimal, Decimal]:
+    """Return the server-authoritative daily and monthly top-up capacity.
+
+    The ledger can be paginated or contain historical entries, so this must be
+    calculated in the same timezone and from the same completed records as the
+    top-up guard.  Clients receive these values instead of trying to recreate
+    the rule from the activity list.
+    """
+    current_time = now or datetime.now(timezone.utc)
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    totals = db.execute(
+        select(
+            func.coalesce(func.sum(WalletTransaction.amount).filter(WalletTransaction.created_at >= today_start), Decimal("0")),
+            func.coalesce(func.sum(WalletTransaction.amount).filter(WalletTransaction.created_at >= month_start), Decimal("0")),
+        ).where(
             WalletTransaction.wallet_id == wallet.id,
             WalletTransaction.type == TransactionType.TOP_UP,
             WalletTransaction.status == TransactionStatus.COMPLETED,
-            WalletTransaction.created_at >= now.replace(hour=0, minute=0, second=0, microsecond=0),
         )
-    ) or Decimal("0")
-    if daily_total + amount > wallet.daily_limit:
+    ).one()
+    daily_total, monthly_total = (Decimal(value or 0) for value in totals)
+    return max(wallet.daily_limit - daily_total, Decimal("0")), max(wallet.monthly_limit - monthly_total, Decimal("0"))
+
+
+def top_up_wallet(db: Session, user: User, *, amount: Decimal, payment_source: str) -> Wallet:
+    wallet = get_wallet(db, user, lock=True)
+    daily_remaining, monthly_remaining = wallet_top_up_capacity(db, wallet)
+    if amount > daily_remaining:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This top-up exceeds your daily wallet limit.")
+    if amount > monthly_remaining:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This top-up exceeds your monthly wallet limit.")
 
     wallet.balance += amount
     db.add(WalletTransaction(

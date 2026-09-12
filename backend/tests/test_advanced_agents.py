@@ -119,6 +119,268 @@ def test_selector_role_evidence_rejects_incidental_specification_words():
     )
 
 
+@pytest.mark.anyio
+async def test_shop_room_accepts_a_generated_alias_inside_a_catalog_set_name():
+    class RoomSelectorModel:
+        async def ainvoke(self, messages, **kwargs):
+            payload = json.loads(str(messages[1].content))
+            pillow = next(
+                product for product in payload["verified_catalog_products"]
+                if product["id"] == "pillow"
+            )
+            assert "cushions" in pillow["verified_role_matches"]
+            return AIMessage(content=json.dumps({
+                "mode": "bundle",
+                "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "lamp", "role": "lamp", "reason": "Adds room lighting", "quantity": 1},
+                    {"product_id": "art", "role": "wall art", "reason": "Completes the wall", "quantity": 1},
+                    {"product_id": "pillow", "role": "cushions", "reason": "Adds a soft furnishing", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Shop this room image.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": [],
+        "optional_categories": ["lamp", "wall art", "cushions"],
+        "search_requirements": [
+            {
+                "original_text": original,
+                "canonical_role": role,
+                "customer_required": False,
+                "required_features": [],
+                "preferred_features": ["modern", "minimalist"],
+                "search_queries": queries,
+            }
+            for original, role, queries in (
+                ("floor lamp", "lamp", ["lamp", "floor lamp"]),
+                ("wall art", "wall art", ["wall art", "wall decor"]),
+                ("cushions", "cushions", ["cushions", "throw pillows", "decorative cushions"]),
+            )
+        ],
+        "candidate_products": [
+            {"id": "lamp", "name": "Arc Floor Lamp", "category": "Floor Lamps", "price": "299", "inventory_quantity": 5},
+            {"id": "art", "name": "Abstract Wall Art", "category": "Wall Art", "price": "159", "inventory_quantity": 5},
+            {
+                "id": "pillow", "name": "Terrain Throw Pillow Set",
+                "category": "Soft Furnishings", "price": "139",
+                "inventory_quantity": 5,
+            },
+        ],
+        "retrieval_role_matches": {
+            "lamp": ["lamp"], "wall art": ["art"], "cushions": ["pillow"],
+        },
+    })
+
+    result = await ProductSelectorAgent(RoomSelectorModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == [
+        "lamp", "art", "pillow",
+    ]
+    assert result["selection_errors"] == []
+
+
+@pytest.mark.anyio
+async def test_shop_room_bundle_minimum_uses_distinct_inferred_roles_not_candidate_count():
+    class TwoRoleRoomModel:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            return AIMessage(content=json.dumps({
+                "mode": "bundle",
+                # There are three useful candidates, but only two distinct
+                # room roles because two candidates are pillow alternatives.
+                "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "pillow", "role": "pillow", "reason": "Adds softness", "quantity": 1},
+                    {"product_id": "curtain", "role": "curtains", "reason": "Frames the window", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Shop this room image.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": [],
+        "optional_categories": ["pillow", "curtains"],
+        "search_requirements": [
+            {
+                "original_text": role, "canonical_role": role,
+                "customer_required": False, "search_queries": [role],
+            }
+            for role in ("pillow", "curtains")
+        ],
+        "candidate_products": [
+            {"id": "pillow", "name": "Textured Throw Pillow", "category": "Pillows", "price": "89", "inventory_quantity": 5},
+            {"id": "pillow-two", "name": "Woven Throw Pillow", "category": "Pillows", "price": "99", "inventory_quantity": 5},
+            {"id": "curtain", "name": "Linen Blackout Curtains", "category": "Window Treatments", "price": "269", "inventory_quantity": 5},
+        ],
+    })
+    model = TwoRoleRoomModel()
+
+    result = await ProductSelectorAgent(model).run(state)
+
+    assert model.calls == 1
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == [
+        "pillow", "curtain",
+    ]
+
+
+@pytest.mark.anyio
+async def test_shop_room_allows_a_catalog_grounded_derived_role_when_no_role_is_required():
+    class DerivedRoleRoomModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": 3,
+                "choices": [
+                    {"product_id": "pillow", "role": "pillow", "reason": "Adds softness", "quantity": 1},
+                    {"product_id": "curtain", "role": "curtains", "reason": "Frames the window", "quantity": 1},
+                    {"product_id": "stand", "role": "plant_stand", "reason": "Raises existing greenery", "quantity": 1},
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Shop this room image.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": [],
+        "optional_categories": ["pillow", "curtains"],
+        "search_requirements": [
+            {
+                "original_text": role, "canonical_role": role,
+                "customer_required": False, "search_queries": [role],
+            }
+            for role in ("pillow", "curtains")
+        ],
+        "candidate_products": [
+            {"id": "pillow", "name": "Textured Throw Pillow", "category": "Pillows", "price": "89", "inventory_quantity": 5},
+            {"id": "curtain", "name": "Linen Blackout Curtains", "category": "Window Treatments", "price": "269", "inventory_quantity": 5},
+            {"id": "stand", "name": "Plant Stand Trio", "category": "Mirrors & Decor", "price": "159", "inventory_quantity": 5},
+        ],
+    })
+
+    result = await ProductSelectorAgent(DerivedRoleRoomModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == [
+        "pillow", "curtain", "stand",
+    ]
+
+
+@pytest.mark.anyio
+async def test_shop_room_keeps_supported_roles_when_an_inferred_role_has_no_catalog_identity():
+    class RepairingRoomModel:
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            payload = json.loads(str(messages[1].content))
+            if self.calls == 1:
+                return AIMessage(content=json.dumps({
+                    "mode": "bundle", "related_candidate_count": 3,
+                    "choices": [
+                        {"product_id": "pillow", "role": "pillow", "reason": "Adds softness", "quantity": 1},
+                        {"product_id": "ottoman", "role": "basket", "reason": "Provides storage", "quantity": 1},
+                        {"product_id": "table", "role": "table", "reason": "Adds a useful surface", "quantity": 1},
+                    ],
+                    "unfulfilled_roles": [],
+                }))
+            assert payload["task"] == "select_feasible_bundle_plan"
+            assert all(
+                {choice["role"] for choice in plan["choices"]} == {"pillow", "table"}
+                for plan in payload["feasible_bundle_plans"]
+            )
+            selected_plan = payload["feasible_bundle_plans"][0]
+            return AIMessage(content=json.dumps({
+                "selected_plan_id": selected_plan["plan_id"],
+                "reasons": [
+                    {"product_id": choice["product_id"], "reason": "Fits the room"}
+                    for choice in selected_plan["choices"]
+                ],
+            }))
+
+    state = initial_shopping_state("Shop this room image.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": [],
+        "optional_categories": ["pillow", "basket", "table"],
+        "search_requirements": [
+            {
+                "original_text": original, "canonical_role": role,
+                "customer_required": False, "search_queries": queries,
+            }
+            for original, role, queries in (
+                ("cushions", "pillow", ["pillow", "throw cushions"]),
+                ("storage basket", "basket", ["basket", "storage basket"]),
+                ("coffee table", "table", ["table", "coffee table"]),
+            )
+        ],
+        "candidate_products": [
+            {"id": "pillow", "name": "Terrain Throw Pillow Set", "category": "Soft Furnishings", "price": "139", "inventory_quantity": 5},
+            {"id": "ottoman", "name": "Lift-Top Storage Ottoman", "category": "Living Room Seating", "price": "389", "inventory_quantity": 5},
+            {"id": "table", "name": "Halo Round Coffee Table", "category": "Tables", "price": "479", "inventory_quantity": 5},
+        ],
+        "retrieval_role_matches": {
+            "pillow": ["pillow"], "basket": ["ottoman"], "table": ["table"],
+        },
+    })
+    model = RepairingRoomModel()
+
+    result = await ProductSelectorAgent(model).run(state)
+
+    assert model.calls == 2
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert [item["id"] for item in result["selected_products"]] == [
+        "pillow", "table",
+    ]
+    assert result["selection_errors"] == []
+    assert result["fulfillment_gaps"] == []
+
+
+@pytest.mark.anyio
+async def test_selector_normalizes_role_transport_before_required_coverage():
+    class UnderscoreRoleModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "mode": "bundle", "related_candidate_count": 1,
+                "choices": [{
+                    "product_id": "stand", "role": "plant_stand",
+                    "reason": "Supports the requested planter", "quantity": 1,
+                }],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Add a plant stand to this room.")
+    state.update({
+        "recommendation_mode": "bundle",
+        "required_categories": ["plant stand"],
+        "optional_categories": [],
+        "candidate_products": [{
+            "id": "stand", "name": "Plant Stand Trio", "category": "Decor",
+            "price": "159", "inventory_quantity": 5,
+        }],
+    })
+
+    result = await ProductSelectorAgent(UnderscoreRoleModel()).run(state)
+
+    assert result["selection_source"] == "llm_product_selector_v1"
+    assert result["bundle"]["required_category_coverage"] == {
+        "covered": ["plant stand"],
+        "missing": [],
+        "matches": [{
+            "requirement": "plant stand", "product_id": "stand",
+            "purchase_quantity": 1,
+        }],
+    }
+
+
 def test_selector_payload_exposes_verified_evidence_for_inferred_roles():
     state = initial_shopping_state("Complete the look in this image")
     state.update({
@@ -522,6 +784,39 @@ async def test_vision_agent_returns_structured_context_and_rejects_missing_image
         await agent.analyze(image_bytes=b"image", mime_type="image/png", mode="bad-mode")
 
 
+@pytest.mark.anyio
+async def test_vision_agent_retries_invalid_structured_output_with_schema_feedback():
+    class RepairingVisionGenerator:
+        def __init__(self):
+            self.instructions = []
+
+        async def generate(self, **kwargs):
+            self.instructions.append(kwargs["system_instruction"])
+            if len(self.instructions) == 1:
+                return '{"detected_objects":"sofa"}'
+            return json.dumps({
+                "detected_objects": ["sofa"],
+                "category": ["living room"],
+                "colors": ["beige"],
+                "style": ["minimal"],
+                "existing_items": ["sofa"],
+                "shopping_targets": [],
+                "possible_shopping_needs": ["floor lamp"],
+                "visual_constraints": ["Scale is uncertain."],
+            })
+
+    generator = RepairingVisionGenerator()
+
+    context = await VisionAgent(generator).analyze(
+        image_bytes=b"image", mime_type="image/jpeg", mode="shop_room",
+    )
+
+    assert context.detected_objects == ["sofa"]
+    assert len(generator.instructions) == 2
+    assert "previous response did not satisfy the JSON contract" in generator.instructions[1]
+    assert "detected_objects" in generator.instructions[1]
+
+
 def test_vision_prompt_applies_evidence_and_crop_rules_to_every_mode():
     assert "Evidence and outcome policy for every mode" in VISION_PROMPT
     assert "not automatically something the customer wants to buy" in VISION_PROMPT
@@ -530,6 +825,19 @@ def test_vision_prompt_applies_evidence_and_crop_rules_to_every_mode():
     assert "cropped image is incomplete evidence" in VISION_PROMPT
     assert "anatomy, facial features, hair, and grooming" in VISION_PROMPT
     assert "do not assume a fixed outfit template" in VISION_PROMPT.casefold()
+
+
+@pytest.mark.parametrize("mode", ["shop_room", "complete_look", "shop_object"])
+@pytest.mark.anyio
+async def test_vision_agent_applies_the_selected_mode_to_every_supported_feature(mode):
+    generator = VisionGenerator()
+
+    await VisionAgent(generator).analyze(
+        image_bytes=b"image", mime_type="image/jpeg", mode=mode,
+    )
+
+    assert f"Mode: {mode}." in generator.last_kwargs["system_instruction"]
+    assert generator.last_kwargs["qwen_model"] == settings.qwen_vision_model
 
 
 class GraphVisionAgent:
@@ -617,9 +925,10 @@ async def test_image_intent_is_isolated_from_previous_session_memory():
 async def test_compatibility_reports_conflicting_verified_model_facts():
     class CompatibilityModel:
         async def ainvoke(self, messages, **kwargs):
-            return AIMessage(content='{"fields":[{"field":"compatible_models","rule":"must_overlap"}]}')
+            return AIMessage(content='{"checks":[{"product_ids":["a","b"],"field":"compatible_models","rule":"must_overlap"}]}')
 
     state = initial_shopping_state("Build a compatible setup")
+    state["recommendation_mode"] = "bundle"
     state["candidate_products"] = [
         {"id": "a", "name": "Case A", "category": "accessory", "inventory_quantity": 2, "attributes": {"compatible_models": ["alpha"]}, "specs": []},
         {"id": "b", "name": "Device B", "category": "device", "inventory_quantity": 2, "attributes": {"compatible_models": ["beta"]}, "specs": []},
@@ -630,6 +939,112 @@ async def test_compatibility_reports_conflicting_verified_model_facts():
     result = await CompatibilityAgent(CompatibilityModel()).run(state)
     assert result["compatibility_results"][0]["status"] == "incompatible"
     assert result["compatibility_results"][0]["affected_product_ids"] == ["a", "b"]
+
+
+@pytest.mark.anyio
+async def test_compatibility_does_not_promote_visual_preferences_to_hard_conflicts():
+    class AestheticCompatibilityModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "checks": [{
+                    "product_ids": ["lamp", "art"],
+                    "field": "colors",
+                    "rule": "must_overlap",
+                }],
+            }))
+
+    state = initial_shopping_state("Shop this room image")
+    state.update({
+        "recommendation_mode": "bundle",
+        "preferences": ["blue and beige palette"],
+        "vision_context": {
+            "mode": "shop_room", "colors": ["blue", "beige"],
+            "style": ["minimalist"],
+        },
+        "candidate_products": [
+            {
+                "id": "lamp", "name": "Lamp", "inventory_quantity": 2,
+                "attributes": {"colors": ["black", "white"]}, "specs": [],
+            },
+            {
+                "id": "art", "name": "Wall Art", "inventory_quantity": 2,
+                "attributes": {"colors": ["sage blue"]}, "specs": [],
+            },
+        ],
+        "selected_products": [
+            {"id": "lamp", "quantity": 1}, {"id": "art", "quantity": 1},
+        ],
+    })
+
+    result = await CompatibilityAgent(AestheticCompatibilityModel()).run(state)
+
+    assert result["compatibility_plan"] == {"checks": []}
+    assert result["compatibility_results"][0]["status"] == "compatible"
+
+
+@pytest.mark.anyio
+async def test_compatibility_keeps_real_relation_when_preference_mentions_a_fact_value():
+    class DirectCompatibilityModel:
+        async def ainvoke(self, messages, **kwargs):
+            return AIMessage(content=json.dumps({
+                "checks": [{
+                    "product_ids": ["case", "device"],
+                    "field": "compatible_models",
+                    "rule": "must_overlap",
+                }],
+            }))
+
+    state = initial_shopping_state("Build a compatible setup")
+    state.update({
+        "recommendation_mode": "bundle",
+        "preferences": ["Prefer the Alpha model"],
+        "vision_context": {
+            "mode": "shop_object", "detected_objects": ["device"],
+            "style": ["compact"],
+        },
+        "candidate_products": [
+            {
+                "id": "case", "name": "Case", "inventory_quantity": 2,
+                "attributes": {"compatible_models": ["alpha"]}, "specs": [],
+            },
+            {
+                "id": "device", "name": "Device", "inventory_quantity": 2,
+                "attributes": {"compatible_models": ["beta"]}, "specs": [],
+            },
+        ],
+        "selected_products": [
+            {"id": "case", "quantity": 1}, {"id": "device", "quantity": 1},
+        ],
+    })
+
+    result = await CompatibilityAgent(DirectCompatibilityModel()).run(state)
+
+    assert result["compatibility_plan"]["checks"][0]["field"] == "compatible_models"
+    assert result["compatibility_results"][0]["status"] == "incompatible"
+
+
+@pytest.mark.anyio
+async def test_single_mode_alternatives_are_not_compared_as_bundle_components():
+    class CompatibilityModelMustNotRun:
+        async def ainvoke(self, messages, **kwargs):
+            raise AssertionError("single-mode alternatives are substitutes")
+
+    state = initial_shopping_state("Recommend two mice")
+    state.update({
+        "recommendation_mode": "single",
+        "candidate_products": [
+            {"id": "a", "name": "Mouse A", "inventory_quantity": 2},
+            {"id": "b", "name": "Mouse B", "inventory_quantity": 2},
+        ],
+        "selected_products": [
+            {"id": "a", "quantity": 1}, {"id": "b", "quantity": 1},
+        ],
+    })
+
+    result = await CompatibilityAgent(CompatibilityModelMustNotRun()).run(state)
+
+    assert result["compatibility_results"][0]["status"] == "compatible"
+    assert result["compatibility_plan"] == {"checks": []}
 
 
 @pytest.mark.anyio
@@ -650,7 +1065,7 @@ async def test_compatibility_never_processes_unselected_retrieval_candidates():
 
     assert result == {
         "compatibility_results": [],
-        "compatibility_plan": {"fields": []},
+        "compatibility_plan": {"checks": []},
     }
 
 
@@ -666,6 +1081,192 @@ def test_rejected_product_selection_skips_compatibility_stage():
     })
 
     assert orchestrator._after_product_selector(state) == "response_draft"
+
+
+def test_incompatible_selection_returns_to_selector_with_pair_constraint():
+    orchestrator = ShoppingOrchestrator(GraphModel())
+    state = initial_shopping_state("Build a compatible setup")
+    state.update({
+        "compatibility_results": [{
+            "status": "incompatible",
+            "reason": "Verified interface values do not overlap.",
+            "affected_product_ids": ["a", "b"],
+        }],
+        "execution_plan": {
+            "stages": ["product_selector", "compatibility"],
+            "requested_actions": ["search_products"],
+        },
+    })
+
+    assert orchestrator._after_compatibility(state) == "product_selector"
+
+
+def test_selector_rejects_only_the_verified_pair_not_each_product_individually():
+    from app.agentic.product_selector import (
+        ProductSelectionChoice,
+        ProductSelectionDecision,
+    )
+
+    state = initial_shopping_state("Build a compatible setup")
+    state.update({
+        "recommendation_mode": "bundle",
+        "compatibility_constraints": [{
+            "status": "incompatible",
+            "reason": "Verified interface values do not overlap.",
+            "affected_product_ids": ["a", "b"],
+        }],
+        "candidate_products": [
+            {
+                "id": product_id, "name": f"Product {product_id.upper()}",
+                "category": "Component", "price": "100",
+                "inventory_quantity": 3, "specs": [], "attributes": {},
+            }
+            for product_id in ("a", "b", "c")
+        ],
+    })
+    products = ProductSelectorAgent._catalog_products(state)
+
+    assert [product["id"] for product in products] == ["a", "b", "c"]
+
+    conflicting = ProductSelectionDecision(
+        mode="bundle", related_candidate_count=3,
+        choices=[
+            ProductSelectionChoice(
+                product_id=product_id, role=f"role-{product_id}",
+                reason="Verified role", quantity=1,
+            )
+            for product_id in ("a", "b")
+        ],
+    )
+    errors = ProductSelectorAgent._validation_errors(
+        conflicting, products, state,
+    )
+
+    assert any("verified incompatible combination" in error for error in errors)
+
+
+def test_complete_look_shortlist_uses_runtime_image_domain_not_generic_accessories():
+    state = initial_shopping_state("Complete this look")
+    state.update({
+        "vision_context": {
+            "mode": "complete_look", "category": ["apparel", "menswear"],
+        },
+        "candidate_products": [
+            {
+                "id": "jacket", "name": "Classic Jacket", "category": "Outerwear",
+                "inventory_quantity": 3, "attributes": {"department": "apparel"},
+            },
+            {
+                "id": "tumbler", "name": "Insulated Tumbler",
+                "category": "Lifestyle Accessories", "inventory_quantity": 3,
+                "attributes": {"department": "study-working-kit"},
+            },
+        ],
+    })
+
+    products = ProductSelectorAgent._catalog_products(state)
+
+    assert [product["id"] for product in products] == ["jacket"]
+
+
+def test_complete_look_shortlist_prefers_runtime_roles_when_vision_domain_words_differ():
+    state = initial_shopping_state("Complete this look")
+    state.update({
+        "vision_context": {
+            "mode": "complete_look", "category": ["menswear", "casual wear"],
+        },
+        "search_requirements": [
+            {
+                "original_text": role, "canonical_role": role,
+                "search_queries": [role],
+            }
+            for role in ["jacket", "trousers", "watch"]
+        ],
+        "candidate_products": [
+            {
+                "id": "jacket", "name": "Classic Denim Jacket",
+                "category": "Outerwear", "inventory_quantity": 3,
+                "attributes": {"department": "apparel"},
+            },
+            {
+                "id": "trousers", "name": "Tailored Trousers",
+                "category": "Formal Wear", "inventory_quantity": 3,
+                "attributes": {},
+            },
+            {
+                "id": "watch", "name": "Minimal Steel Watch",
+                "category": "Accessories", "inventory_quantity": 3,
+                "attributes": {"department": "apparel"},
+            },
+            {
+                "id": "tumbler", "name": "Insulated Tumbler",
+                "category": "Lifestyle Accessories", "inventory_quantity": 3,
+                "attributes": {"department": "study-working-kit"},
+            },
+        ],
+    })
+
+    products = ProductSelectorAgent._catalog_products(state)
+
+    assert [product["id"] for product in products] == [
+        "jacket", "trousers", "watch",
+    ]
+
+
+def test_scene_selector_accepts_retrieved_catalog_synonym_only_inside_image_domain():
+    state = initial_shopping_state("Shop this room")
+    state.update({
+        "vision_context": {
+            "mode": "shop_room", "category": ["living room", "reading nook"],
+        },
+        "search_requirements": [{
+            "original_text": "cushions for armchair", "canonical_role": "cushions",
+            "required_features": [], "preferred_features": ["modern"],
+            "search_queries": ["cushions", "throw cushions", "modern cushions"],
+        }],
+        "retrieval_role_matches": {
+            "cushions": ["pillow", "sofa", "shirt"],
+        },
+    })
+    pillow = {
+        "id": "pillow", "name": "Terrain Throw Pillow Set",
+        "category": "Soft Furnishings",
+        "attributes": {"department": "furniture", "rooms": ["Living room"]},
+    }
+    sofa = {
+        "id": "sofa", "name": "Nova Compact Sofa",
+        "category": "Living Room Seating",
+        "attributes": {"department": "furniture", "rooms": ["Living room"]},
+    }
+    shirt = {
+        "id": "shirt", "name": "Modern Shirt", "category": "Clothing",
+        "attributes": {"department": "apparel"},
+    }
+
+    assert ProductSelectorAgent._choice_has_role_evidence(pillow, "cushions", state)
+    assert not ProductSelectorAgent._choice_has_role_evidence(sofa, "cushions", state)
+    assert not ProductSelectorAgent._choice_has_role_evidence(shirt, "cushions", state)
+
+
+def test_empty_bundle_selection_produces_a_safe_zero_product_result():
+    from app.agentic.product_selector import ProductSelectionDecision
+
+    decision = ProductSelectionDecision(
+        mode="bundle", related_candidate_count=0, choices=[], unfulfilled_roles=[],
+    )
+    products = [{
+        "id": "candidate", "name": "Candidate", "category": "Decor",
+        "price": "10", "currency": "MYR", "inventory_quantity": 1,
+    }]
+
+    result = ProductSelectorAgent._output(
+        decision, products, initial_shopping_state("Shop this room"),
+    )
+
+    assert result["selected_products"] == []
+    assert result["bundle"]["product_count"] == 0
+    assert result["bundle"]["total"] == "0"
+    assert result["bundle"]["currency"] == "MYR"
 
 
 @pytest.mark.anyio
@@ -1332,6 +1933,85 @@ def test_product_selector_accepts_json_wrapped_by_model_explanation():
     )
 
     assert value["mode"] == "single"
+
+
+@pytest.mark.anyio
+async def test_product_selector_repairs_empty_choice_when_only_soft_preferences_are_unmet():
+    class SelectorModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, messages, **kwargs):
+            self.calls += 1
+            payload = json.loads(str(messages[1].content))
+            if self.calls == 1:
+                return AIMessage(content=json.dumps({
+                    "mode": "single", "related_candidate_count": 0,
+                    "choices": [], "unfulfilled_roles": ["mouse"],
+                }))
+            assert payload["task"] == "repair_invalid_selection"
+            assert "soft preferences" in " ".join(payload["validation_errors"])
+            return AIMessage(content=json.dumps({
+                "mode": "single", "related_candidate_count": 2,
+                "choices": [
+                    {
+                        "product_id": "mouse-one", "role": "mouse",
+                        "reason": "Closest ergonomic match; wireless rather than the preferred wired style.",
+                        "quantity": 1,
+                    },
+                    {
+                        "product_id": "mouse-two", "role": "mouse",
+                        "reason": "Matches the requested product type; connectivity is wireless.",
+                        "quantity": 1,
+                    },
+                ],
+                "unfulfilled_roles": [],
+            }))
+
+    state = initial_shopping_state("Shop this object image.")
+    state.update({
+        "recommendation_mode": "single",
+        "required_categories": ["mouse"],
+        "search_requirements": [{
+            "original_text": "wired computer mouse",
+            "canonical_role": "mouse",
+            "customer_required": True,
+            "required_features": [],
+            "preferred_features": ["wired", "ergonomic", "retro"],
+            "search_queries": ["mouse", "wired mouse", "ergonomic mouse"],
+        }],
+        "fulfillment_requirements": [
+            {"kind": "category", "value": "mouse", "field": None, "quantity": 1},
+        ],
+        "candidate_products": [
+            {
+                "id": "mouse-one", "name": "Glide Wireless Mouse",
+                "category": "Mice", "description": "Ergonomic wireless mouse",
+                "price": "189", "currency": "MYR", "inventory_quantity": 8,
+                "specs": [{"label": "Connectivity", "value": "Bluetooth"}],
+                "attributes": {},
+            },
+            {
+                "id": "mouse-two", "name": "Precision Wireless Mouse",
+                "category": "Mice", "description": "Compact wireless mouse",
+                "price": "129", "currency": "MYR", "inventory_quantity": 8,
+                "specs": [{"label": "Connectivity", "value": "2.4 GHz"}],
+                "attributes": {},
+            },
+        ],
+        "retrieval_role_matches": {
+            "mouse": ["mouse-one", "mouse-two"],
+        },
+    })
+    model = SelectorModel()
+
+    result = await ProductSelectorAgent(model).run(state)
+
+    assert model.calls == 2
+    assert result["selection_errors"] == []
+    assert [item["id"] for item in result["selected_products"]] == [
+        "mouse-one", "mouse-two",
+    ]
 
 
 def test_product_selector_completes_only_missing_transport_fields():

@@ -11,7 +11,7 @@ from app.ai_logging import log_ai_event
 from app.ai.primary import PrimaryLLMClient
 from app.config import settings
 
-from .intent import _json_object
+from .intent import _json_object, _validation_message
 from .state import ShoppingAgentState
 
 
@@ -54,11 +54,14 @@ Evidence and outcome policy for every mode:
 
 Mode-specific interpretation:
 * For shop_object, place the one or two main objects the customer wants to shop
-  in shopping_targets as concise, evidence-based product roles. These targets
-  are not owned items: the customer is asking to find that object or a close
-  alternative. Leave existing_items empty unless a separate, clearly incidental
-  item affects compatibility. Do not create an accessory checklist or infer an
-  entire setup from a single photographed object.
+  in shopping_targets as concise, evidence-based product roles. Use the base
+  independently stocked product type as the target and put observed form,
+  style, colour, or apparent capabilities in their dedicated soft-preference
+  fields rather than creating qualified duplicates of the same object. These
+  targets are not owned items: the customer is asking to find that object or a
+  close alternative. Leave existing_items empty unless a separate, clearly
+  incidental item affects compatibility. Do not create an accessory checklist
+  or infer an entire setup from a single photographed object.
 * For shop_room and complete_look, put visible products in existing_items and put
   only complementary roles justified by visible gaps in possible_shopping_needs.
   Leave shopping_targets empty in these scene modes. Never recommend a visible
@@ -100,20 +103,37 @@ class VisionAgent:
         if not image_bytes:
             raise ValueError("An image is required.")
         contents = [{"role": "user", "parts": [{"inlineData": {"mimeType": mime_type, "data": base64.b64encode(image_bytes).decode("ascii")}}, {"text": "Produce structured shopping context."}]}]
-        response = await self.generator.generate(
-            system_instruction=VISION_PROMPT.replace("{mode}", mode),
-            contents=contents,
-            max_output_tokens=700,
-            response_mime_type="application/json",
-            # Thinking may be returned in a separate reasoning field or bleed
-            # into content on multimodal models. This call needs only JSON.
-            enable_thinking=False,
-            qwen_model=settings.qwen_vision_model,
-        )
-        try:
-            return VisionContext.model_validate(_json_object(response))
-        except (ValidationError, ValueError) as error:
-            raise ValueError("Vision model returned invalid structured context.") from error
+        base_instruction = VISION_PROMPT.replace("{mode}", mode)
+        last_error: ValidationError | ValueError | None = None
+        for attempt in range(max(1, settings.agent_response_format_attempts)):
+            correction = ""
+            if attempt and last_error is not None:
+                issue = (
+                    _validation_message(last_error)
+                    if isinstance(last_error, ValidationError)
+                    else str(last_error)[:1200]
+                )
+                correction = (
+                    "\nYour previous response did not satisfy the JSON contract. "
+                    "Re-analyze the same image and return the complete top-level "
+                    "schema object with JSON arrays of strings only. Do not add a "
+                    f"wrapper or prose. Correct this issue: {issue}"
+                )
+            response = await self.generator.generate(
+                system_instruction=base_instruction + correction,
+                contents=contents,
+                max_output_tokens=700,
+                response_mime_type="application/json",
+                # Thinking may be returned in a separate reasoning field or bleed
+                # into content on multimodal models. This call needs only JSON.
+                enable_thinking=False,
+                qwen_model=settings.qwen_vision_model,
+            )
+            try:
+                return VisionContext.model_validate(_json_object(response))
+            except (ValidationError, ValueError) as error:
+                last_error = error
+        raise ValueError("Vision model returned invalid structured context.") from last_error
 
     async def run(self, state: ShoppingAgentState) -> dict[str, Any]:
         image = state.get("vision_input")

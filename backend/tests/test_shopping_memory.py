@@ -242,6 +242,34 @@ async def test_new_goal_does_not_inherit_unrelated_memory_constraints():
     assert result["continues_context"] is False
     assert result["budget"] is None
     assert result["constraints"] == []
+    assert result["memory_context"] is None
+    assert store.saved[0][1].budget is None
+    assert store.saved[0][1].constraints == []
+
+
+@pytest.mark.anyio
+async def test_camera_mission_skips_stale_session_memory_before_vision():
+    class MemoryMustNotLoad(FakeMemoryStore):
+        async def load(self, session_scope):
+            raise AssertionError("camera missions must not load prior mission state")
+
+    orchestrator = ShoppingOrchestrator(
+        object(), memory_store=MemoryMustNotLoad(ShoppingSessionMemory(budget=5000))
+    )
+    state = {
+        "graph_iterations": 0,
+        "run_id": "camera-memory-boundary",
+        "memory_session_scope": "member-session",
+        "vision_input": {
+            "image_bytes": b"image", "mime_type": "image/jpeg",
+            "mode": "shop_room",
+        },
+    }
+
+    result = await orchestrator._memory_load_node(state)
+
+    assert result["memory_context"] is None
+    assert result["excluded_product_ids"] == []
 
 
 @pytest.mark.anyio

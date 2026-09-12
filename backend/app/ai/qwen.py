@@ -29,7 +29,7 @@ class QwenGeneration:
 
 
 class QwenClient:
-    """Shared Qwen client for text, vision, and audio-caption requests."""
+    """Shared Qwen client for text, vision, and speech-transcription requests."""
 
     def __init__(self, *, timeout_seconds: float) -> None:
         self.timeout = httpx.Timeout(timeout_seconds, connect=10.0)
@@ -42,6 +42,7 @@ class QwenClient:
         max_output_tokens: int,
         response_mime_type: str | None = None,
         enable_thinking: bool | None = None,
+        qwen_model: str | None = None,
     ) -> str:
         return (await self.generate_with_usage(
             system_instruction=system_instruction,
@@ -49,6 +50,7 @@ class QwenClient:
             max_output_tokens=max_output_tokens,
             response_mime_type=response_mime_type,
             enable_thinking=enable_thinking,
+            qwen_model=qwen_model,
         )).text
 
     async def generate_with_usage(
@@ -71,27 +73,36 @@ class QwenClient:
             enable_thinking=settings.qwen_enable_thinking if enable_thinking is None else enable_thinking,
         )
 
-    async def caption_audio(
+    async def transcribe_audio(
         self,
         *,
         audio_bytes: bytes,
         mime_type: str,
-        prompt: str,
-        max_output_tokens: int,
+        language: str | None,
     ) -> str:
+        """Transcribe a short recording through Qwen ASR.
+
+        Qwen ASR accepts the same inline data URI used by the browser upload,
+        but unlike a general audio model it returns the spoken text directly.
+        Do not send a system prompt or JSON response-format request here: ASR
+        has a model-specific contract and is not a free-form chat task.
+        """
         audio_data = base64.b64encode(audio_bytes).decode("ascii")
+        asr_options: dict[str, Any] = {"enable_itn": True}
+        if language:
+            asr_options["language"] = language
         generation = await self._complete(
             model=settings.qwen_audio_model,
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "input_audio", "input_audio": {"data": f"data:{mime_type};base64,{audio_data}"}},
-                    {"type": "text", "text": prompt},
                 ],
             }],
-            max_output_tokens=max_output_tokens,
-            response_mime_type="application/json",
-            enable_thinking=False,
+            max_output_tokens=None,
+            response_mime_type=None,
+            enable_thinking=None,
+            extra_body={"stream": False, "asr_options": asr_options},
         )
         return generation.text
 
@@ -100,21 +111,28 @@ class QwenClient:
         *,
         model: str,
         messages: list[dict[str, Any]],
-        max_output_tokens: int,
+        max_output_tokens: int | None,
         response_mime_type: str | None,
-        enable_thinking: bool,
+        enable_thinking: bool | None,
+        extra_body: dict[str, Any] | None = None,
+        temperature: float | None = 0.5,
     ) -> QwenGeneration:
         if not settings.qwen_api_key:
             raise QwenConnectionError("Qwen API key is not configured.")
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": 0.5,
-            "max_tokens": max_output_tokens,
-            "enable_thinking": enable_thinking,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_output_tokens is not None:
+            body["max_tokens"] = max_output_tokens
+        if enable_thinking is not None:
+            body["enable_thinking"] = enable_thinking
         if response_mime_type == "application/json":
             body["response_format"] = {"type": "json_object"}
+        if extra_body:
+            body.update(extra_body)
         started_at = datetime.now(timezone.utc)
         endpoint = f"{settings.qwen_base_url.rstrip('/')}/chat/completions"
         try:

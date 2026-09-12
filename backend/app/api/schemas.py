@@ -288,6 +288,9 @@ class WalletResponse(BaseModel):
     balance: Decimal
     daily_limit: Decimal
     monthly_limit: Decimal
+    daily_top_up_remaining: Decimal
+    monthly_top_up_remaining: Decimal
+    minimum_top_up: Decimal
     is_verified: bool
     transactions: list[WalletTransactionResponse]
 
